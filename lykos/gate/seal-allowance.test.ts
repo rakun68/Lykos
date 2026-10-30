@@ -6,9 +6,10 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   createSealTestCommandAllowance,
+  DelegatedGate,
   wrapApprovalGateWithSealAllowance,
 } from "./delegated.js";
-import { DenyAllGate, type ApprovalRequest } from "./approval.js";
+import { DenyAllGate, type ApprovalRequest, type DeniedAction } from "./approval.js";
 import { loadConfig } from "../config/load.js";
 import { generateEd25519KeyPair, signPayload } from "../seal/crypto.js";
 import type { SealFile } from "../seal/types.js";
@@ -183,8 +184,8 @@ describe("createSealTestCommandAllowance security and validation", () => {
       });
 
       for (const mode of ["manual", "accept-edits"] as const) {
-        const denied: any[] = [];
-        const delegatedGate = new (await import("./delegated.js")).DelegatedGate({
+        const denied: DeniedAction[] = [];
+        const delegatedGate = new DelegatedGate({
           mode,
           allowed: new Set(),
           denied,

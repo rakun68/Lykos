@@ -50,8 +50,8 @@ describe("Kilo OAuth flow (D2, D4.1, D4.3)", () => {
     const base = `http://127.0.0.1:${port}`;
 
     try {
-      let deviceCodeCalledWith: any;
-      let authCalledWith: any;
+      let deviceCodeCalledWith: { userCode: string; verificationUri: string } | undefined;
+      let authCalledWith: { url: string; instructions?: string } | undefined;
       const progress: string[] = [];
 
       const credentials = await loginKilo(

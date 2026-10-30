@@ -32,7 +32,8 @@ import { generateEd25519KeyPair, signPayload } from "../seal/crypto.js";
 import type { SealFile } from "../seal/types.js";
 import { withLedgerSync } from "../ledger/use.js";
 import { createSpecialistGuardHandler } from "../tools/specialist-guard-extension.js";
-import type { ModelRuntime, createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime, CreateAgentSessionOptions, ToolCallEvent, createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { ResolvedConfig } from "../config/types.js";
 
 // Ticket 08: boot resolves Pi's agent dir through piHostDir(); keep it off the real ~/.lykos/pi-host.
 process.env.LYKOS_PI_HOST_DIR = mkdtempSync(join(tmpdir(), "lykos-pi-host-"));
@@ -555,7 +556,7 @@ describe("boot tools_mode and specialist guard enforcement (ticket 02)", () => {
   it("tools_mode: override removes disallowed tools from active tools (criterion 4)", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "lykos-boot-override-"));
     let captured: string[] = [];
-    const stub = (async (opts: any = {}) => {
+    const stub = (async (opts: CreateAgentSessionOptions = {} as CreateAgentSessionOptions) => {
       captured = [...(opts.tools ?? [])];
       return { session: { sessionId: "s1", getActiveToolNames: () => captured, setActiveToolsByName: () => {}, abort: () => {} } };
     }) as unknown as typeof createAgentSession;
@@ -578,7 +579,7 @@ describe("boot tools_mode and specialist guard enforcement (ticket 02)", () => {
   it("tools_mode: append keeps disallowed tool and refuses at dispatch (criterion 1, 2, 7)", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "lykos-boot-app-"));
     let captured: string[] = [];
-    const stub = (async (opts: any = {}) => {
+    const stub = (async (opts: CreateAgentSessionOptions = {} as CreateAgentSessionOptions) => {
       captured = [...(opts.tools ?? [])];
       return { session: { sessionId: "s2", getActiveToolNames: () => captured, setActiveToolsByName: () => {}, abort: () => {} } };
     }) as unknown as typeof createAgentSession;
@@ -597,11 +598,11 @@ describe("boot tools_mode and specialist guard enforcement (ticket 02)", () => {
     );
     assert.ok(captured.includes("bash"), "bash must remain in active tools under append");
     const guard = createSpecialistGuardHandler({ denials: booted.denials });
-    const blocked = guard({ toolName: "bash" } as any);
+    const blocked = guard({ toolName: "bash" } as unknown as ToolCallEvent);
     assert.ok(blocked?.block);
     assert.match(blocked?.reason ?? "", /reviewer/);
     assert.match(blocked?.reason ?? "", /bash/);
-    assert.equal(guard({ toolName: "read" } as any), undefined);
+    assert.equal(guard({ toolName: "read" } as unknown as ToolCallEvent), undefined);
     assert.equal(booted.denials.specialistRestricted, 1);
   });
 
@@ -613,8 +614,8 @@ describe("boot tools_mode and specialist guard enforcement (ticket 02)", () => {
       writeFileSync(join(stateRoot, ".lykos", "output-styles", "custom.md"), "Custom output style text.\n", "utf8");
 
       let appendParts: string[] | undefined;
-      const stub = (async (opts: any = {}) => {
-        appendParts = opts.resourceLoader.getAppendSystemPrompt();
+      const stub = (async (opts: CreateAgentSessionOptions = {} as CreateAgentSessionOptions) => {
+        appendParts = opts.resourceLoader?.getAppendSystemPrompt();
         return { session: { sessionId: "s3", getActiveToolNames: () => [], setActiveToolsByName: () => {}, abort: () => {} } };
       }) as unknown as typeof createAgentSession;
 
@@ -691,11 +692,11 @@ describe("boot tools_mode and specialist guard enforcement (ticket 02)", () => {
           test_command: "node --test {files}",
           test_globs: ["test/**"],
         },
-      };
+      } as unknown as ResolvedConfig;
 
       const allowance = createSealTestCommandAllowance({
         cwd: dir,
-        config: config as any,
+        config,
         specialist: "implementer",
       });
       const gate = wrapApprovalGateWithSealAllowance(new AutoApproveGate(), allowance);
@@ -707,7 +708,7 @@ describe("boot tools_mode and specialist guard enforcement (ticket 02)", () => {
       const booted = await boot(
         {
           cwd: dir,
-          config: config as any,
+          config,
           model: { provider: "test", id: "stub" } as BootConfig["model"],
           modelRuntime: {} as ModelRuntime,
           gate,

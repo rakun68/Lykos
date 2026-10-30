@@ -630,9 +630,10 @@ describe("pure seal unit tests", () => {
         encoding: "utf8",
         stdio: ["pipe", "pipe", "pipe"],
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       pushFailed = true;
-      pushOut = `${err.stdout ?? ""} ${err.stderr ?? ""}`;
+      const e = err as { stdout?: string; stderr?: string };
+      pushOut = `${e.stdout ?? ""} ${e.stderr ?? ""}`;
     }
 
     assert.ok(pushFailed, "pushing tampered feat from main must be blocked by pre-push hook");

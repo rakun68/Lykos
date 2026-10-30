@@ -87,15 +87,15 @@ function windowsHostedContainer(hostDir: string): ProjectExecutor {
         const inContainer = out
           .split("\n")
           .map((line) => {
-            let event: any;
+            let event: { data?: Record<string, unknown> } | undefined;
             try {
-              event = JSON.parse(line);
+              event = JSON.parse(line) as { data?: Record<string, unknown> };
             } catch {
               return line;
             }
             for (const key of ["file", "entryFile"]) {
               const value = event?.data?.[key];
-              if (typeof value === "string" && value.length > 0) {
+              if (typeof value === "string" && value.length > 0 && event?.data) {
                 event.data[key] = `${CONTAINER_DIR}/${relative(hostDir, value).replace(/\\/g, "/")}`;
               }
             }
@@ -113,11 +113,11 @@ function windowsHostedContainer(hostDir: string): ProjectExecutor {
         stderr: child.stderr,
         stdin: child.stdin,
         kill: (s?: NodeJS.Signals | number) => child.kill(s),
-        on(event: string, listener: (...a: any[]) => void) {
+        on(event: string, listener: (...a: unknown[]) => void) {
           events.on(event, listener);
           return wrapped;
         },
-        once(event: string, listener: (...a: any[]) => void) {
+        once(event: string, listener: (...a: unknown[]) => void) {
           events.once(event, listener);
           return wrapped;
         },

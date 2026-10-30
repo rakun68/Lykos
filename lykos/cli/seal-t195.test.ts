@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import type { SealFile } from "../seal/types.js";
 
 // T195 (#50) ACCEPTANCE: a test writer's red commit becomes a signed seal.
 // Every case drives the real `lykos seal` command against a real temporary
@@ -57,8 +58,8 @@ function commitAll(msg: string): string {
   return git("rev-parse", "HEAD");
 }
 
-function sealFile(branch: string): Record<string, any> {
-  return JSON.parse(readFileSync(join(repo, ".lykos", "seals", `${branch}.json`), "utf8"));
+function sealFile(branch: string): SealFile {
+  return JSON.parse(readFileSync(join(repo, ".lykos", "seals", `${branch}.json`), "utf8")) as SealFile;
 }
 
 function walk(dir: string): string[] {
@@ -144,7 +145,7 @@ describe("T195 ACCEPTANCE: lykos seal create", () => {
     assert.equal(seal.writer_commit, writerCommit);
     assert.equal(seal.test_command, "node --test {files}");
     assert.equal(typeof seal.signature, "string");
-    assert.ok(seal.signature.length > 0);
+    assert.ok(seal.signature!.length > 0);
     assert.equal(typeof seal.key_id, "string");
 
     const red: Array<{ file: string; describe: string[]; name: string }> = seal.red;

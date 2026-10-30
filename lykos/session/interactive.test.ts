@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { runInteractiveLoop, type InteractiveHandle, type InteractiveSession, type LineSource } from "./interactive.js";
+import type { InteractionMode } from "../gate/modes.js";
 import type { StandaloneSessionState } from "./session.js";
 import type { AgentUi } from "../tui/s0.js";
 import { openCredentialDb } from "../credentials/db.js";
@@ -582,7 +583,7 @@ describe("runInteractiveLoop (T37 S0 commands)", () => {
         stderrChunks.push(String(chunk));
         return true;
       };
-      let liveMode = "manual";
+      let liveMode: InteractionMode = "manual";
       let permissionsChanged = 0;
       const permissionsPath = join(dir, "permissions.json");
       try {
@@ -594,7 +595,7 @@ describe("runInteractiveLoop (T37 S0 commands)", () => {
           config: SHIPPED_DEFAULTS,
           modelSpec: "deepseek/deepseek-v4-flash",
           writeReply: () => {},
-          currentMode: () => liveMode as any,
+          currentMode: () => liveMode,
           setMode: (m) => {
             liveMode = m;
           },

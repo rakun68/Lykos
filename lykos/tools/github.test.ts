@@ -118,7 +118,7 @@ function harness(
   };
 }
 
-async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details: any }> {
+async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details?: unknown }> {
   const result = (await h.tool.execute("call-1", args as never, undefined as never, undefined as never, undefined as never)) as {
     content?: Array<{ text?: string }>;
     isError?: boolean;
@@ -127,7 +127,7 @@ async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: 
   return {
     text: result.content?.map((c) => c.text ?? "").join("\n") ?? "",
     isError: result.isError === true,
-    details: result.details as any,
+    details: result.details,
   };
 }
 
@@ -302,8 +302,9 @@ describe("P10.6 D2: a missing or unauthenticated gh is a sentence, not an except
       // Not an error, for `lsp`'s reason: "you have not installed gh" is an
       // answer, and an error is what makes a model retry.
       assert.equal(res.isError, false);
-      assert.equal(res.details.available, false);
-      assert.equal(res.details.success, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.available, false);
+      assert.equal(details.success, false);
       // And it is not a spawn error, a stack or a CLI usage dump.
       assert.doesNotMatch(res.text, /ENOENT|spawn|Usage:|at Object\./);
     } finally {
@@ -317,7 +318,8 @@ describe("P10.6 D2: a missing or unauthenticated gh is a sentence, not an except
       const res = await call(h, { op: "issue_list" });
       assert.equal(res.text, GH_UNAUTHENTICATED_NOTICE);
       assert.equal(res.isError, false);
-      assert.equal(res.details.available, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.available, false);
       // The raw CLI complaint does not reach the model.
       assert.doesNotMatch(res.text, /not logged into any GitHub hosts/);
     } finally {
@@ -343,7 +345,8 @@ describe("P10.6 D2: a missing or unauthenticated gh is a sentence, not an except
       const res = await call(h, { op: "issue_view", issue: "9999" });
       assert.equal(res.isError, true);
       assert.match(res.text, /could not find pull request/);
-      assert.equal(res.details.exitCode, 1);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.exitCode, 1);
     } finally {
       h.dispose();
     }
@@ -507,7 +510,8 @@ describe("P10.6: what github refuses locally, before spawning anything", () => {
       const res = await call(h, { op: "file_read", path: "README.md" });
       assert.equal(res.isError, false, res.text);
       assert.equal(res.text.trim(), "file contents here");
-      assert.equal(res.details.repo, "acme/widgets");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.repo, "acme/widgets");
       const api = h.runner.calls.find((c) => c.args[0] === "api");
       assert.ok(api);
       assert.equal(api.args[1], "/repos/acme/widgets/contents/README.md");
@@ -521,7 +525,8 @@ describe("P10.6: what github refuses locally, before spawning anything", () => {
     try {
       const res = await call(h, { op: "run_watch", branch: "main" });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.run, "987654");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.run, "987654");
       const watch = h.runner.calls.find((c) => c.args[1] === "watch");
       assert.ok(watch);
       assert.deepEqual(watch.args, ["run", "watch", "987654", "--exit-status"]);
@@ -536,7 +541,8 @@ describe("P10.6: what github refuses locally, before spawning anything", () => {
       const res = await call(h, { op: "run_watch", branch: "main" });
       assert.equal(res.isError, false);
       assert.match(res.text, /nothing to watch/);
-      assert.equal(res.details.runs, 0);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.runs, 0);
     } finally {
       h.dispose();
     }
@@ -571,7 +577,8 @@ describe("P10.6: what github refuses locally, before spawning anything", () => {
     const h = harness(() => ({ status: "ok", code: 0, stdout: "partial", stderr: "", truncated: true }));
     try {
       const res = await call(h, { op: "issue_list" });
-      assert.equal(res.details.truncated, true);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.truncated, true);
       assert.match(res.text, /cut here/);
     } finally {
       h.dispose();

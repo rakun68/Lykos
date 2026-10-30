@@ -307,7 +307,7 @@ describe("createLykosModelRuntime (Ticket 01)", () => {
       const provider = runtime.getProvider(id);
       assert.ok(provider, `expected provider ${id} to be registered`);
       assert.equal(
-        typeof (provider as any)?.auth?.oauth?.login,
+        typeof (provider as { auth?: { oauth?: { login?: unknown } } })?.auth?.oauth?.login,
         "function",
         `expected ${id} to expose auth.oauth.login`,
       );

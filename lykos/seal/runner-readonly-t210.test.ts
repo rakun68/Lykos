@@ -53,11 +53,11 @@ function readOnlyContainer(hostDir: string): ProjectExecutor {
         stderr: child.stderr,
         stdin: child.stdin,
         kill: (s?: NodeJS.Signals | number) => child.kill(s),
-        on(event: string, listener: (...a: any[]) => void) {
+        on(event: string, listener: (...a: unknown[]) => void) {
           events.on(event, listener);
           return wrapped;
         },
-        once(event: string, listener: (...a: any[]) => void) {
+        once(event: string, listener: (...a: unknown[]) => void) {
           events.once(event, listener);
           return wrapped;
         },

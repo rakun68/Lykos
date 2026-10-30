@@ -1504,7 +1504,15 @@ describe("Ledger: closing, reopening and naming a session (2026-09-07 UI feedbac
       prefixFingerprint: "child-fingerprint-456",
     });
 
-    const childRow = db.db.prepare("SELECT * FROM sessions WHERE parent_session_id = ?").get(parentId) as any;
+    const childRow = db.db.prepare("SELECT * FROM sessions WHERE parent_session_id = ?").get(parentId) as
+      | {
+          id: string;
+          parent_session_id: string;
+          specialist: string | null;
+          model: string;
+          model_source: string;
+        }
+      | undefined;
     assert.ok(childRow);
     assert.equal(childRow.id, childId);
     assert.equal(childRow.parent_session_id, parentId);
@@ -1512,14 +1520,15 @@ describe("Ledger: closing, reopening and naming a session (2026-09-07 UI feedbac
     assert.equal(childRow.model, "deepseek-v4-pro");
     assert.equal(childRow.model_source, "specialist");
 
-    const parentCalls = db.db.prepare("SELECT tool_count, tool_names, prefix_fingerprint FROM calls WHERE session_id = ?").all(parentId) as any[];
-    const childCalls = db.db.prepare("SELECT tool_count, tool_names, prefix_fingerprint FROM calls WHERE session_id = ?").all(childId) as any[];
+    type CallRow = { tool_count: number; tool_names: string; prefix_fingerprint: string };
+    const parentCalls = db.db.prepare("SELECT tool_count, tool_names, prefix_fingerprint FROM calls WHERE session_id = ?").all(parentId) as CallRow[];
+    const childCalls = db.db.prepare("SELECT tool_count, tool_names, prefix_fingerprint FROM calls WHERE session_id = ?").all(childId) as CallRow[];
 
     assert.equal(parentCalls.length, 1);
     assert.equal(childCalls.length, 1);
-    assert.equal(parentCalls[0].tool_count, 5);
-    assert.equal(childCalls[0].tool_count, 1);
-    assert.notEqual(childCalls[0].prefix_fingerprint, parentCalls[0].prefix_fingerprint);
+    assert.equal(parentCalls[0]!.tool_count, 5);
+    assert.equal(childCalls[0]!.tool_count, 1);
+    assert.notEqual(childCalls[0]!.prefix_fingerprint, parentCalls[0]!.prefix_fingerprint);
 
     const parentTotals = db.callTotals(parentId);
     const childTotals = db.callTotals(childId);
@@ -1555,13 +1564,15 @@ describe("Ledger: closing, reopening and naming a session (2026-09-07 UI feedbac
 
     // Now open via Ledger, which applies migrateTasksTable
     const ledger = Ledger.open(path);
-    const row = ledger.db.prepare("SELECT * FROM tasks WHERE id = 't1'").get() as any;
+    const row = ledger.db.prepare("SELECT * FROM tasks WHERE id = 't1'").get() as { id: string; state: string } | undefined;
+    assert.ok(row);
     assert.equal(row.id, "t1");
     assert.equal(row.state, "open");
 
     // Setting state to 'disputed' now succeeds
     ledger.setTaskState("t1", "disputed");
-    const updated = ledger.db.prepare("SELECT state FROM tasks WHERE id = 't1'").get() as any;
+    const updated = ledger.db.prepare("SELECT state FROM tasks WHERE id = 't1'").get() as { state: string } | undefined;
+    assert.ok(updated);
     assert.equal(updated.state, "disputed");
     ledger.close();
   });

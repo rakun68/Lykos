@@ -29,13 +29,13 @@ describe("Z.ai OAuth flow (D2, D4.1, D4.2)", () => {
   });
 
   it("exchanges code, performs business login, and mints id.secret key with pasted redirect URL", async () => {
-    const requests: Array<{ method: string; url: string; body: any; auth?: string | undefined }> = [];
+    const requests: Array<{ method: string; url: string; body: Record<string, unknown> | undefined; auth?: string | undefined }> = [];
 
     const server: Server = createServer((req, res) => {
       let raw = "";
       req.on("data", (chunk) => (raw += chunk));
       req.on("end", () => {
-        const body = raw.length > 0 ? JSON.parse(raw) : undefined;
+        const body = raw.length > 0 ? (JSON.parse(raw) as Record<string, unknown>) : undefined;
         const auth = req.headers.authorization;
         requests.push({ method: req.method ?? "GET", url: req.url ?? "", body, auth });
 
@@ -157,16 +157,16 @@ describe("Z.ai OAuth flow (D2, D4.1, D4.2)", () => {
 
       assert.equal(requests.length, 6);
       assert.equal(requests[0]!.url, "/oauth/token");
-      assert.equal(requests[0]!.body.code, "test-auth-code");
+      assert.equal(requests[0]!.body?.code, "test-auth-code");
       assert.equal(requests[1]!.url, "/api/auth/z/login");
-      assert.equal(requests[1]!.body.token, "short-lived-oauth-token-xyz");
+      assert.equal(requests[1]!.body?.token, "short-lived-oauth-token-xyz");
       assert.equal(requests[2]!.url, "/api/biz/customer/getCustomerInfo");
       assert.equal(requests[2]!.auth, "Bearer biz-token-456");
       assert.equal(requests[3]!.url, "/api/biz/v1/organization/org-1/projects/proj-1/api_keys");
       assert.equal(requests[3]!.method, "GET");
       assert.equal(requests[4]!.url, "/api/biz/v1/organization/org-1/projects/proj-1/api_keys");
       assert.equal(requests[4]!.method, "POST");
-      assert.equal(requests[4]!.body.name, "lykos");
+      assert.equal(requests[4]!.body?.name, "lykos");
       assert.equal(requests[5]!.url, "/api/biz/v1/organization/org-1/projects/proj-1/api_keys/copy/created-key-id");
     } finally {
       await new Promise<void>((r) => server.close(() => r()));

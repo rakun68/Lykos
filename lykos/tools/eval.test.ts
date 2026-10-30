@@ -94,7 +94,7 @@ function harness(opts: { answer?: ApprovalDecision; python?: string } = {}): Har
   };
 }
 
-async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details: any }> {
+async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details?: unknown }> {
   const result = (await h.tool.execute("call-1", args as never, undefined as never, undefined as never, undefined as never)) as {
     content?: Array<{ text?: string }>;
     isError?: boolean;
@@ -103,7 +103,7 @@ async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: 
   return {
     text: result.content?.map((c) => c.text ?? "").join("\n") ?? "",
     isError: result.isError === true,
-    details: result.details as any,
+    details: result.details,
   };
 }
 
@@ -174,9 +174,10 @@ describe("P10.6 D6: py reports itself unconfigured by naming the setting", () =>
       // question the model asked, and marking it an error is what makes a
       // model retry the same call.
       assert.equal(res.isError, false);
-      assert.equal(res.details.configured, false);
-      assert.equal(res.details.setting, EVAL_PYTHON_CONFIG_KEY);
-      assert.equal(res.details.success, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.configured, false);
+      assert.equal(details.setting, EVAL_PYTHON_CONFIG_KEY);
+      assert.equal(details.success, false);
       // Nothing was approved and nothing was started.
       assert.equal(h.gate.seen.length, 0);
       assert.deepEqual(h.runtimes.pids(), []);
@@ -191,8 +192,9 @@ describe("P10.6 D6: py reports itself unconfigured by naming the setting", () =>
       const res = await call(h, { language: "py", code: "print(1)" });
       assert.match(res.text, /not built yet/);
       assert.match(res.text, /python3/);
-      assert.equal(res.details.configured, true);
-      assert.equal(res.details.success, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.configured, true);
+      assert.equal(details.success, false);
       assert.equal(h.gate.seen.length, 0);
     } finally {
       await h.dispose();
@@ -292,7 +294,8 @@ describe("P10.6 D7: the tool retains state across two calls in one session", () 
       const third = await call(h, { language: "js", code: "typeof kept", reset: true });
       assert.equal(third.isError, false, third.text);
       assert.match(third.text, /undefined/);
-      assert.equal(third.details.restarted, true);
+      const details = third.details as Record<string, unknown>;
+      assert.equal(details.restarted, true);
     } finally {
       await h.dispose();
     }
@@ -313,7 +316,8 @@ describe("P10.6 D7: the tool retains state across two calls in one session", () 
     const h = harness();
     try {
       const res = await call(h, { language: "js", code: "null.nope" });
-      assert.equal(res.details.status, "error");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.status, "error");
       // The model asked what this code does; "it throws" is the answer.
       assert.equal(res.isError, false);
       assert.match(res.text, /TypeError/);
@@ -330,7 +334,8 @@ describe("P10.6 D8: a hung cell, through the tool", () => {
       await call(h, { language: "js", code: "const before = 1;" });
       const hung = await call(h, { language: "js", code: "for (;;) {}", timeout: 1 });
       assert.equal(hung.isError, true);
-      assert.equal(hung.details.status, "timeout");
+      const details = hung.details as Record<string, unknown>;
+      assert.equal(details.status, "timeout");
       assert.match(hung.text, /EVERY VARIABLE IS GONE/);
       assert.match(hung.text, /restarted/);
 

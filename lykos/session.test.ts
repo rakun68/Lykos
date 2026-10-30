@@ -265,15 +265,15 @@ describe("feature flags are read once, at boot", () => {
 describe("resolveHostModel error separation (D3)", () => {
   function makeStubRuntime(providers: string[], modelsByProvider: Record<string, string[]>): ModelRuntime {
     return {
-      getProviders: () => providers.map((id) => ({ id } as any)),
-      getProvider: (id: string) => (providers.includes(id) ? ({ id } as any) : undefined),
+      getProviders: () => providers.map((id) => ({ id })),
+      getProvider: (id: string) => (providers.includes(id) ? { id } : undefined),
       getModels: (providerId?: string) =>
         (providerId && modelsByProvider[providerId]
-          ? modelsByProvider[providerId].map((id) => ({ id, provider: providerId } as any))
+          ? modelsByProvider[providerId].map((id) => ({ id, provider: providerId }))
           : []),
       getModel: (providerId: string, modelId: string) => {
         if (modelsByProvider[providerId]?.includes(modelId)) {
-          return { id: modelId, provider: providerId } as any;
+          return { id: modelId, provider: providerId };
         }
         return undefined;
       },
@@ -354,7 +354,7 @@ describe("resolveHostModel error separation (D3)", () => {
     // wording would invent a rejection path the runtime does not take.
     const boom = new Error("401 Unauthorized");
     const rt = {
-      getProviders: () => [{ id: "anthropic" } as any],
+      getProviders: () => [{ id: "anthropic" }],
       getProvider: () => {
         throw boom;
       },

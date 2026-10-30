@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import type { createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { createAgentSession, CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config/load.js";
 import { AutoApproveGate } from "../gate/approval.js";
 import {
@@ -42,7 +42,7 @@ async function call(
 }
 
 function makeStub(): typeof createAgentSession {
-  return (async (opts: any = {}) => {
+  return (async (opts: CreateAgentSessionOptions = {}) => {
     let active = [...(opts.tools ?? [])];
     return {
       session: {

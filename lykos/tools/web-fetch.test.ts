@@ -158,7 +158,7 @@ function harness(opts: {
   return { tool, gate, fetched, denials };
 }
 
-async function call(tool: ToolDefinition, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details: any }> {
+async function call(tool: ToolDefinition, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details?: unknown }> {
   const result = (await tool.execute("call-1", args as never, undefined as never, undefined as never, undefined as never)) as {
     content?: Array<{ text?: string }>;
     isError?: boolean;
@@ -167,7 +167,7 @@ async function call(tool: ToolDefinition, args: Record<string, unknown>): Promis
   return {
     text: result.content?.map((c) => c.text ?? "").join("\n") ?? "",
     isError: result.isError === true,
-    details: result.details as any,
+    details: result.details,
   };
 }
 
@@ -313,7 +313,8 @@ describe("P10.7 D4: the tool sends nothing to a refused address", () => {
       for (const url of ["http://127.0.0.1:1234/", "https://10.0.0.5/", "http://169.254.169.254/latest/meta-data/", "https://[::1]/"]) {
         const res = await call(h.tool, { url });
         assert.equal(res.isError, true, url);
-        assert.equal(res.details.refused, true, url);
+        const details = res.details as Record<string, unknown>;
+        assert.equal(details.refused, true, url);
       }
       assert.deepEqual(h.fetched, []);
       assert.deepEqual(server.paths, []);
@@ -344,7 +345,8 @@ describe("P10.7 D4: the tool sends nothing to a refused address", () => {
       const res = await call(h.tool, { url: "http://docs.example/guide" });
       assert.equal(res.isError, false);
       assert.deepEqual(h.fetched, ["https://docs.example/guide"]);
-      assert.equal(res.details.finalUrl, "https://docs.example/guide");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.finalUrl, "https://docs.example/guide");
     } finally {
       await server.close();
     }
@@ -370,8 +372,9 @@ describe("P10.7: HTML becomes readable markdown", () => {
       assert.match(res.text, /-\s+first bullet/);
       assert.doesNotMatch(res.text, /copyright 2026 widget corp/);
       assert.doesNotMatch(res.text, /home about contact/);
-      assert.equal(res.details.title, "Widget guide");
-      assert.equal(res.details.cached, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.title, "Widget guide");
+      assert.equal(details.cached, false);
     } finally {
       await server.close();
     }
@@ -401,7 +404,8 @@ describe("P10.7: HTML becomes readable markdown", () => {
       const h = harness({ port: server.port });
       const res = await call(h.tool, { url: "https://docs.example/logo.png" });
       assert.match(res.text, /image\/png/);
-      assert.equal(res.details.extracted, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.extracted, false);
     } finally {
       await server.close();
     }
@@ -414,7 +418,8 @@ describe("P10.7: HTML becomes readable markdown", () => {
       const res = await call(h.tool, { url: "https://docs.example/missing" });
       assert.equal(res.isError, true);
       assert.match(res.text, /HTTP 404/);
-      assert.equal(res.details.status, 404);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.status, 404);
     } finally {
       await server.close();
     }
@@ -439,7 +444,8 @@ describe("P10.7 D5: same host follows, cross host reports", () => {
       const h = harness({ port: server.port });
       const res = await call(h.tool, { url: "https://docs.example/old" });
       assert.equal(res.isError, false);
-      assert.equal(res.details.finalUrl, "https://docs.example/new");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.finalUrl, "https://docs.example/new");
       assert.deepEqual(h.fetched, ["https://docs.example/old", "https://docs.example/new"]);
     } finally {
       await server.close();
@@ -462,7 +468,8 @@ describe("P10.7 D5: same host follows, cross host reports", () => {
       const h = harness({ port: server.port });
       const res = await call(h.tool, { url: "https://docs.example/insecure" });
       assert.equal(res.isError, false);
-      assert.equal(res.details.finalUrl, "https://docs.example/secure");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.finalUrl, "https://docs.example/secure");
     } finally {
       await server.close();
     }
@@ -486,8 +493,9 @@ describe("P10.7 D5: same host follows, cross host reports", () => {
       assert.equal(res.isError, false, "a redirect the model can act on is not a failed turn");
       assert.match(res.text, /https:\/\/docs\.example\/away/);
       assert.match(res.text, /https:\/\/other\.example\/landing/);
-      assert.equal(res.details.followed, false);
-      assert.equal(res.details.redirectedTo, "https://other.example/landing");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.followed, false);
+      assert.equal(details.redirectedTo, "https://other.example/landing");
       // The destination was never requested: one fetch, one server hit.
       assert.deepEqual(h.fetched, ["https://docs.example/away"]);
       assert.deepEqual(server.paths, ["/away"]);
@@ -542,7 +550,8 @@ describe("P10.7 D4: the address check runs again on every redirect hop", () => {
       const res = await call(h.tool, { url: "https://rebind.example/start" });
 
       assert.equal(res.isError, true);
-      assert.equal(res.details.refused, true);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.refused, true);
       assert.match(res.text, /10\.0\.0\.5/);
       assert.equal(lookups, 2, "the hop was resolved again rather than trusted");
       // The thing that actually matters: the private page was never requested.
@@ -566,7 +575,8 @@ describe("P10.7 D4: the address check runs again on every redirect hop", () => {
       const h = harness({ port: server.port });
       const res = await call(h.tool, { url: "https://docs.example/start" });
       assert.equal(res.isError, true);
-      assert.equal(res.details.refused, true);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.refused, true);
       assert.match(res.text, /169\.254\.169\.254/);
       assert.match(res.text, /link-local/);
       assert.deepEqual(server.paths, ["/start"]);
@@ -599,8 +609,9 @@ describe("P10.7 D6: the byte cap truncates and pagination returns a next offset"
     try {
       const h = harness({ port: server.port });
       const res = await call(h.tool, { url: "https://docs.example/huge" });
-      assert.equal(res.details.truncated, true);
-      assert.ok(res.details.bytes <= WEB_FETCH_MAX_BYTES, `read ${res.details.bytes} bytes`);
+      const details = res.details as { truncated: boolean; bytes: number };
+      assert.equal(details.truncated, true);
+      assert.ok(details.bytes <= WEB_FETCH_MAX_BYTES, `read ${details.bytes} bytes`);
       assert.match(res.text, /passed the 2000000-byte cap/);
     } finally {
       await server.close();
@@ -615,17 +626,19 @@ describe("P10.7 D6: the byte cap truncates and pagination returns a next offset"
     try {
       const h = harness({ port: server.port });
       const first = await call(h.tool, { url: "https://docs.example/long" });
-      assert.equal(first.details.offset, 0);
-      assert.equal(typeof first.details.nextOffset, "number");
-      assert.equal(first.details.nextOffset, WEB_FETCH_PAGE_CHARS);
+      const firstDetails = first.details as { offset: number; nextOffset: number };
+      assert.equal(firstDetails.offset, 0);
+      assert.equal(typeof firstDetails.nextOffset, "number");
+      assert.equal(firstDetails.nextOffset, WEB_FETCH_PAGE_CHARS);
       assert.match(first.text, new RegExp(`offset: ${WEB_FETCH_PAGE_CHARS}`));
 
-      const second = await call(h.tool, { url: "https://docs.example/long", offset: first.details.nextOffset });
-      assert.equal(second.details.offset, WEB_FETCH_PAGE_CHARS);
+      const second = await call(h.tool, { url: "https://docs.example/long", offset: firstDetails.nextOffset });
+      const secondDetails = second.details as { offset: number; cached: boolean };
+      assert.equal(secondDetails.offset, WEB_FETCH_PAGE_CHARS);
       assert.notEqual(second.text, first.text);
       // The second read came from the cache, so the whole document was fetched
       // once however many pages the model reads.
-      assert.equal(second.details.cached, true);
+      assert.equal(secondDetails.cached, true);
       assert.deepEqual(h.fetched, ["https://docs.example/long"]);
     } finally {
       await server.close();
@@ -677,14 +690,14 @@ describe("P10.7 D7: the session cache serves a repeat", () => {
       const h = harness({ port: server.port });
       const first = await call(h.tool, { url: "https://docs.example/guide" });
       const second = await call(h.tool, { url: "https://docs.example/guide" });
-      assert.equal(first.details.cached, false);
-      assert.equal(second.details.cached, true);
+      assert.equal((first.details as Record<string, unknown>).cached, false);
+      assert.equal((second.details as Record<string, unknown>).cached, true);
       assert.match(second.text, /from this session's cache/);
       assert.equal(h.fetched.length, 1);
       assert.deepEqual(server.paths, ["/guide"]);
 
       const third = await call(h.tool, { url: "https://docs.example/guide", refresh: true });
-      assert.equal(third.details.cached, false);
+      assert.equal((third.details as Record<string, unknown>).cached, false);
       assert.equal(h.fetched.length, 2);
     } finally {
       await server.close();
@@ -698,7 +711,7 @@ describe("P10.7 D7: the session cache serves a repeat", () => {
       const b = harness({ port: server.port });
       await call(a.tool, { url: "https://docs.example/guide" });
       const fromB = await call(b.tool, { url: "https://docs.example/guide" });
-      assert.equal(fromB.details.cached, false);
+      assert.equal((fromB.details as Record<string, unknown>).cached, false);
       assert.equal(b.fetched.length, 1);
     } finally {
       await server.close();
@@ -762,8 +775,9 @@ describe("P10.7 D8: a page that cannot be extracted says why", () => {
       assert.match(res.text, /client-rendered/);
       assert.match(res.text, /Dashboard/);
       assert.match(res.text, /https:\/\/docs\.example\/app/);
-      assert.equal(res.details.extracted, false);
-      assert.equal(res.details.title, "Dashboard");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.extracted, false);
+      assert.equal(details.title, "Dashboard");
     } finally {
       await server.close();
     }
@@ -789,7 +803,8 @@ describe("P10.7 D8: a page that cannot be extracted says why", () => {
       const h = harness({ port: server.port });
       const res = await call(h.tool, { url: "https://docs.example/empty.txt" });
       assert.match(res.text, /empty text\/plain/);
-      assert.equal(res.details.extracted, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.extracted, false);
     } finally {
       await server.close();
     }

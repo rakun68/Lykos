@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,7 +37,7 @@ function jsonResponse(data: unknown): string {
 
 describe("GitLab Duo OAuth flow and stream (D2, D4.1, D4.4)", () => {
   it("performs PKCE authorization code exchange and sets up credential", async () => {
-    let tokenRequest: { body: any; headers: any } | undefined;
+    let tokenRequest: { body: Record<string, string>; headers: IncomingHttpHeaders } | undefined;
 
     const server: Server = createServer((req, res) => {
       let raw = "";
@@ -68,7 +68,7 @@ describe("GitLab Duo OAuth flow and stream (D2, D4.1, D4.4)", () => {
     const base = `http://127.0.0.1:${port}`;
 
     try {
-      let authInfo: any;
+      let authInfo: { url: string; instructions?: string } | undefined;
       const progress: string[] = [];
 
       // Start the flow with callbackPort: 0 so it uses an ephemeral loopback port
@@ -153,7 +153,7 @@ describe("GitLab Duo OAuth flow and stream (D2, D4.1, D4.4)", () => {
   }
 
   it("refresh works and updates tokens while clearing direct access cache", async () => {
-    let refreshBody: any;
+    let refreshBody: Record<string, string> | undefined;
     const server: Server = createServer((req, res) => {
       let raw = "";
       req.on("data", (chunk) => (raw += chunk));
@@ -198,6 +198,7 @@ describe("GitLab Duo OAuth flow and stream (D2, D4.1, D4.4)", () => {
       assert.equal(refreshed.access, "refreshed-gl-access-token");
       assert.equal(refreshed.refresh, "refreshed-gl-refresh-token");
       assert.equal(refreshed.expires, (1700005000 + 3600) * 1000 - 300_000);
+      assert.ok(refreshBody);
       assert.equal(refreshBody.grant_type, "refresh_token");
       assert.equal(refreshBody.refresh_token, "old-refresh-token");
     } finally {

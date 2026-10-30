@@ -84,7 +84,7 @@ function harness(answer: ApprovalDecision = "allow", maxLogBytes?: number): Harn
   };
 }
 
-async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details: any }> {
+async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details?: unknown }> {
   const result = (await h.tool.execute("call-1", args as never, undefined as never, undefined as never, undefined as never)) as {
     content?: Array<{ text?: string }>;
     isError?: boolean;
@@ -93,7 +93,7 @@ async function call(h: Harness, args: Record<string, unknown>): Promise<{ text: 
   return {
     text: result.content?.map((c) => c.text ?? "").join("\n") ?? "",
     isError: result.isError === true,
-    details: result.details as any,
+    details: result.details,
   };
 }
 
@@ -228,7 +228,7 @@ describe("P10.5 D8: hub start reaches the gate exactly as bash does", () => {
     const h = harness();
     try {
       const started = await call(h, { op: "start", command: "node -e \"console.log('x'); setTimeout(()=>{},5000)\"" });
-      const id = started.details.job.id as string;
+      const id = (started.details as { job: { id: string } }).job.id;
       assert.equal(h.gate.seen.length, 1);
       await call(h, { op: "ps" });
       await call(h, { op: "logs", id });
@@ -265,7 +265,7 @@ describe("P10.5 D1: one tool, eight operations", () => {
     try {
       const res = await call(h, { op: "start", command: "node -e \"setTimeout(()=>{},5000)\"" });
       assert.equal(res.isError, false);
-      const job = res.details.job;
+      const job = (res.details as { job: Record<string, unknown> }).job;
       assert.match(job.id as string, /^job-[0-9a-f]{6}$/);
       assert.ok((job.pid as number) > 0);
       assert.equal(job.logPath, join(h.dir, ".lykos", "jobs", `${job.id}.log`));
@@ -297,13 +297,13 @@ describe("P10.5 D1: one tool, eight operations", () => {
     try {
       assert.match((await call(h, { op: "ps" })).text, /No background jobs/);
       const started = await call(h, { op: "start", command: "node -e \"setTimeout(()=>{}, 300)\"" });
-      const id = started.details.job.id as string;
+      const id = (started.details as { job: { id: string } }).job.id;
       const running = await call(h, { op: "ps" });
       assert.match(running.text, new RegExp(`${id}\\s+running`));
       await waitUntil(() => h.jobs.get(id)?.status === "exited");
       const after = await call(h, { op: "ps" });
       assert.match(after.text, new RegExp(`${id}\\s+exited \\(exit 0\\)`));
-      assert.equal(after.details.jobs.length, 1, "nothing is ever deleted");
+      assert.equal((after.details as { jobs: unknown[] }).jobs.length, 1, "nothing is ever deleted");
     } finally {
       await h.dispose();
     }
@@ -316,7 +316,7 @@ describe("P10.5 D1: one tool, eight operations", () => {
         op: "start",
         command: "node -e \"console.log('alpha'); setTimeout(()=>{ console.log('beta'); setTimeout(()=>{},5000); }, 300)\"",
       });
-      const id = started.details.job.id as string;
+      const id = (started.details as { job: { id: string } }).job.id;
       await waitUntil(() => (h.jobs.logs(id)?.text ?? "").includes("alpha"));
       assert.equal(h.jobs.get(id)?.status, "running");
 
@@ -327,7 +327,7 @@ describe("P10.5 D1: one tool, eight operations", () => {
 
       const first = await call(h, { op: "logs", id, offset: 0 });
       await waitUntil(() => (h.jobs.logs(id)?.text ?? "").includes("beta"));
-      const next = await call(h, { op: "logs", id, offset: first.details.nextOffset });
+      const next = await call(h, { op: "logs", id, offset: (first.details as { nextOffset: number }).nextOffset });
       assert.match(next.text, /beta/);
       assert.equal(next.text.includes("alpha"), false);
     } finally {
@@ -358,7 +358,7 @@ describe("P10.5 D1: one tool, eight operations", () => {
     const h = harness();
     try {
       const started = await call(h, { op: "start", command: "node -e \"process.exit(2)\"" });
-      const id = started.details.job.id as string;
+      const id = (started.details as { job: { id: string } }).job.id;
       await waitUntil(() => h.jobs.get(id)?.status === "exited");
       const res = await call(h, { op: "stop", id });
       assert.equal(res.isError, false);
@@ -389,7 +389,7 @@ describe("P10.5 D4/D5: through the tool, the kill still reaches the grandchild",
         "utf8",
       );
       const started = await call(h, { op: "start", command: `node ${JSON.stringify(join(h.dir, "child.js"))}` });
-      const id = started.details.job.id as string;
+      const id = (started.details as { job: { id: string } }).job.id;
 
       let grandPid: number | undefined;
       await waitUntil(() => {
@@ -430,7 +430,7 @@ describe("P10.5 D4/D5: through the tool, the kill still reaches the grandchild",
         op: "start",
         command: "node -e \"setInterval(() => process.stdout.write('x'.repeat(500) + '\\n'), 10)\"",
       });
-      const id = started.details.job.id as string;
+      const id = (started.details as { job: { id: string } }).job.id;
       await waitUntil(() => h.jobs.get(id)?.status === "capped");
       const res = await call(h, { op: "logs", id });
       assert.match(res.text, /capped/);
@@ -454,7 +454,7 @@ describe("P10.5 ticket 17: send, and what it says when delivery fails (D4)", () 
       const res = await call(h, { op: "send", to: "scout", message: "read src/index.ts" });
       assert.equal(res.isError, false);
       assert.match(res.text, /Delivered to scout\./);
-      assert.deepEqual(res.details.receipts, [{ to: "scout", delivered: true }]);
+      assert.deepEqual((res.details as { receipts: unknown }).receipts, [{ to: "scout", delivered: true }]);
       const got = scout.inbox();
       assert.equal(got.messages.length, 1);
       assert.equal(got.messages[0]!.from, "main");
@@ -568,7 +568,7 @@ describe("P10.5 ticket 17: inbox peeks or drains and says which (D6)", () => {
       assert.equal(res.isError, false);
       assert.match(res.text, /2 messages, drained from your mailbox\./);
       assert.match(res.text, /from scout at .*: one/);
-      assert.equal(res.details.drained, true);
+      assert.equal((res.details as { drained: boolean }).drained, true);
       assert.match((await call(h, { op: "inbox" })).text, /mailbox \(main\) is empty/);
       scout.leave();
     } finally {
@@ -583,12 +583,12 @@ describe("P10.5 ticket 17: inbox peeks or drains and says which (D6)", () => {
       scout.send("main", "still here");
       const peeked = await call(h, { op: "inbox", peek: true });
       assert.match(peeked.text, /1 message, left in your mailbox \(peek\)\./);
-      assert.equal(peeked.details.drained, false);
+      assert.equal((peeked.details as { drained: boolean }).drained, false);
       const again = await call(h, { op: "inbox", peek: true });
-      assert.equal(again.details.messages.length, 1);
+      assert.equal((again.details as { messages: unknown[] }).messages.length, 1);
       const drained = await call(h, { op: "inbox" });
-      assert.equal(drained.details.drained, true);
-      assert.equal((await call(h, { op: "inbox" })).details.messages.length, 0);
+      assert.equal((drained.details as { drained: boolean }).drained, true);
+      assert.equal(((await call(h, { op: "inbox" })).details as { messages: unknown[] }).messages.length, 0);
       scout.leave();
     } finally {
       await h.dispose();
@@ -630,8 +630,8 @@ describe("P10.5 ticket 17: list names the live and omits nobody quietly", () => 
       assert.match(res.text, /You are "main"\./);
       assert.match(res.text, /Live peers: scout\./);
       assert.match(res.text, /Finished: watcher\./);
-      assert.deepEqual(res.details.live, ["scout"]);
-      assert.deepEqual(res.details.finished, ["watcher"]);
+      assert.deepEqual((res.details as { live: string[] }).live, ["scout"]);
+      assert.deepEqual((res.details as { finished: string[] }).finished, ["watcher"]);
       scout.leave();
     } finally {
       await h.dispose();
@@ -643,7 +643,7 @@ describe("P10.5 ticket 17: list names the live and omits nobody quietly", () => 
     try {
       const res = await call(h, { op: "list" });
       assert.match(res.text, /No other agent is live in this session\./);
-      assert.deepEqual(res.details.live, []);
+      assert.deepEqual((res.details as { live: string[] }).live, []);
     } finally {
       await h.dispose();
     }
@@ -659,8 +659,9 @@ describe("P10.5 ticket 17: wait distinguishes its endings (D5)", () => {
       setTimeout(() => scout.send("main", "found it"), 10);
       const res = await waiting;
       assert.equal(res.isError, false);
-      assert.equal(res.details.outcome, "message");
-      assert.equal(res.details.message.body, "found it");
+      const details = res.details as { outcome: string; message: { body: string } };
+      assert.equal(details.outcome, "message");
+      assert.equal(details.message.body, "found it");
       assert.match(res.text, /from scout at .*: found it/);
       assert.ok(res.text.includes(PEER_DATA_NOTE));
       scout.leave();
@@ -675,7 +676,7 @@ describe("P10.5 ticket 17: wait distinguishes its endings (D5)", () => {
       const scout = h.bus.join("scout");
       const res = await call(h, { op: "wait", timeout_ms: 60 });
       assert.equal(res.isError, false, "a timeout is a normal result");
-      assert.equal(res.details.outcome, "timeout");
+      assert.equal((res.details as { outcome: string }).outcome, "timeout");
       assert.match(res.text, /No message arrived within \d+ms\./);
       scout.leave();
     } finally {
@@ -688,7 +689,7 @@ describe("P10.5 ticket 17: wait distinguishes its endings (D5)", () => {
     try {
       const started = Date.now();
       const res = await call(h, { op: "wait", timeout_ms: PEER_WAIT_MAX_MS });
-      assert.equal(res.details.outcome, "no-peers");
+      assert.equal((res.details as { outcome: string }).outcome, "no-peers");
       assert.ok(Date.now() - started < 1000, "it blocked on an empty room");
       assert.match(res.text, /returned immediately/);
     } finally {
@@ -705,8 +706,9 @@ describe("P10.5 ticket 17: wait distinguishes its endings (D5)", () => {
       scout.send("main", "not this one");
       watcher.send("main", "this one");
       const res = await waiting;
-      assert.equal(res.details.message.from, "watcher");
-      assert.equal(res.details.message.body, "this one");
+      const details = res.details as { message: { from: string; body: string } };
+      assert.equal(details.message.from, "watcher");
+      assert.equal(details.message.body, "this one");
       scout.leave();
       watcher.leave();
     } finally {
@@ -722,7 +724,7 @@ describe("P10.5 ticket 17: wait distinguishes its endings (D5)", () => {
       const waiting = call(h, { op: "wait", timeout_ms: PEER_WAIT_MAX_MS });
       setTimeout(() => scout.leave(), 10);
       const res = await waiting;
-      assert.equal(res.details.outcome, "no-peers");
+      assert.equal((res.details as { outcome: string }).outcome, "no-peers");
       assert.ok(Date.now() - started < 5000);
       assert.equal(h.bus.waiterCount(), 0);
     } finally {

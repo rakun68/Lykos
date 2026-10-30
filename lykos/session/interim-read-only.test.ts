@@ -5,7 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import type { ModelRuntime, createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime, CreateAgentSessionOptions, createAgentSession } from "@earendil-works/pi-coding-agent";
 import { boot, type BootConfig } from "./boot.js";
 import { readOnlyPosture } from "./interactive.js";
 import { loadConfig } from "../config/load.js";
@@ -22,8 +22,11 @@ async function planSession(bootToo = true) {
   const posture = readOnlyPosture(config, { gate: new AutoApproveGate(), requestPlanExit: async () => "manual" });
   if (!bootToo) return { posture, captured: () => ({ tools: [], customTools: [] }) };
   let captured: { tools: string[]; customTools: Array<{ name: string; execute: (...a: unknown[]) => Promise<{ details?: Record<string, unknown> }> }> } = { tools: [], customTools: [] };
-  const stub = (async (opts: any = {}) => {
-    captured = { tools: [...(opts.tools ?? [])], customTools: opts.customTools ?? [] };
+  const stub = (async (opts: CreateAgentSessionOptions = {} as CreateAgentSessionOptions) => {
+    captured = {
+      tools: [...(opts.tools ?? [])],
+      customTools: (opts.customTools ?? []) as Array<{ name: string; execute: (...a: unknown[]) => Promise<{ details?: Record<string, unknown> }> }>,
+    };
     return { session: { sessionId: "s", getActiveToolNames: () => captured.tools, setActiveToolsByName: () => {}, abort: () => {} } };
   }) as unknown as typeof createAgentSession;
   await boot(

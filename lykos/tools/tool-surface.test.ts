@@ -434,7 +434,7 @@ describe('P10.1 registry residency and prompt presence', () => {
     }
   });
   it('fails when any row lacks risk, residency or promptPresence', () => {
-    const checkRow = (r: any) => Boolean(r.risk && isRiskTier(r.risk.tier) && typeof r.risk.idempotent === 'boolean' && typeof r.risk.openWorld === 'boolean' && (r.residency === 'resident' || r.residency === 'mounted' || r.residency === 'off') && (r.promptPresence === 'full' || r.promptPresence === 'named' || r.promptPresence === 'hidden'));
+    const checkRow = (r: { risk?: { tier?: string; idempotent?: unknown; openWorld?: unknown }; residency?: unknown; promptPresence?: unknown; [key: string]: unknown }) => Boolean(r.risk && typeof r.risk.tier === 'string' && isRiskTier(r.risk.tier) && typeof r.risk.idempotent === 'boolean' && typeof r.risk.openWorld === 'boolean' && (r.residency === 'resident' || r.residency === 'mounted' || r.residency === 'off') && (r.promptPresence === 'full' || r.promptPresence === 'named' || r.promptPresence === 'hidden'));
     assert.equal(checkRow({ name: 't', rationale: 'r', residency: 'resident', promptPresence: 'full' }), false);
     assert.equal(checkRow({ name: 't', rationale: 'r', risk: { tier: 'read', idempotent: true, openWorld: false }, promptPresence: 'full' }), false);
     assert.equal(checkRow({ name: 't', rationale: 'r', risk: { tier: 'read', idempotent: true, openWorld: false }, residency: 'resident' }), false);

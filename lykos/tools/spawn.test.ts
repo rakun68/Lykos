@@ -12,7 +12,13 @@ import { buildAgentTool, ensureParentSessionForSpawn, type SpawnContext } from "
 import { AutoApproveGate } from "../gate/approval.js";
 import { PONYTAIL_RULESET_TEXT } from "../session/ponytail-head.js";
 import { createSpecialistGuardHandler } from "../tools/specialist-guard-extension.js";
-import type { createAgentSession } from "@earendil-works/pi-coding-agent";
+import type {
+  createAgentSession,
+  CreateAgentSessionOptions,
+  ToolCallEvent,
+  ToolCallEventResult,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { Ledger } from "../ledger/ledger.js";
 import { openLedger } from "../ledger/use.js";
 import { SHIPPED_DEFAULTS } from "../config/defaults.js";
@@ -354,8 +360,8 @@ describe("T39 ledger: Lykos child vs MCP hop-1", () => {
   });
 });
 
-function makeStub(onSession?: (opts: any) => void): typeof createAgentSession {
-  return (async (opts: any = {}) => {
+function makeStub(onSession?: (opts: CreateAgentSessionOptions) => void): typeof createAgentSession {
+  return (async (opts: CreateAgentSessionOptions = {}) => {
     onSession?.(opts);
     let active = [...(opts.tools ?? [])];
     return {
@@ -406,8 +412,8 @@ function makeCtx(dir: string, ledgerPath: string, createSession?: typeof createA
   };
 }
 
-async function callTool(tool: ReturnType<typeof buildAgentTool>, params: any) {
-  return (tool as any).execute("call-1", params, undefined, undefined, undefined);
+async function callTool(tool: ToolDefinition, params: unknown) {
+  return tool.execute("call-1", params as never, undefined as never, undefined as never, undefined as never);
 }
 
 describe("spawning a subagent under a specialist (ticket 04)", () => {
@@ -419,10 +425,10 @@ describe("spawning a subagent under a specialist (ticket 04)", () => {
       join(specDir, "custom-prompt.yaml"),
       "description: Custom prompt override\nprompt_mode: override\ninstructions: Exclusive subagent prompt.\n",
     );
-    let capturedLoader: any;
+    let capturedLoader: { appendSystemPromptOverride: (prompts: string[]) => string[] } | undefined;
     try {
       const tool = buildAgentTool(makeCtx(dir, join(dir, "ledger.db"), makeStub((opts) => {
-        capturedLoader = opts.resourceLoader;
+        capturedLoader = opts.resourceLoader as unknown as { appendSystemPromptOverride: (prompts: string[]) => string[] };
       })));
       await callTool(tool, {
         prompt: "do task",
@@ -476,14 +482,14 @@ describe("spawning a subagent under a specialist (ticket 04)", () => {
       join(specDir, "append-restrict.yaml"),
       ["description: Append restrict", "tools_mode: append", "tools_remove:", "  - bash", ""].join("\n"),
     );
-    let refusal: any;
-    let allowed: any;
+    let refusal: ToolCallEventResult | undefined;
+    let allowed: ToolCallEventResult | undefined;
     try {
       const tool = buildAgentTool(makeCtx(dir, join(dir, "ledger.db"), makeStub((opts) => {
-        assert.ok(opts.tools.includes("bash"), "bash must remain in request under append");
+        assert.ok(opts.tools?.includes("bash"), "bash must remain in request under append");
         const guard = createSpecialistGuardHandler();
-        refusal = guard({ toolName: "bash" } as any);
-        allowed = guard({ toolName: "read" } as any);
+        refusal = guard({ toolName: "bash" } as ToolCallEvent);
+        allowed = guard({ toolName: "read" } as ToolCallEvent);
       })));
       await callTool(tool, {
         prompt: "restricted run",
@@ -493,8 +499,8 @@ describe("spawning a subagent under a specialist (ticket 04)", () => {
 
       assert.ok(refusal, "calling disallowed tool inside child must trigger refusal");
       assert.equal(refusal.block, true);
-      assert.match(refusal.reason, /append-restrict/);
-      assert.match(refusal.reason, /bash/);
+      assert.match(refusal.reason ?? "", /append-restrict/);
+      assert.match(refusal.reason ?? "", /bash/);
       assert.equal(allowed, undefined, "calling allowed tool must not be blocked");
     } finally {
       try { rmSync(dir, { recursive: true, force: true }); } catch {}
@@ -566,7 +572,8 @@ describe("spawning a subagent under a specialist (ticket 04)", () => {
     try {
       let capturedOverride = false;
       const tool = buildAgentTool(makeCtx(dir, join(dir, "ledger.db"), makeStub((opts) => {
-        const blocks = opts.resourceLoader.appendSystemPromptOverride(["base"]);
+        const loader = opts.resourceLoader as unknown as { appendSystemPromptOverride: (prompts: string[]) => string[] };
+        const blocks = loader.appendSystemPromptOverride(["base"]);
         capturedOverride = !blocks.some((b: string) => b.includes(PONYTAIL_RULESET_TEXT));
       })));
       const res = await callTool(tool, {
@@ -574,7 +581,7 @@ describe("spawning a subagent under a specialist (ticket 04)", () => {
         description: "seam delegation test",
         subagent_type: "seam-test",
       });
-      assert.equal((res as any).details.role, "seam-test");
+      assert.equal((res.details as { role?: string })?.role, "seam-test");
       assert.equal(capturedOverride, true, "seam should honor prompt_mode: override under subagent context");
     } finally {
       try { rmSync(dir, { recursive: true, force: true }); } catch {}

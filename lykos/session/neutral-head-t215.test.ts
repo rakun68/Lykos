@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import type { ModelRuntime, createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime, CreateAgentSessionOptions, createAgentSession } from "@earendil-works/pi-coding-agent";
 import { boot, type BootConfig } from "./boot.js";
 import { specialistStreamMessage } from "./specialist-stream.js";
 import { loadConfig } from "../config/load.js";
@@ -27,7 +27,7 @@ async function bootAs(cwd: string, name: string, neutralHead: boolean) {
   let head: string[] = [];
   let tools: string[] = [];
   let system = "";
-  const stub = (async (opts: any = {}) => {
+  const stub = (async (opts: CreateAgentSessionOptions = {} as CreateAgentSessionOptions) => {
     head = [...(opts.resourceLoader?.getAppendSystemPrompt?.() ?? [])];
     system = String(opts.resourceLoader?.getSystemPrompt?.() ?? "");
     tools = [...(opts.tools ?? [])].sort();

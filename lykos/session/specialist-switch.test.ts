@@ -22,6 +22,7 @@ import { AutoApproveGate, PostureGate, type ApprovalRequest, type ReadOnlyPostur
 import { resolveStandaloneTools, applyToolDeltas } from "../tools.js";
 import { newRetryObservation } from "../loop/retry-observer.js";
 import type { StandaloneSessionState } from "./session.js";
+import type { ModelRuntime, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "lykos-specialist-switch-"));
@@ -37,8 +38,8 @@ function writeSkill(cwd: string, filename: string, frontmatter: string): void {
   writeFileSync(join(cwd, ".lykos", "skills", filename), frontmatter, "utf8");
 }
 
-const fakeCall = (toolName: string) =>
-  ({ type: "tool_call", toolCallId: "c1", toolName, input: {} } as any);
+const fakeCall = (toolName: string): ToolCallEvent =>
+  ({ type: "tool_call", toolCallId: "c1", toolName, input: {} } as unknown as ToolCallEvent);
 
 function makeState(model = "test/model"): StandaloneSessionState {
   return {
@@ -338,7 +339,7 @@ describe("resolveSpecialistSwitch", () => {
       },
     };
     const switcher = createSpecialistSwitcher({
-      cwd, session, modelRuntime: {} as any, initialConfig,
+      cwd, session, modelRuntime: {} as unknown as ModelRuntime, initialConfig,
       initialSpecialistName: undefined, toolsOverride: undefined,
       state: makeState(),
     });
@@ -355,7 +356,7 @@ describe("resolveSpecialistSwitch", () => {
     let setModelCalled = false;
     const session = { async setModel() { setModelCalled = true; }, setActiveToolsByName() {} };
     const state = makeState("anthropic/claude-sonnet-4-5");
-    const switcher = createSpecialistSwitcher({ cwd, session, modelRuntime: {} as any, initialConfig, initialSpecialistName: undefined, toolsOverride: undefined, state });
+    const switcher = createSpecialistSwitcher({ cwd, session, modelRuntime: {} as unknown as ModelRuntime, initialConfig, initialSpecialistName: undefined, toolsOverride: undefined, state });
     const res = await switcher.switchSpecialist("differing");
     assert.equal(res.ok, true);
     assert.equal(setModelCalled, false);
@@ -367,7 +368,7 @@ describe("resolveSpecialistSwitch", () => {
     writeSpecialist(projectSpecialistsDir(cwd), "reviewer", "tools: [read, grep]\n");
     const { resolved: initialConfig } = loadConfig({ cwd, env: {} });
     const session = { async setModel() {}, setActiveToolsByName() {} };
-    const switcher = createSpecialistSwitcher({ cwd, session, modelRuntime: {} as any, initialConfig, initialSpecialistName: undefined, toolsOverride: undefined, state: makeState() });
+    const switcher = createSpecialistSwitcher({ cwd, session, modelRuntime: {} as unknown as ModelRuntime, initialConfig, initialSpecialistName: undefined, toolsOverride: undefined, state: makeState() });
     const guard = createSpecialistGuardHandler();
     assert.equal(guard(fakeCall("write")), undefined);
     const res = await switcher.switchSpecialist("reviewer");
@@ -395,7 +396,7 @@ describe("resolveSpecialistSwitch", () => {
     const switcher = createSpecialistSwitcher({
       cwd,
       session,
-      modelRuntime: {} as any,
+      modelRuntime: {} as unknown as ModelRuntime,
       initialConfig,
       initialSpecialistName: "writer",
       toolsOverride: undefined,

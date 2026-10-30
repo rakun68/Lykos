@@ -124,7 +124,7 @@ function seed(h: Harness, scope: MemoryScope, file: MemoryFile, lines: string[])
 async function call(
   tool: ToolDefinition,
   args: Record<string, unknown>,
-): Promise<{ text: string; isError: boolean; details: any }> {
+): Promise<{ text: string; isError: boolean; details?: unknown }> {
   const result = (await tool.execute(
     "call-1",
     args as never,
@@ -135,7 +135,7 @@ async function call(
   return {
     text: result.content?.map((c) => c.text ?? "").join("\n") ?? "",
     isError: result.isError === true,
-    details: result.details as any,
+    details: result.details,
   };
 }
 
@@ -155,10 +155,11 @@ describe("P10.6 D2: retain proposes, and says so", () => {
     try {
       const res = await call(h.retain, { memory: "The ledger's history before 2026-09-06 was lost." });
       assert.equal(res.isError, false);
-      assert.equal(res.details.active, false);
-      assert.equal(res.details.awaitingHuman, true);
-      assert.equal(res.details.seen, 1);
-      assert.equal(res.details.target, "gotchas");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.active, false);
+      assert.equal(details.awaitingHuman, true);
+      assert.equal(details.seen, 1);
+      assert.equal(details.target, "gotchas");
 
       // The proposal is in the queue...
       const queued = parseMemoryEntries(readFileSync(proposedPath(h.cwd), "utf8"));
@@ -194,7 +195,8 @@ describe("P10.6 D2: retain proposes, and says so", () => {
     try {
       await call(h.retain, { memory: "The gate is a default, not an opt-in." });
       const before = await call(h.recall, { query: "gate" });
-      assert.equal(before.details.matched, 0);
+      const beforeDetails = before.details as Record<string, unknown>;
+      assert.equal(beforeDetails.matched, 0);
       assert.match(before.text, /No accepted memory matches/);
       assert.match(before.text, /1 proposal is queued and NOT searched here/);
 
@@ -205,7 +207,8 @@ describe("P10.6 D2: retain proposes, and says so", () => {
       assert.equal(accepted.status, "accepted");
 
       const after = await call(h.recall, { query: "gate" });
-      assert.equal(after.details.matched, 1);
+      const afterDetails = after.details as Record<string, unknown>;
+      assert.equal(afterDetails.matched, 1);
       assert.match(after.text, /The gate is a default, not an opt-in\./);
     } finally {
       h.cleanup();
@@ -258,7 +261,8 @@ describe("P10.6 D4: recall over the parsed entries", () => {
     try {
       seed(h, "project", "gotchas", ["- [aaaaaaaa] stdout belongs to the transport in MCP mode {added=2026-09-01 src=s1 paths=lykos/tui/io-mode.ts}"]);
       const res = await call(h.recall, { query: "stdout" });
-      assert.equal(res.details.matched, 1);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.matched, 1);
       assert.match(res.text, /\[aaaaaaaa\] \(project\/gotchas\)/);
       // memory_edit takes an identifier, so a hit that hides one is useless.
       assert.match(res.text, /added=2026-09-01/);
@@ -277,8 +281,9 @@ describe("P10.6 D4: recall over the parsed entries", () => {
         "- [bbbbbbbb] retired claim {added=2026-09-01 invalid=2026-09-10 reason=\"no longer true\"}",
       ]);
       const res = await call(h.recall, {});
-      assert.equal(res.details.matched, 1);
-      assert.equal(res.details.invalidatedSkipped, 1);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.matched, 1);
+      assert.equal(details.invalidatedSkipped, 1);
       assert.match(res.text, /live claim/);
       assert.doesNotMatch(res.text, /retired claim/);
       assert.match(res.text, /1 invalidated entry was skipped/);
@@ -294,12 +299,12 @@ describe("P10.6 D4: recall over the parsed entries", () => {
       seed(h, "project", "failed-approaches", ["- [cccccccc] project failure {added=2026-09-01}"]);
       seed(h, "global", "gotchas", ["- [bbbbbbbb] global gotcha {added=2026-09-01}"]);
 
-      assert.equal((await call(h.recall, {})).details.matched, 3);
-      assert.equal((await call(h.recall, { scope: "global" })).details.matched, 1);
-      assert.equal((await call(h.recall, { scope: "project" })).details.matched, 2);
-      assert.equal((await call(h.recall, { file: "failed-approaches" })).details.matched, 1);
+      assert.equal(((await call(h.recall, {})).details as Record<string, unknown>).matched, 3);
+      assert.equal(((await call(h.recall, { scope: "global" })).details as Record<string, unknown>).matched, 1);
+      assert.equal(((await call(h.recall, { scope: "project" })).details as Record<string, unknown>).matched, 2);
+      assert.equal(((await call(h.recall, { file: "failed-approaches" })).details as Record<string, unknown>).matched, 1);
       const byId = await call(h.recall, { query: "bbbbbbbb" });
-      assert.equal(byId.details.matched, 1);
+      assert.equal((byId.details as Record<string, unknown>).matched, 1);
       assert.match(byId.text, /global gotcha/);
     } finally {
       h.cleanup();
@@ -316,8 +321,9 @@ describe("P10.6 D4: recall over the parsed entries", () => {
         Array.from({ length: 6 }, (_, i) => `- [aaaaaaa${i}] claim number ${i} {added=2026-09-0${i + 1}}`),
       );
       const res = await call(h.recall, { limit: 2 });
-      assert.equal(res.details.matched, 6);
-      assert.equal(res.details.returned, 2);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.matched, 6);
+      assert.equal(details.returned, 2);
       assert.match(res.text, /Stopped at the 2-hit limit/);
     } finally {
       h.cleanup();
@@ -346,7 +352,8 @@ describe("P10.6 D6: memory_edit invalidates rather than deletes", () => {
       seed(h, "project", "gotchas", ["- [aaaaaaaa] embeddings are prohibited {added=2026-09-01}"]);
       const res = await call(h.memoryEdit, { op: "invalidate", id: "aaaaaaaa", reason: "ADR-0016 replaced it" });
       assert.equal(res.isError, false);
-      assert.equal(res.details.status, "invalidated");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.status, "invalidated");
       assert.match(res.text, /Nothing was deleted/);
 
       const entries = projectEntries(h);
@@ -356,7 +363,7 @@ describe("P10.6 D6: memory_edit invalidates rather than deletes", () => {
       assert.equal(entries[0]!.meta.reason, "ADR-0016 replaced it");
       assert.equal(entries[0]!.meta.by, "sess-9");
 
-      assert.equal((await call(h.recall, { query: "embeddings" })).details.matched, 0);
+      assert.equal(((await call(h.recall, { query: "embeddings" })).details as Record<string, unknown>).matched, 0);
     } finally {
       h.cleanup();
     }
@@ -372,9 +379,10 @@ describe("P10.6 D6: memory_edit invalidates rather than deletes", () => {
         text: "the cap is 150 lines",
         reason: "counted it",
       });
-      assert.equal(res.details.status, "amended");
-      assert.equal(res.details.active, false);
-      assert.equal(res.details.awaitingHuman, true);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.status, "amended");
+      assert.equal(details.active, false);
+      assert.equal(details.awaitingHuman, true);
       assert.ok(res.text.includes(PROPOSAL_NOTICE));
 
       // The old claim is superseded in place; the new one is only queued.
@@ -388,7 +396,7 @@ describe("P10.6 D6: memory_edit invalidates rather than deletes", () => {
       // about the same file, and dropping that would silently disarm T79's
       // staleness check on the replacement.
       assert.deepEqual(queued[0]!.meta.paths, ["CLAUDE.md"]);
-      assert.equal((await call(h.recall, { query: "150" })).details.matched, 0);
+      assert.equal(((await call(h.recall, { query: "150" })).details as Record<string, unknown>).matched, 0);
     } finally {
       h.cleanup();
     }
@@ -401,7 +409,8 @@ describe("P10.6 D6: memory_edit invalidates rather than deletes", () => {
       seed(h, "global", "gotchas", ["- [bbbbbbbb] the cap is 200 bytes {added=2026-09-01}"]);
       const res = await call(h.memoryEdit, { op: "invalidate", id: "the cap is 200" });
       assert.equal(res.isError, true);
-      assert.equal(res.details.status, "ambiguous");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.status, "ambiguous");
       assert.match(res.text, /matches 2 memories/);
       assert.match(res.text, /\[aaaaaaaa\]/);
       assert.match(res.text, /\[bbbbbbbb\]/);
@@ -418,7 +427,8 @@ describe("P10.6 D6: memory_edit invalidates rather than deletes", () => {
       seed(h, "project", "gotchas", ["- [aaaaaaaa] a claim {added=2026-09-01}"]);
       const miss = await call(h.memoryEdit, { op: "invalidate", id: "zzzzzzzz" });
       assert.equal(miss.isError, true);
-      assert.equal(miss.details.status, "not_found");
+      const missDetails = miss.details as Record<string, unknown>;
+      assert.equal(missDetails.status, "not_found");
       await assert.rejects(() => call(h.memoryEdit, { op: "delete", id: "aaaaaaaa" }), /unknown op "delete"/);
       await assert.rejects(() => call(h.memoryEdit, { op: "amend", id: "aaaaaaaa" }), /amend needs `text`/);
       assert.equal(isEntryValid(projectEntries(h)[0]!), true);
@@ -432,7 +442,8 @@ describe("P10.6 D6: memory_edit invalidates rather than deletes", () => {
     try {
       seed(h, "project", "gotchas", ["- [aaaaaaaa] a claim {added=2026-09-01 invalid=2026-09-05}"]);
       const res = await call(h.memoryEdit, { op: "invalidate", id: "aaaaaaaa" });
-      assert.equal(res.details.status, "already_invalid");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.status, "already_invalid");
       assert.match(res.text, /already invalidated on 2026-09-05/);
     } finally {
       h.cleanup();
@@ -457,10 +468,11 @@ describe("P10.6 D5: reflect answers 'what do you know' cheaply", () => {
       await call(h.retain, { memory: "a pending proposal" });
 
       const res = await call(h.reflect, {});
-      assert.equal(res.details.active, 3);
-      assert.equal(res.details.invalidated, 1);
-      assert.equal(res.details.pending, 1);
-      assert.equal(res.details.readyToAccept, 0);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.active, 3);
+      assert.equal(details.invalidated, 1);
+      assert.equal(details.pending, 1);
+      assert.equal(details.readyToAccept, 0);
       assert.match(res.text, /project\/gotchas 2/);
       assert.match(res.text, /project\/failed-approaches 0/);
       assert.match(res.text, /global\/failed-approaches 1/);
@@ -483,7 +495,8 @@ describe("P10.6 D5: reflect answers 'what do you know' cheaply", () => {
         Array.from({ length: 9 }, (_, i) => `- [aaaaaaa${i}] ${long}${i} {added=2026-09-0${i + 1}}`),
       );
       const res = await call(h.reflect, {});
-      assert.equal(res.details.active, 9);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.active, 9);
       const titleLines = res.text.split("\n").filter((l) => l.trim().startsWith("[aaaaaaa"));
       assert.equal(titleLines.length, REFLECT_TITLE_COUNT);
       // Nine entries of 300 characters is 2700 characters; the whole result
@@ -501,7 +514,8 @@ describe("P10.6 D5: reflect answers 'what do you know' cheaply", () => {
     const h = harness();
     try {
       const res = await call(h.reflect, {});
-      assert.equal(res.details.active, 0);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.active, 0);
       assert.match(res.text, /0 accepted memories/);
       assert.match(res.text, /No proposals are waiting/);
     } finally {
@@ -524,8 +538,9 @@ describe("P10.6 D7: learn attaches the exchange", () => {
         exchange,
         file: "gotchas",
       });
-      assert.equal(res.details.active, false);
-      assert.equal(res.details.awaitingHuman, true);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.active, false);
+      assert.equal(details.awaitingHuman, true);
       assert.match(res.text, /attached to the entry as provenance/);
 
       const queued = parseMemoryEntries(readFileSync(proposedPath(h.cwd), "utf8"));
@@ -633,14 +648,14 @@ describe("P10.6: no tool activates a memory by itself", () => {
           assert.equal(raw.includes(lesson), false, `${scope}/${file} contains the proposed lesson`);
         }
       }
-      assert.equal((await call(h.recall, { query: "never accept" })).details.matched, 0);
+      assert.equal(((await call(h.recall, { query: "never accept" })).details as Record<string, unknown>).matched, 0);
       const queue = h.store.proposals(h.cwd).filter((e) => !e.meta.invalid);
       assert.ok(queue.length >= 1, "it is queued, though");
 
       // And the human's verb — the one no tool is handed — is what works.
       const accepted = acceptProposal(h.cwd, "A model must never accept");
       assert.equal(accepted.status, "accepted");
-      assert.equal((await call(h.recall, { query: "never accept" })).details.matched, 1);
+      assert.equal(((await call(h.recall, { query: "never accept" })).details as Record<string, unknown>).matched, 1);
     } finally {
       h.cleanup();
     }

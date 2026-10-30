@@ -190,13 +190,23 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
     assert.equal(socket.headers["x-gitlab-client-type"], "node-websocket");
     assert.equal(socket.headers["x-gitlab-language-server-version"], "8.104.0");
 
-    const start = (socket.received[0] as { startRequest: Record<string, any> }).startRequest;
+    const start = (
+      socket.received[0] as {
+        startRequest: {
+          workflowID: string;
+          goal: string;
+          preapproved_tools: string[];
+          mcpTools: Array<{ name: string; inputSchema: string }>;
+          flowConfig: { prompts: Array<{ prompt_template: { system: string } }> };
+        };
+      }
+    ).startRequest;
     assert.equal(start.workflowID, "workflow-1");
     assert.equal(start.goal, "Help me update the code.");
     assert.deepEqual(start.preapproved_tools, ["read"]);
-    assert.equal(start.mcpTools[0].name, "read");
-    assert.deepEqual(JSON.parse(start.mcpTools[0].inputSchema), (readTool as { parameters: unknown }).parameters);
-    assert.equal(start.flowConfig.prompts[0].prompt_template.system, "You are Lykos.");
+    assert.equal(start.mcpTools[0]!.name, "read");
+    assert.deepEqual(JSON.parse(start.mcpTools[0]!.inputSchema), (readTool as { parameters: unknown }).parameters);
+    assert.equal(start.flowConfig.prompts[0]!.prompt_template.system, "You are Lykos.");
   });
 
   it("a runMCPTool action becomes a Pi tool call; the next call's tool result goes back as the actionResponse on the same socket", async () => {

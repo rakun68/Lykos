@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { LykosExtensionHost } from "../api.js";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { LykosExtensionHost, type GateCheckContext, type GateCheckResult } from "../api.js";
 import { register, sealExtension } from "./lykos-seal.js";
 import { generateEd25519KeyPair, signPayload } from "../../seal/crypto.js";
 import { openLedgerSync } from "../../ledger/use.js";
@@ -13,6 +14,16 @@ import { bindExtensionChildSessions } from "../../session/session.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-c", "core.quotepath=false", ...args], { cwd, encoding: "utf8" }).trim();
+}
+
+async function callTool(
+  tool: ToolDefinition,
+  args: Record<string, unknown>,
+): Promise<{ content?: Array<{ text?: string }>; isError?: boolean }> {
+  return (await tool.execute("call-1", args as never, undefined as never, undefined as never, undefined as never)) as {
+    content?: Array<{ text?: string }>;
+    isError?: boolean;
+  };
 }
 
 describe("lykos-seal default extension (T199)", () => {
@@ -74,11 +85,11 @@ describe("lykos-seal default extension (T199)", () => {
       host.setSpecialist("implementer");
 
       const veto = await host.runToolCallVeto("write", { path: "test/add.test.js" });
-      assert.equal((veto as any)?.block, true, "the sealed write should be vetoed");
+      assert.equal(veto?.block, true, "the sealed write should be vetoed");
 
       const warn = await host.runToolCallVeto("bash", { command: "cat test/add.test.js" });
-      assert.equal((warn as any)?.block, false);
-      assert.match((warn as any)?.warning, /references sealed path/);
+      assert.equal(warn?.block, false);
+      assert.match(warn?.warning ?? "", /references sealed path/);
 
       const ledger = openLedgerSync(projectLedgerPath);
       const rows = ledger.db.prepare("SELECT kind FROM seal_events WHERE session_id = ? ORDER BY ts ASC").all(sessionId) as Array<{ kind: string }>;
@@ -145,7 +156,7 @@ describe("lykos-seal default extension (T199)", () => {
 
       // The subsequent tool call MUST see the refreshed seals and veto!
       const postVeto = await host.runToolCallVeto("write", { path: "test/foo.test.js" });
-      assert.equal((postVeto as any)?.block, true, "post-commit tool call must see new seal and veto");
+      assert.equal(postVeto?.block, true, "post-commit tool call must see new seal and veto");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -196,7 +207,7 @@ describe("lykos-seal default extension (T199)", () => {
       host.setSessionId("sess-build");
 
       const veto = await host.runToolCallVeto("write", { path: "test/foo.test.js" });
-      assert.equal((veto as any)?.block, true, "default specialist 'build' should be vetoed");
+      assert.equal(veto?.block, true, "default specialist 'build' should be vetoed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -250,27 +261,27 @@ describe("lykos-seal default extension (T199)", () => {
 
       // 1. ast_edit with ["."] covering sealed file is refused
       const vetoDot = await host.runToolCallVeto("ast_edit", { paths: ["."] });
-      assert.equal((vetoDot as any)?.block, true, "ast_edit with ['.'] should be vetoed");
-      assert.match((vetoDot as any)?.reason, /test\/foo\.test\.js/, "veto reason must name the sealed file");
-      assert.match((vetoDot as any)?.reason, /exclude the sealed files/, "veto reason must tell agent to pass explicit paths that exclude sealed files");
+      assert.equal(vetoDot?.block, true, "ast_edit with ['.'] should be vetoed");
+      assert.match((vetoDot as { reason?: string })?.reason ?? "", /test\/foo\.test\.js/, "veto reason must name the sealed file");
+      assert.match((vetoDot as { reason?: string })?.reason ?? "", /exclude the sealed files/, "veto reason must tell agent to pass explicit paths that exclude sealed files");
 
       // 2. ast_edit with directory covering sealed file is refused
       const vetoDir = await host.runToolCallVeto("ast_edit", { paths: ["test"] });
-      assert.equal((vetoDir as any)?.block, true, "ast_edit with ['test'] should be vetoed");
-      assert.match((vetoDir as any)?.reason, /test\/foo\.test\.js/);
-      assert.match((vetoDir as any)?.reason, /exclude the sealed files/);
+      assert.equal(vetoDir?.block, true, "ast_edit with ['test'] should be vetoed");
+      assert.match((vetoDir as { reason?: string })?.reason ?? "", /test\/foo\.test\.js/);
+      assert.match((vetoDir as { reason?: string })?.reason ?? "", /exclude the sealed files/);
 
       // 3. ast_edit with glob covering sealed file is refused
       const vetoGlob = await host.runToolCallVeto("ast_edit", { paths: ["test/*.test.js"] });
-      assert.equal((vetoGlob as any)?.block, true, "ast_edit with ['test/*.test.js'] should be vetoed");
-      assert.match((vetoGlob as any)?.reason, /test\/foo\.test\.js/);
-      assert.match((vetoGlob as any)?.reason, /exclude the sealed files/);
+      assert.equal(vetoGlob?.block, true, "ast_edit with ['test/*.test.js'] should be vetoed");
+      assert.match((vetoGlob as { reason?: string })?.reason ?? "", /test\/foo\.test\.js/);
+      assert.match((vetoGlob as { reason?: string })?.reason ?? "", /exclude the sealed files/);
 
       // 4. ast_edit covering sealed file through tool_call is refused
       const vetoToolCall = await host.runToolCallVeto("tool_call", { name: "ast_edit", arguments: { paths: ["."] } });
-      assert.equal((vetoToolCall as any)?.block, true, "ast_edit via tool_call with ['.'] should be vetoed");
-      assert.match((vetoToolCall as any)?.reason, /test\/foo\.test\.js/);
-      assert.match((vetoToolCall as any)?.reason, /exclude the sealed files/);
+      assert.equal(vetoToolCall?.block, true, "ast_edit via tool_call with ['.'] should be vetoed");
+      assert.match((vetoToolCall as { reason?: string })?.reason ?? "", /test\/foo\.test\.js/);
+      assert.match((vetoToolCall as { reason?: string })?.reason ?? "", /exclude the sealed files/);
 
       // 5. ast_edit with directory not covering sealed file is allowed
       const allowDir = await host.runToolCallVeto("ast_edit", { paths: ["src"] });
@@ -286,9 +297,9 @@ describe("lykos-seal default extension (T199)", () => {
 
       // 8. edit on a sealed file is refused with exact-file refusal message
       const vetoEdit = await host.runToolCallVeto("edit", { path: "test/foo.test.js" });
-      assert.equal((vetoEdit as any)?.block, true, "edit on sealed file should be vetoed");
-      assert.match((vetoEdit as any)?.reason, /cannot modify sealed file "test\/foo\.test\.js"/);
-      assert.doesNotMatch((vetoEdit as any)?.reason, /exclude the sealed files/);
+      assert.equal(vetoEdit?.block, true, "edit on sealed file should be vetoed");
+      assert.match((vetoEdit as { reason?: string })?.reason ?? "", /cannot modify sealed file "test\/foo\.test\.js"/);
+      assert.doesNotMatch((vetoEdit as { reason?: string })?.reason ?? "", /exclude the sealed files/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -574,7 +585,7 @@ describe("lykos-seal default extension (T199)", () => {
       assert.match(checkRes.blockReason!, /Sealed file\(s\) modified or deleted: test\/a\.test\.js/);
 
       const l2 = openLedgerSync(ledgerPath);
-      const events = l2.db.prepare("SELECT * FROM seal_events").all() as any[];
+      const events = l2.db.prepare("SELECT * FROM seal_events").all() as Array<{ kind: string; detail: string }>;
       l2.close();
       assert.ok(events.some((e) => e.kind === "tampered" && e.detail.includes("deleted sealed paths: test/a.test.js")));
     } finally {
@@ -854,15 +865,23 @@ describe("lykos-seal default extension (T199)", () => {
       writeFileSync(join(root, "src.mjs"), "it.skip('weak', () => {});\n");
       git(root, "add", "-A"); git(root, "commit", "-q", "-m", "add unsealed weakening");
 
-      const checks: Array<(ctx: any) => Promise<any>> = [];
-      const api = { cwd: root, specialist: "build", on: () => {}, registerTool: () => {}, registerGateCheck: (c: any) => checks.push(c) } as any;
-      register(api); // boots with enforce_for: [build]
+      const checks: Array<(ctx: GateCheckContext) => Promise<{ pass?: boolean } | void>> = [];
+      const api = {
+        cwd: root,
+        specialist: "build",
+        on: () => {},
+        registerTool: () => {},
+        registerGateCheck: (c: { check: (ctx: GateCheckContext) => Promise<{ pass?: boolean } | void> } | ((ctx: GateCheckContext) => Promise<{ pass?: boolean } | void>)) => {
+          checks.push(typeof c === "function" ? c : c.check);
+        },
+      };
+      register(api as never); // boots with enforce_for: [build]
 
       // The implementer rewrites the project config during the session to remove itself.
       writeFileSync(join(root, ".lykos/config.yaml"), "seal:\n  base: master\n  enforce_for: []\n");
 
-      const res = await checks[1]!({ cwd: root, startCommit: sealCommit, specialist: "build" });
-      assert.equal(res.pass, false, `the weakening must still block; got pass=${res.pass}`);
+      const res = await checks[1]!({ cwd: root, startCommit: sealCommit, specialist: "build" } as GateCheckContext);
+      assert.equal(res?.pass, false, `the weakening must still block; got pass=${res?.pass}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1120,13 +1139,13 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      const res = (await (tool.execute as any)("call-1", {
+      const res = await callTool(tool, {
         file: "test/add.test.js",
         describe: [],
         name: "test",
         reason: "wrong",
         evidence: "proof",
-      })) as { content?: Array<{ text?: string }>; isError?: boolean };
+      });
 
       assert.equal(childRan, false, "child session must not run");
       assert.match(res.content?.[0]?.text ?? "", /already differs from seal commit/);
@@ -1375,13 +1394,13 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      const res = (await (tool.execute as any)("call-1", {
+      const res = await callTool(tool, {
         file: "test/add.test.js",
         describe: [],
         name: "adds",
         reason: "wrong",
         evidence: "proof",
-      })) as { content?: Array<{ text?: string }>; isError?: boolean };
+      });
 
       assert.equal(childRan, false, "runChildSession should not be called for spawned implementer");
       const text = res.content?.[0]?.text ?? "";
@@ -1427,13 +1446,13 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      const res = (await (tool.execute as any)("call-1", {
+      const res = await callTool(tool, {
         file: "test/add.test.js",
         describe: [],
         name: "adds",
         reason: "wrong",
         evidence: "proof",
-      })) as { content?: Array<{ text?: string }>; isError?: boolean };
+      });
 
       assert.equal(childRan, false, "dispute_test started a writable child with no active seal");
       assert.equal(res.isError, true);
@@ -1484,9 +1503,9 @@ describe("lykos-seal default extension (T199)", () => {
       host.install(sealExtension);
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      const res = (await (tool.execute as any)("call-1", {
+      const res = await callTool(tool, {
         file: "test/add.test.js", describe: [], name: "adds", reason: "wrong", evidence: "proof",
-      })) as { content?: Array<{ text?: string }>; isError?: boolean };
+      });
       const text = res.content?.[0]?.text ?? "";
       assert.equal(res.isError, true, `the tool reported a plain upheld ruling with no reseal: ${text}`);
       assert.match(text, /reseal/i);
@@ -1568,13 +1587,13 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      const res = (await (tool.execute as any)("call-1", {
+      const res = await callTool(tool, {
         file: "test/add.test.js",
         describe: [],
         name: "adds",
         reason: "wrong again",
         evidence: "more proof",
-      })) as { content?: Array<{ text?: string }>; isError?: boolean };
+      });
 
       assert.equal(childRan, false, "the resumed session should have escalated instead of running test-writer child");
       const text = res.content?.[0]?.text ?? "";
@@ -1635,13 +1654,13 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      const res = (await (tool.execute as any)("call-1", {
+      const res = await callTool(tool, {
         file: "test/add.test.js",
         describe: [],
         name: "adds",
         reason: "wrong spec",
         evidence: "proof",
-      })) as { content?: Array<{ text?: string }>; isError?: boolean };
+      });
 
       assert.equal(childRan, false, "child session should not run in delegated mode when resolver is unset");
       const text = res.content?.[0]?.text ?? "";
@@ -1703,7 +1722,7 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      await (tool.execute as any)("call-1", {
+      await callTool(tool, {
         file: "test/add.test.js",
         describe: [],
         name: "adds",
@@ -1768,7 +1787,7 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      await (tool.execute as any)("call-1", {
+      await callTool(tool, {
         file: "test/add.test.js",
         describe: [],
         name: "adds",
@@ -1857,13 +1876,13 @@ describe("lykos-seal default extension (T199)", () => {
 
       const tool = host.toolDefinitions().find((t) => t.name === "dispute_test");
       assert.ok(tool);
-      const res = (await (tool.execute as any)("call-1", {
+      const res = await callTool(tool, {
         file: "test/math.test.mjs",
         describe: [],
         name: "adds",
         reason: "1 + 2 is 3, expected 4",
         evidence: "basic arithmetic",
-      })) as { content?: Array<{ text?: string }>; isError?: boolean };
+      });
 
       assert.equal(res.isError ?? false, false, `dispute failed: ${res.content?.[0]?.text}`);
       assert.match(res.content?.[0]?.text ?? "", /Dispute upheld/);

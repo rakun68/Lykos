@@ -12,7 +12,7 @@ import { DelegatedGate, type DeniedAction } from "./delegated.js";
 import { AutoApproveGate, type ApprovalGate, type ApprovalRequest, type ApprovalDecision } from "./approval.js";
 import { buildAgentTool, type SpawnContext } from "../tools/spawn.js";
 import { loadConfig } from "../config/load.js";
-import type { createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { createAgentSession, CreateAgentSessionOptions, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { call, reply, runScriptedSession, say } from "../cli/scripted-session.js";
 import { runSessionChild } from "../cli/session-child.js";
 import { encodeFrame, parseFrame, PROTOCOL_VERSION, type Frame, type SessionRequest } from "../delegate/session-protocol.js";
@@ -83,8 +83,8 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
     const ledgerPath = join(dir, "ledger.db");
     const { resolved: config } = loadConfig({ cwd: dir });
 
-    let capturedOpts: any;
-    const stubCreateSession = (async (opts: any) => {
+    let capturedOpts: CreateAgentSessionOptions | undefined;
+    const stubCreateSession = (async (opts: CreateAgentSessionOptions) => {
       capturedOpts = opts;
       let active = [...(opts.tools ?? [])];
       return {
@@ -140,23 +140,29 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
       writeFileSync(join(dir, "secret.txt"), "super secret");
 
       const agentTool = buildAgentTool(ctx);
-      await (agentTool as any).execute("call-1", {
-        prompt: "read the secret",
-        description: "explore secret",
-        subagent_type: "explore",
-      });
+      await (agentTool as ToolDefinition).execute(
+        "call-1",
+        {
+          prompt: "read the secret",
+          description: "explore secret",
+          subagent_type: "explore",
+        } as never,
+        undefined as never,
+        undefined as never,
+        undefined as never,
+      );
 
       assert.ok(capturedOpts, "subagent session must be booted");
-      const readTool = capturedOpts.customTools.find((t: any) => t.name === "read");
+      const readTool = (capturedOpts?.customTools as ToolDefinition[] | undefined)?.find((t) => t.name === "read");
       assert.ok(readTool, "subagent should have read tool in customTools");
 
       // The subagent attempts to read a denied path
       await assert.rejects(
         async () => {
-          await readTool.execute("read-call-1", { path: "secret/confidential.txt" });
+          await readTool.execute("read-call-1", { path: "secret/confidential.txt" } as never, undefined as never, undefined as never, undefined as never);
         },
-        (err: any) => {
-          assert.match(err.message, /refused|denied/i);
+        (err: unknown) => {
+          assert.match((err as Error).message, /refused|denied/i);
           return true;
         },
       );
@@ -178,8 +184,8 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
       },
     };
 
-    let capturedOpts: any;
-    const stubCreateSession = (async (opts: any) => {
+    let capturedOpts: CreateAgentSessionOptions | undefined;
+    const stubCreateSession = (async (opts: CreateAgentSessionOptions) => {
       capturedOpts = opts;
       let active = [...(opts.tools ?? [])];
       return {
@@ -222,23 +228,29 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
 
     try {
       const agentTool = buildAgentTool(ctx);
-      await (agentTool as any).execute("call-2", {
-        prompt: "perform task",
-        description: "explore task",
-        subagent_type: "explore",
-      });
+      await (agentTool as ToolDefinition).execute(
+        "call-2",
+        {
+          prompt: "perform task",
+          description: "explore task",
+          subagent_type: "explore",
+        } as never,
+        undefined as never,
+        undefined as never,
+        undefined as never,
+      );
 
       assert.ok(capturedOpts, "subagent session must be booted");
-      const readTool = capturedOpts.customTools.find((t: any) => t.name === "read");
+      const readTool = (capturedOpts?.customTools as ToolDefinition[] | undefined)?.find((t) => t.name === "read");
       assert.ok(readTool, "subagent should have read tool in customTools");
 
       // When the subagent tool encounters an ask (e.g. read an outside directory path)
       await assert.rejects(
         async () => {
-          await readTool.execute("read-outside-1", { path: "/tmp/outside-probe.txt" });
+          await readTool.execute("read-outside-1", { path: "/tmp/outside-probe.txt" } as never, undefined as never, undefined as never, undefined as never);
         },
-        (err: any) => {
-          assert.match(err.message, /refused|denied|declined/i);
+        (err: unknown) => {
+          assert.match((err as Error).message, /refused|denied|declined/i);
           return true;
         },
       );

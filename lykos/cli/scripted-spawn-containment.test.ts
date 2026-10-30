@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import type { createAgentSession } from "@earendil-works/pi-coding-agent";
+import type { createAgentSession, CreateAgentSessionOptions, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config/load.js";
 import { startContainment, type Containment } from "../containment/containment.js";
 import { AutoApproveGate } from "../gate/approval.js";
@@ -22,7 +22,7 @@ import { mounted, reply, runScriptedSession, say, SCRIPTED_MODEL } from "./scrip
 // Keep Pi's agent dir off the real ~/.lykos/pi-host, as spawn.test.ts does.
 process.env.LYKOS_PI_HOST_DIR = mkdtempSync(join(tmpdir(), "lykos-pi-host-"));
 
-const stubSession = (async (opts: any = {}) => ({
+const stubSession = (async (opts: CreateAgentSessionOptions = {}) => ({
   session: {
     sessionId: `c-${Math.random().toString(36).slice(2)}`,
     model: opts.model ?? { provider: "deepseek", id: "deepseek-v4-flash" },
@@ -92,17 +92,17 @@ function specialist(dir: string, name: string, containment: string): void {
 }
 
 const spawnChild = (ctx: SpawnContext, containment?: "off" | "auto" | "required", subagentType?: string) =>
-  (buildAgentTool(ctx) as any).execute(
+  (buildAgentTool(ctx) as ToolDefinition).execute(
     "call-1",
     {
       prompt: "look around",
       description: "look around",
       ...(containment !== undefined ? { containment } : {}),
       ...(subagentType !== undefined ? { subagent_type: subagentType } : {}),
-    },
-    undefined,
-    undefined,
-    undefined,
+    } as never,
+    undefined as never,
+    undefined as never,
+    undefined as never,
   ) as Promise<{ content: Array<{ text: string }>; details: Record<string, unknown> }>;
 
 function childRows(ctx: SpawnContext) {

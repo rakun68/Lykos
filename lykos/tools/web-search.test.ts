@@ -192,7 +192,7 @@ function harness(opts: {
   return { tool, sent, gate, denials };
 }
 
-async function call(tool: ToolDefinition, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details: any }> {
+async function call(tool: ToolDefinition, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; details?: unknown }> {
   const result = (await tool.execute("call-1", args as never, undefined as never, undefined as never, undefined as never)) as {
     content?: Array<{ text?: string }>;
     isError?: boolean;
@@ -201,7 +201,7 @@ async function call(tool: ToolDefinition, args: Record<string, unknown>): Promis
   return {
     text: result.content?.map((c) => c.text ?? "").join("\n") ?? "",
     isError: result.isError === true,
-    details: result.details as any,
+    details: result.details,
   };
 }
 
@@ -306,8 +306,9 @@ describe("P10.7 D3: with no key the tool says it is unconfigured and sends nothi
     assert.equal(res.text, unconfiguredNotice("brave", BRAVE_SEARCH_KEY_ENV));
     assert.match(res.text, new RegExp(WEB_SEARCH_KEY_ENV_KEY.replace(".", "\\.")));
     assert.match(res.text, /BRAVE_SEARCH_API_KEY/);
-    assert.equal(res.details.configured, false);
-    assert.equal(res.details.success, false);
+    const details = res.details as Record<string, unknown>;
+    assert.equal(details.configured, false);
+    assert.equal(details.success, false);
     // Nothing was sent anywhere, and nobody was asked to approve anything.
     assert.deepEqual(h.sent, []);
     assert.equal(h.gate.seen.length, 0);
@@ -390,29 +391,31 @@ describe("P10.7: the result shape is titles, URLs and the provider's snippets", 
     const h = harness({ apiKey: "k" });
     const res = await call(h.tool, { query: "widget library" });
     assert.equal(res.isError, false);
-    assert.equal(res.details.results, 2, "the result with no URL is dropped");
+    const details = res.details as Record<string, unknown>;
+    assert.equal(details.results, 2, "the result with no URL is dropped");
     assert.match(res.text, /1\. Widget library docs/);
     assert.match(res.text, /https:\/\/docs\.example\/widget/);
     assert.match(res.text, /The widget library, version 4\. Installation & usage\./);
     assert.doesNotMatch(res.text, /<strong>/);
     assert.match(res.text, /web_fetch/);
-    assert.deepEqual(res.details.urls, ["https://docs.example/widget", "https://forum.example/thread/1"]);
+    assert.deepEqual(details.urls, ["https://docs.example/widget", "https://forum.example/thread/1"]);
   });
 
   it("applies the domain lists to the results too, whatever the provider did with the operators", async () => {
     const h = harness({ apiKey: "k" });
     const excluded = await call(h.tool, { query: "widget library", exclude_domains: ["forum.example"] });
-    assert.deepEqual(excluded.details.urls, ["https://docs.example/widget"]);
+    assert.deepEqual((excluded.details as Record<string, unknown>).urls, ["https://docs.example/widget"]);
 
     const included = await call(h.tool, { query: "widget library", include_domains: ["docs.example"] });
-    assert.deepEqual(included.details.urls, ["https://docs.example/widget"]);
+    assert.deepEqual((included.details as Record<string, unknown>).urls, ["https://docs.example/widget"]);
   });
 
   it("an empty result list is an answer, not an error", async () => {
     const h = harness({ apiKey: "k", answer: () => ({ status: 200, text: async () => JSON.stringify({ web: { results: [] } }) }) });
     const res = await call(h.tool, { query: "no such thing anywhere" });
     assert.equal(res.isError, false);
-    assert.equal(res.details.results, 0);
+    const details = res.details as Record<string, unknown>;
+    assert.equal(details.results, 0);
     assert.match(res.text, /No results/);
   });
 
@@ -458,8 +461,9 @@ describe("P10.7: a provider error surfaces as a tool error rather than as conten
     assert.equal(res.isError, true);
     assert.match(res.text, /HTTP 401/);
     assert.match(res.text, /BRAVE_SEARCH_API_KEY/);
-    assert.equal(res.details.success, false);
-    assert.equal(res.details.status, 401);
+    const details = res.details as Record<string, unknown>;
+    assert.equal(details.success, false);
+    assert.equal(details.status, 401);
   });
 
   it("reports a transport failure as an error", async () => {
@@ -472,7 +476,8 @@ describe("P10.7: a provider error surfaces as a tool error rather than as conten
     const res = await call(h.tool, { query: "widgets" });
     assert.equal(res.isError, true);
     assert.match(res.text, /could not be reached/);
-    assert.equal(res.details.success, false);
+    const details = res.details as Record<string, unknown>;
+    assert.equal(details.success, false);
   });
 
   it("reports a non-JSON body as an error rather than as a result", async () => {
@@ -597,17 +602,18 @@ describe("Plan 17 D1: Perplexity results", () => {
     const h = harness({ provider: "perplexity", apiKey: "k" });
     const res = await call(h.tool, { query: "widget library" });
     assert.equal(res.isError, false);
-    assert.equal(res.details.provider, "perplexity");
-    assert.equal(res.details.results, 2);
+    const details = res.details as Record<string, unknown>;
+    assert.equal(details.provider, "perplexity");
+    assert.equal(details.results, 2);
     assert.match(res.text, /1\. Widget library docs/);
     assert.match(res.text, /https:\/\/docs\.example\/widget/);
     assert.match(res.text, /The widget library, version 4\. Installation & usage\./);
     assert.doesNotMatch(res.text, /<strong>/);
-    assert.deepEqual(res.details.urls, ["https://docs.example/widget", "https://forum.example/thread/1"]);
+    assert.deepEqual(details.urls, ["https://docs.example/widget", "https://forum.example/thread/1"]);
 
     // Exclude filter
     const excluded = await call(h.tool, { query: "widget library", exclude_domains: ["forum.example"] });
-    assert.deepEqual(excluded.details.urls, ["https://docs.example/widget"]);
+    assert.deepEqual((excluded.details as Record<string, unknown>).urls, ["https://docs.example/widget"]);
   });
 
   it("empty result list reports no results for perplexity", async () => {
@@ -618,7 +624,8 @@ describe("Plan 17 D1: Perplexity results", () => {
     });
     const res = await call(h.tool, { query: "unheard of query" });
     assert.equal(res.isError, false);
-    assert.equal(res.details.results, 0);
+    const details = res.details as Record<string, unknown>;
+    assert.equal(details.results, 0);
     assert.match(res.text, /No results for "unheard of query"/);
     assert.match(res.text, /\(perplexity\)/);
   });
@@ -683,7 +690,8 @@ describe("Plan 17 D2: Key resolution for Perplexity", () => {
       const h = harness({ provider: "perplexity", dbPath, env: {} });
       const res = await call(h.tool, { query: "widget library" });
       assert.equal(res.isError, false);
-      assert.equal(res.details.configured, false);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.configured, false);
       assert.match(res.text, /PERPLEXITY_API_KEY/);
       assert.match(res.text, /perplexity/);
       assert.deepEqual(h.sent, []);
@@ -918,7 +926,7 @@ describe("Ticket 24 D2/D8.1: Exa's hosted MCP endpoint, keyless", () => {
       assert.equal(req.headers["content-type"], "application/json");
       assert.equal(req.headers["accept"], "application/json, text/event-stream");
       assert.equal(req.headers["x-exa-source"], "lykos");
-      const body = JSON.parse(req.body) as Record<string, any>;
+      const body = JSON.parse(req.body) as { jsonrpc: string; id: unknown; method: string; params: unknown };
       assert.equal(body.jsonrpc, "2.0");
       assert.equal(typeof body.id, "string");
       assert.equal(body.method, "tools/call");
@@ -934,8 +942,9 @@ describe("Ticket 24 D2/D8.1: Exa's hosted MCP endpoint, keyless", () => {
       const { tool } = chainTool({ endpoints: { exa: exa.url } });
       const res = await call(tool, { query: "alpha" });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.backend, "exa");
-      assert.deepEqual(res.details.urls, ["https://alpha.com", "https://beta.com", "https://gamma.com"]);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.backend, "exa");
+      assert.deepEqual(details.urls, ["https://alpha.com", "https://beta.com", "https://gamma.com"]);
       assert.match(res.text, /\(via exa\)/);
       assert.match(res.text, /1\. Page Alpha/);
       assert.match(res.text, /Full text of alpha/);
@@ -952,7 +961,7 @@ describe("Ticket 24 D2/D8.1: Exa's hosted MCP endpoint, keyless", () => {
       const { tool } = chainTool({ endpoints: { exa: exa.url } });
       const res = await call(tool, { query: "plain text" });
       assert.equal(res.isError, false, res.text);
-      assert.deepEqual(res.details.urls, ["https://plain.example"]);
+      assert.deepEqual((res.details as Record<string, unknown>).urls, ["https://plain.example"]);
       assert.match(res.text, /Plain Result/);
       assert.match(res.text, /Plain text body/);
       assert.doesNotMatch(res.text, /Reporter/, "the author is read past, not passed on");
@@ -1010,8 +1019,9 @@ describe("Ticket 24 D2/D8.1: Exa's hosted MCP endpoint, keyless", () => {
       const { tool } = chainTool({ endpoints: { exa: exa.url, duckduckgo: ddg.url } });
       const res = await call(tool, { query: "rate limited" });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.backend, "duckduckgo");
-      assert.deepEqual(res.details.fellThrough, [EXA_RATE_LIMIT_MESSAGE]);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.backend, "duckduckgo");
+      assert.deepEqual(details.fellThrough, [EXA_RATE_LIMIT_MESSAGE]);
       assert.equal(EXA_RATE_LIMIT_MESSAGE, "exa: MCP rate limit reached (429); configure an Exa API key for higher limits");
     } finally {
       await exa.close();
@@ -1051,7 +1061,7 @@ describe("Ticket 24 D3/D8.2: DuckDuckGo's HTML page, plain HTTP", () => {
       const { tool } = chainTool({ provider: "duckduckgo", endpoint: ddg.url, endpoints: {} });
       const res = await call(tool, { query: "ERR_REQUIRE_ESM", include_domains: ["nodejs.org", "example.com"] });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.backend, "duckduckgo");
+      assert.equal((res.details as Record<string, unknown>).backend, "duckduckgo");
       const req = ddg.requests[0]!;
       assert.equal(req.method, "POST");
       assert.equal(req.headers["content-type"], "application/x-www-form-urlencoded");
@@ -1080,8 +1090,9 @@ describe("Ticket 24 D3/D8.2: DuckDuckGo's HTML page, plain HTTP", () => {
       const { tool } = chainTool({ provider: "duckduckgo", endpoint: ddg.url, endpoints: {} });
       const res = await call(tool, { query: "blocked" });
       assert.equal(res.isError, true);
-      assert.equal(res.details.success, false);
-      assert.deepEqual(res.details.reasons, [`duckduckgo: ${DUCKDUCKGO_CHALLENGE_MESSAGE}`]);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.success, false);
+      assert.deepEqual(details.reasons, [`duckduckgo: ${DUCKDUCKGO_CHALLENGE_MESSAGE}`]);
     } finally {
       await ddg.close();
     }
@@ -1093,7 +1104,7 @@ describe("Ticket 24 D3/D8.2: DuckDuckGo's HTML page, plain HTTP", () => {
       const { tool } = chainTool({ provider: "duckduckgo", endpoint: ddg.url, endpoints: {} });
       const res = await call(tool, { query: "nothing" });
       assert.equal(res.isError, true);
-      assert.deepEqual(res.details.reasons, ["duckduckgo: no results parsed from the reply"]);
+      assert.deepEqual((res.details as Record<string, unknown>).reasons, ["duckduckgo: no results parsed from the reply"]);
     } finally {
       await ddg.close();
     }
@@ -1130,8 +1141,9 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
       });
       const res = await call(tool, { query: "ERR_REQUIRE_ESM" });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.provider, "auto");
-      assert.equal(res.details.backend, "exa");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.provider, "auto");
+      assert.equal(details.backend, "exa");
       assert.equal(exa.requests.length, 1);
       assert.equal(ddg.requests.length, 0);
     } finally {
@@ -1148,10 +1160,11 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
       const { tool } = chainTool({ endpoints: { exa: exa.url, duckduckgo: ddg.url } });
       const res = await call(tool, { query: "ERR_REQUIRE_ESM" });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.backend, "duckduckgo");
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.backend, "duckduckgo");
       assert.match(res.text, /\(via duckduckgo\)/);
       assert.match(res.text, /https:\/\/nodejs\.org\/api\/esm\.html/);
-      assert.deepEqual(res.details.fellThrough, ["exa: Exa MCP request failed (500): internal error"]);
+      assert.deepEqual(details.fellThrough, ["exa: Exa MCP request failed (500): internal error"]);
     } finally {
       await exa.close();
       await ddg.close();
@@ -1165,7 +1178,7 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
       const { tool } = chainTool({ endpoints: { exa: exaUrl, duckduckgo: ddg.url } });
       const res = await call(tool, { query: "nowhere" });
       assert.equal(res.isError, true);
-      assert.equal(res.details.success, false);
+      assert.equal((res.details as Record<string, unknown>).success, false);
       const lines = res.text.split("\n");
       assert.match(lines[0]!, /no search backend answered "nowhere"/);
       assert.match(lines[1]!, /^- exa: 127\.0\.0\.1:\d+ could not be reached/);
@@ -1191,7 +1204,7 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
       });
       const res = await call(tool, { query: "widget library" });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.backend, "brave");
+      assert.equal((res.details as Record<string, unknown>).backend, "brave");
       assert.match(res.text, /\(via brave\)/);
       assert.equal(brave.requests[0]!.headers["x-subscription-token"], "brave-key");
       assert.equal(exa.requests.length, 0);
@@ -1210,8 +1223,9 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
     try {
       const { tool } = chainTool({ keys: { brave: "bad" }, endpoints: { brave: brave.url, exa: exa.url } });
       const res = await call(tool, { query: "q" });
-      assert.equal(res.details.backend, "exa");
-      assert.deepEqual(res.details.fellThrough, ["brave: 401 unauthorized"]);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.backend, "exa");
+      assert.deepEqual(details.fellThrough, ["brave: 401 unauthorized"]);
     } finally {
       await brave.close();
       await exa.close();
@@ -1235,13 +1249,14 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
       const { tool, denials } = chainTool({ endpoints: { exa: exa.url, duckduckgo: ddg.url }, gate });
       const res = await call(tool, { query: "gated" });
       assert.equal(res.isError, false, res.text);
-      assert.equal(res.details.backend, "duckduckgo");
+      const details = res.details as { backend: string; fellThrough: string[] };
+      assert.equal(details.backend, "duckduckgo");
       assert.equal(exa.requests.length, 0, "a denied host is sent nothing");
       assert.equal(gate.seen.length, 2);
       assert.equal(gate.seen[0]!.kind, "read");
       assert.match(gate.seen[0]!.summary, new RegExp(exaHost.replace(/\./g, "\\.")));
       assert.match(gate.seen[1]!.summary, new RegExp(ddgHost.replace(/\./g, "\\.")));
-      assert.match(res.details.fellThrough[0], /^exa: the gate denied /);
+      assert.match(details.fellThrough[0]!, /^exa: the gate denied /);
       assert.equal(denials.userRejected, 1);
     } finally {
       await exa.close();
@@ -1254,7 +1269,7 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
     try {
       const { tool } = chainTool({ endpoints: { exa: exa.url } });
       const res = await call(tool, { query: "pages", include_domains: ["beta.com"], exclude_domains: ["spam.example"] });
-      assert.deepEqual(res.details.urls, ["https://beta.com"]);
+      assert.deepEqual((res.details as Record<string, unknown>).urls, ["https://beta.com"]);
       const args = (JSON.parse(exa.requests[0]!.body) as { params: { arguments: { query: string } } }).params.arguments;
       assert.equal(args.query, "pages site:beta.com -site:spam.example");
     } finally {
@@ -1268,9 +1283,10 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
     try {
       const { tool } = chainTool({ endpoints: { exa: exa.url, duckduckgo: ddg.url } });
       const res = await call(tool, { query: "esm", include_domains: ["nodejs.org"] });
-      assert.equal(res.details.backend, "duckduckgo");
-      assert.deepEqual(res.details.urls, ["https://nodejs.org/api/esm.html"]);
-      assert.deepEqual(res.details.fellThrough, ["exa: 3 results, none on the requested domains"]);
+      const details = res.details as Record<string, unknown>;
+      assert.equal(details.backend, "duckduckgo");
+      assert.deepEqual(details.urls, ["https://nodejs.org/api/esm.html"]);
+      assert.deepEqual(details.fellThrough, ["exa: 3 results, none on the requested domains"]);
     } finally {
       await exa.close();
       await ddg.close();
@@ -1300,7 +1316,9 @@ describe("Ticket 24 D1/D4/D5/D8.3: the chain", () => {
 describe("Ticket 24 D8.4: no request asks for a summary or an answer", () => {
   it("Exa is sent a query and a count, and DuckDuckGo a query, a region and the empty b", () => {
     const q = { query: "widgets", include: [], exclude: [], count: 7 };
-    const exaBody = JSON.parse(exaMcpRequest(EXA_MCP_ENDPOINT, "", q).body ?? "{}") as Record<string, any>;
+    const exaBody = JSON.parse(exaMcpRequest(EXA_MCP_ENDPOINT, "", q).body ?? "{}") as {
+      params: { arguments: Record<string, unknown>; name: string };
+    };
     assert.deepEqual(Object.keys(exaBody).sort(), ["id", "jsonrpc", "method", "params"]);
     assert.deepEqual(Object.keys(exaBody.params).sort(), ["arguments", "name"]);
     assert.deepEqual(Object.keys(exaBody.params.arguments).sort(), ["numResults", "query"]);

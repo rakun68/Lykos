@@ -15,6 +15,7 @@ import { AutoApproveGate } from "../gate/approval.js";
 import { newRetryObservation } from "../loop/retry-observer.js";
 import { createSpecialistSwitcher } from "../tui/interactive-surface.js";
 import type { StandaloneSessionState } from "./session.js";
+import type { AgentUi } from "../tui/s0.js";
 
 process.env.LYKOS_PI_HOST_DIR = mkdtempSync(join(tmpdir(), "lykos-pi-host-"));
 
@@ -52,18 +53,20 @@ describe("T215: a switch in a driven session", () => {
     );
     assert.match(booted.specialistMessage ?? "", /PLANNER-TEXT-1A/);
 
-    const fake = { sessionId: "f", systemPrompt: "head", prompts: [] as string[], idle: true } as any;
-    const session: InteractiveSession = {
+    const fake = { sessionId: "f", systemPrompt: "head", prompts: [] as string[], idle: true };
+    const session: InteractiveSession & { setModel: (m: unknown) => Promise<void>; setActiveToolsByName: (n: string[]) => void } = {
       sessionId: "f", systemPrompt: "head",
       get isIdle() { return true; },
       async prompt(t: string) { fake.prompts.push(t); },
       async steer() {}, async abort() {}, async waitForIdle() {},
       getActiveToolNames: () => ["read", "edit"],
+      setActiveToolsByName: () => {},
+      setModel: async () => {},
       dispose() {},
-    } as unknown as InteractiveSession;
+    } as unknown as InteractiveSession & { setModel: (m: unknown) => Promise<void>; setActiveToolsByName: (n: string[]) => void };
 
     const switcher = createSpecialistSwitcher({
-      cwd, session: session as any, modelRuntime: {} as any, initialConfig: config,
+      cwd, session, modelRuntime: {} as unknown as ModelRuntime, initialConfig: config,
       initialSpecialistName: "planner", toolsOverride: undefined, state: state(),
       initialSpecialistMessage: booted.specialistMessage, currentMode: () => "manual",
     });
@@ -74,7 +77,7 @@ describe("T215: a switch in a driven session", () => {
       view: { blocks: [], hud: null, toolsCollapsed: true, thinkingCollapsed: false }, streamed: false,
       writeUser() {}, writeSystem() {}, writeHud() { return null as never; }, renderApproval() { return ""; },
       attach() { return () => {}; }, snapshotJson() { return "{}"; },
-    } as any;
+    } as unknown as AgentUi;
     await runInteractiveLoop({
       session, lineSource, state: state(), ledgerPath: join(cwd, ".lykos", "ledger.db"), config: SHIPPED_DEFAULTS,
       modelSpec: "test/stub", writeReply: () => {}, ui,
@@ -83,11 +86,11 @@ describe("T215: a switch in a driven session", () => {
     });
 
     assert.equal(fake.prompts.length, 2);
-    assert.match(fake.prompts[0], /PLANNER-TEXT-1A/);
-    assert.doesNotMatch(fake.prompts[0], /no longer apply/i);
-    assert.match(fake.prompts[1], /specialist `planner` no longer apply/);
-    assert.match(fake.prompts[1], /WRITER-TEXT-2B/);
-    assert.doesNotMatch(fake.prompts[1], /PLANNER-TEXT-1A/);
+    assert.match(fake.prompts[0]!, /PLANNER-TEXT-1A/);
+    assert.doesNotMatch(fake.prompts[0]!, /no longer apply/i);
+    assert.match(fake.prompts[1]!, /specialist `planner` no longer apply/);
+    assert.match(fake.prompts[1]!, /WRITER-TEXT-2B/);
+    assert.doesNotMatch(fake.prompts[1]!, /PLANNER-TEXT-1A/);
     assert.equal(session.systemPrompt, "head");
     assert.equal(toolsSet, 0, "a switch never rewrites the request's tool list");
   });

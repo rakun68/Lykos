@@ -978,7 +978,7 @@ describe("T206: a seal.writers run with write_in_place that left a new commit", 
       try {
         await withServer({ workspace: ws, run }, async (client) => {
           const res = await client.callTool({ name: "lykos_implement", arguments: { brief: "do it", specialist: "test-writer" } });
-          const r = textOf(res) as { outcome: string; message?: string; verification?: any; refusals?: string[]; next?: string };
+          const r = textOf(res) as { outcome: string; message?: string; verification?: { outcome?: string }; refusals?: string[]; next?: string };
           assert.equal(r.outcome, "error");
           assert.equal(r.next, "fix_environment", "seal refusal recommends fix_environment, not continue_with_failure");
           assert.ok(r.verification, "verification is present");

@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import type { SealFile } from "../seal/types.js";
 
 // T198 (#53) ACCEPTANCE: the vitest reporter adapter and the exit-code
 // fallback. Real `lykos seal create` against a real temporary repository; the
@@ -63,8 +64,8 @@ function commitAll(msg: string): string {
   return git("rev-parse", "HEAD");
 }
 
-function sealFile(branch: string): Record<string, any> {
-  return JSON.parse(readFileSync(join(repo, ".lykos", "seals", `${branch}.json`), "utf8"));
+function sealFile(branch: string): SealFile {
+  return JSON.parse(readFileSync(join(repo, ".lykos", "seals", `${branch}.json`), "utf8")) as SealFile;
 }
 
 function base(testCommand: string): void {
@@ -128,9 +129,9 @@ describe("T198 ACCEPTANCE: the vitest adapter", () => {
     assert.equal(seal.adapter, "vitest");
     assert.equal(seal.test_command, template());
     assert.equal(seal.red.length, 1);
-    assert.equal(seal.red[0].file, "test/add.test.mjs");
-    assert.deepEqual(seal.red[0].describe, ["math", "add"]);
-    assert.equal(seal.red[0].name, "adds small numbers");
+    assert.equal(seal.red[0]!.file, "test/add.test.mjs");
+    assert.deepEqual(seal.red[0]!.describe, ["math", "add"]);
+    assert.equal(seal.red[0]!.name, "adds small numbers");
   });
 
   it("refuses a vitest test that already passes", () => {
