@@ -105,8 +105,8 @@ export function confineToWorkspace(tool: ToolDefinition, cwd: string, gate?: App
         const resolved = decidePath(target, access, rules, pathCtx);
         const verdict = requested.decision === "deny" ? requested : resolved;
         if (verdict.decision === "deny") {
-          if (gate && "denied" in gate && Array.isArray((gate as any).denied)) {
-            (gate as any).denied.push({
+          if (gate && "denied" in gate && Array.isArray(gate.denied)) {
+            gate.denied.push({
               kind: access === "write" ? tool.name : "read",
               summary: `${tool.name} ${given}`,
               detail: target,

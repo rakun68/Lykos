@@ -408,7 +408,7 @@ export function buildToolCallTool(opts: ToolCallToolOpts = {}): ToolDefinition {
         };
       }
 
-      return await mountedTool.execute(toolCallId, validatedArgs as any, signal, onUpdate, ctx);
+      return await mountedTool.execute(toolCallId, validatedArgs as never, signal, onUpdate, ctx);
     },
   });
 }

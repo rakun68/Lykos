@@ -38,6 +38,61 @@ export interface RunSealedTestsResult {
   rawOutput?: string | undefined;
 }
 
+interface VitestAssertion {
+  ancestorTitles?: string[];
+  title?: string;
+  fullName?: string;
+  status?: string;
+  failureMessages?: string[];
+  [key: string]: unknown;
+}
+
+interface VitestSuite {
+  name?: string;
+  status?: string;
+  message?: string;
+  assertionResults?: VitestAssertion[];
+  [key: string]: unknown;
+}
+
+interface VitestOutput {
+  numTotalTestSuites?: number;
+  testResults?: VitestSuite[];
+  [key: string]: unknown;
+}
+
+interface NodeTestEventData {
+  file?: string;
+  entryFile?: string;
+  message?: string;
+  type?: string;
+  testId?: number;
+  parentId?: number;
+  nesting?: number;
+  name?: string;
+  skip?: boolean | string;
+  todo?: boolean | string;
+  details?: {
+    type?: string;
+    skip?: boolean | string;
+    error?: {
+      message?: string;
+      code?: string;
+      failureType?: string;
+      cause?: { message?: string };
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+interface NodeTestEvent {
+  type?: string;
+  data?: NodeTestEventData;
+  [key: string]: unknown;
+}
+
 export interface RunRedCheckOptions {
   worktreeDir: string;
   testFiles: readonly string[];
@@ -278,12 +333,12 @@ async function runVitestMode(
       child.once("close", () => resolve());
     });
 
-    let vitestData: any;
+    let vitestData: VitestOutput | undefined;
     for (const line of stdout.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed.startsWith("{")) continue;
       try {
-        const parsed = JSON.parse(trimmed);
+        const parsed = JSON.parse(trimmed) as VitestOutput;
         if (parsed && (Array.isArray(parsed.testResults) || typeof parsed.numTotalTestSuites === "number")) {
           vitestData = parsed;
           break;
@@ -295,7 +350,7 @@ async function runVitestMode(
       const defaultOut = join(opts.dir, ".vitest", "json", "output.json");
       if (existsSync(defaultOut)) {
         try {
-          vitestData = JSON.parse(readFileSync(defaultOut, "utf8"));
+          vitestData = JSON.parse(readFileSync(defaultOut, "utf8")) as VitestOutput;
         } catch (e) {
           return {
             ok: false,
@@ -331,7 +386,7 @@ async function runVitestMode(
     const suiteResults = Array.isArray(vitestData.testResults) ? vitestData.testResults : [];
 
     for (const suite of suiteResults) {
-      const rawFile = suite.name;
+      const rawFile = suite.name ?? "";
       const file = mapReportedPath(rawFile, opts.files, opts.dir, realDir);
       if (!file) continue;
 
@@ -445,9 +500,9 @@ async function runNodeTestMode(
     let parsedAnyEvent = false;
 
     for (const line of lines) {
-      let event: any;
+      let event: NodeTestEvent | undefined;
       try {
-        event = JSON.parse(line);
+        event = JSON.parse(line) as NodeTestEvent;
       } catch {
         continue;
       }
@@ -455,7 +510,7 @@ async function runNodeTestMode(
       if (!data) continue;
       parsedAnyEvent = true;
 
-      const rawFile = data.file || data.entryFile;
+      const rawFile = data.file || data.entryFile || "";
       const file = mapReportedPath(rawFile, opts.files, opts.dir, realDir);
 
       if (event.type === "test:stderr") {
@@ -469,7 +524,7 @@ async function runNodeTestMode(
 
       if (event.type === "test:enqueue" || event.type === "test:start") {
         if (data.type === "suite") {
-          suiteParents.set(`${file}:${data.testId}`, { name: data.name, parentId: data.parentId });
+          suiteParents.set(`${file}:${data.testId}`, { name: data.name ?? "", parentId: data.parentId ?? 0 });
         }
       }
 
@@ -478,7 +533,7 @@ async function runNodeTestMode(
       if (event.type === "test:start" && typeof data.nesting === "number") {
         const stack = startStacks.get(file) ?? [];
         stack.length = data.nesting;
-        stack.push(data.name);
+        stack.push(data.name ?? "");
         startStacks.set(file, stack);
       }
 
@@ -520,7 +575,7 @@ async function runNodeTestMode(
         const list = testsByFile.get(file) ?? [];
         list.push({
           file,
-          name: data.name,
+          name: data.name ?? "",
           describe,
           status: isAssert ? "assertion" : "error",
           errorDetail: isAssert ? undefined : data.details?.error?.message || "error",
@@ -554,7 +609,7 @@ async function runNodeTestMode(
         const list = testsByFile.get(file) ?? [];
         list.push({
           file,
-          name: data.name,
+          name: data.name ?? "",
           describe,
           status: isSkip ? "skip" : "pass",
         });

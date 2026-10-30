@@ -48,6 +48,14 @@ export interface GitLabDuoOAuthCredentials {
   [key: string]: unknown;
 }
 
+export interface GitLabTokenResponseBody {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  created_at?: number;
+  [key: string]: unknown;
+}
+
 export interface GitLabDuoLoginCallbacks {
   onAuth?: (info: { url: string; instructions?: string }) => void;
   onProgress?: (message: string) => void;
@@ -92,7 +100,7 @@ export async function postGitLabTokenForm(
   tokenUrl: string,
   params: Record<string, string>,
   opts: { fetch: typeof fetch; failure: string; signal?: AbortSignal },
-): Promise<any> {
+): Promise<GitLabTokenResponseBody | undefined> {
   let tokenRes: Response;
   try {
     tokenRes = await opts.fetch(tokenUrl, {
@@ -106,9 +114,9 @@ export async function postGitLabTokenForm(
   }
 
   const tokenText = await tokenRes.text();
-  let tokenBody: any;
+  let tokenBody: GitLabTokenResponseBody | undefined;
   try {
-    tokenBody = tokenText.length > 0 ? JSON.parse(tokenText) : undefined;
+    tokenBody = tokenText.length > 0 ? (JSON.parse(tokenText) as GitLabTokenResponseBody) : undefined;
   } catch {
     tokenBody = undefined;
   }
@@ -398,9 +406,9 @@ export async function getDirectAccessToken(
     throw new Error(`GitLab Duo direct access failed: ${response.status} ${redactTokens(detail.slice(0, 500))}`);
   }
 
-  let payload: any;
+  let payload: { token?: unknown; headers?: Record<string, string>; [key: string]: unknown } | undefined;
   try {
-    payload = JSON.parse(detail);
+    payload = JSON.parse(detail) as { token?: unknown; headers?: Record<string, string>; [key: string]: unknown };
   } catch {
     throw new Error("GitLab Duo direct access response missing valid JSON");
   }

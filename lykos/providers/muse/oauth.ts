@@ -38,6 +38,34 @@ export interface MuseOAuthCredentials {
   [key: string]: unknown;
 }
 
+interface MuseDeviceAuthResponse {
+  user_code?: string;
+  device_code?: string;
+  verification_uri_complete?: string;
+  verification_uri?: string;
+  expires_in?: number;
+  interval?: number;
+  [key: string]: unknown;
+}
+
+interface MuseDeviceTokenResponse {
+  access_token?: string;
+  error?: string;
+  error_description?: string;
+  [key: string]: unknown;
+}
+
+interface MuseKeyResponse {
+  is_subs_active?: boolean;
+  api_key?: string;
+  action_url?: string;
+  require_payment_action_url?: string;
+  require_payment?: boolean;
+  user_email?: string;
+  user_id?: string;
+  [key: string]: unknown;
+}
+
 export interface MuseParsedCredential {
   oauthAccessToken: string;
   apiKey: string;
@@ -135,9 +163,9 @@ export async function loginMuse(
   }
 
   const deviceText = await deviceRes.text();
-  let deviceJson: any;
+  let deviceJson: MuseDeviceAuthResponse | undefined;
   try {
-    deviceJson = deviceText.length > 0 ? JSON.parse(deviceText) : undefined;
+    deviceJson = deviceText.length > 0 ? (JSON.parse(deviceText) as MuseDeviceAuthResponse) : undefined;
   } catch {
     deviceJson = undefined;
   }
@@ -203,9 +231,9 @@ export async function loginMuse(
     }
 
     const tokenText = await tokenRes.text();
-    let tokenJson: any;
+    let tokenJson: MuseDeviceTokenResponse | undefined;
     try {
-      tokenJson = tokenText.length > 0 ? JSON.parse(tokenText) : undefined;
+      tokenJson = tokenText.length > 0 ? (JSON.parse(tokenText) as MuseDeviceTokenResponse) : undefined;
     } catch {
       tokenJson = undefined;
     }
@@ -259,9 +287,9 @@ export async function loginMuse(
   }
 
   const keyText = await keyRes.text();
-  let keyJson: any;
+  let keyJson: MuseKeyResponse | undefined;
   try {
-    keyJson = keyText.length > 0 ? JSON.parse(keyText) : undefined;
+    keyJson = keyText.length > 0 ? (JSON.parse(keyText) as MuseKeyResponse) : undefined;
   } catch {
     keyJson = undefined;
   }

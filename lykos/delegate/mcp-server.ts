@@ -26,9 +26,9 @@ import {
   specialistToolName,
   type SpecialistLocation,
 } from "../config/specialists.js";
-import { defaultLedgerPath, openLedgerSync } from "../ledger/use.js";
+import { defaultLedgerPath, openLedgerSync, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
-import { readTranscript, transcriptFilePath } from "../session/transcript.js";
+import { readTranscript, transcriptFilePath, type TranscriptEventInput, type TranscriptEventRecord } from "../session/transcript.js";
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
 import { sealCreate } from "../seal/create.js";
 import { createTemporaryWorktree, getBranchOrNull, gitExec, resolveRef } from "../seal/git.js";
@@ -463,6 +463,17 @@ function querySessionMetrics(workspace: string, sessionId: string): {
   }
 }
 
+interface McpSessionRow {
+  ended_utc?: string | null;
+  transcript_path?: string | null;
+  outcome?: string | null;
+  outcome_source?: string | null;
+  verification_cmd?: string | null;
+  verification_exit_code?: number | null;
+  verification_output?: string | null;
+  [key: string]: unknown;
+}
+
 async function buildSessionOutcomeResult(
   workspace: string,
   request: SessionRequest,
@@ -480,14 +491,14 @@ async function buildSessionOutcomeResult(
   const targetSessionId = outcome?.sessionId ?? passedTargetSessionId;
 
   const ledgerPath = defaultLedgerPath(workspace);
-  let sessionRow: any = undefined;
-  let sealEventsForSession: any[] = [];
+  let sessionRow: McpSessionRow | undefined = undefined;
+  let sealEventsForSession: SealEventRow[] = [];
   if (existsSync(ledgerPath)) {
     try {
       const ledger = openLedgerSync(ledgerPath);
       try {
         if (targetSessionId) {
-          sessionRow = ledger.db.prepare("SELECT * FROM sessions WHERE id = ?").get(targetSessionId);
+          sessionRow = ledger.db.prepare("SELECT * FROM sessions WHERE id = ?").get(targetSessionId) as McpSessionRow | undefined;
           sealEventsForSession = ledger.sealEvents().filter((e) => e.session_id === targetSessionId);
         }
       } finally {
@@ -543,11 +554,11 @@ async function buildSessionOutcomeResult(
     const attempts: Array<{ tool: string; detail: string; paths: string[] }> = [];
     for (const ev of sealEventsForSession) {
       if (ev.kind === "tamper_attempted") {
-        let parsedDetail: any = {};
+        let parsedDetail: { tool?: string; detail?: string } = {};
         if (typeof ev.detail === "string") {
-          try { parsedDetail = JSON.parse(ev.detail); } catch {}
+          try { parsedDetail = JSON.parse(ev.detail) as { tool?: string; detail?: string }; } catch {}
         } else if (typeof ev.detail === "object" && ev.detail !== null) {
-          parsedDetail = ev.detail;
+          parsedDetail = ev.detail as { tool?: string; detail?: string };
         }
         let paths: string[] = [];
         if (typeof ev.paths === "string") {
@@ -718,7 +729,7 @@ async function buildSessionOutcomeResult(
     if (!transcriptPath && targetSessionId) {
       transcriptPath = transcriptFilePath(ledgerPath, targetSessionId);
     }
-    let transcriptEvents: any[] = [];
+    let transcriptEvents: Array<TranscriptEventRecord & TranscriptEventInput> = [];
     if (transcriptPath && existsSync(transcriptPath)) {
       try {
         transcriptEvents = readTranscript(transcriptPath).events;
@@ -727,7 +738,7 @@ async function buildSessionOutcomeResult(
 
     let answer: string | undefined;
     for (let i = transcriptEvents.length - 1; i >= 0; i--) {
-      const ev = transcriptEvents[i];
+      const ev = transcriptEvents[i]!;
       if (ev.kind === "assistant_message" && typeof ev.text === "string") {
         answer = ev.text;
         break;

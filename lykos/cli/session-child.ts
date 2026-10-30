@@ -451,6 +451,15 @@ async function resolveSessionBranch(workspace: string, sessionId: string): Promi
   return undefined;
 }
 
+interface DisputeDetail {
+  file?: string;
+  describe?: unknown[];
+  name?: string;
+  reason?: string;
+  evidence?: string;
+  [key: string]: unknown;
+}
+
 async function outcomeOf(
   result: RunStandaloneTaskResult,
   ledgerPath: string,
@@ -532,10 +541,10 @@ async function outcomeOf(
             const list: SessionDispute[] = [];
             const latestByTest = new Map<string, SessionDispute>();
             for (const r of rows) {
-              let parsed: any = {};
+              let parsed: DisputeDetail = {};
               if (r.detail) {
                 try {
-                  parsed = JSON.parse(r.detail);
+                  parsed = JSON.parse(r.detail) as DisputeDetail;
                 } catch {}
               }
               const file = String(parsed.file ?? r.paths);
@@ -685,7 +694,7 @@ async function outcomeOf(
   if (result.status !== "ok") {
     return {
       outcome: "error",
-      message: (result as any).message ?? "unexpected status",
+      message: result.message,
       ...(record !== undefined ? { containment: record.used } : {}),
       ...(record?.runtime !== undefined ? { runtime: record.runtime } : {}),
       ...found,

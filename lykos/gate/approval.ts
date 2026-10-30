@@ -41,7 +41,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { detectFirstCommit, detectGitRemote, resolveProject } from "../session/identity.js";
 import { classifyCommandRisk } from "./command-safety.js";
-import { decideForMode, type GatedAction } from "./modes.js";
+import { decideForMode, type GatedAction, type InteractionMode } from "./modes.js";
 import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
 import { decideCommandPaths } from "./bash-paths.js";
 import { collectPathRules, decidePath, type PathAccess, type PathContext, type PathRule } from "./path-rules.js";
@@ -149,6 +149,13 @@ export function pathAskDenialMessage(req: ApprovalRequest): string {
 
 export type ApprovalDecision = "allow" | "deny" | "allow-always" | "allow-folder";
 
+export interface DeniedAction {
+  kind: string;
+  summary: string;
+  detail: string;
+  rule: string;
+}
+
 export interface ApprovalGate {
   request(req: ApprovalRequest): Promise<ApprovalDecision>;
   /**
@@ -168,6 +175,9 @@ export interface ApprovalGate {
   pathContext?: PathContext | undefined;
   readonly inner?: ApprovalGate | undefined;
   verifyCommand?: string | undefined;
+  mode?: InteractionMode | undefined;
+  denied?: DeniedAction[] | undefined;
+  refresh?(): void;
 }
 
 export function unwrapGate(gate: ApprovalGate): ApprovalGate {
@@ -374,12 +384,12 @@ export class PostureGate implements ApprovalGate {
     return this.inner.pathContext;
   }
 
-  get mode(): string | undefined {
-    return (this.inner as any).mode;
+  get mode(): InteractionMode | undefined {
+    return this.inner.mode;
   }
 
-  get denied(): unknown[] | undefined {
-    return (this.inner as any).denied;
+  get denied(): DeniedAction[] | undefined {
+    return this.inner.denied;
   }
 }
 
@@ -508,8 +518,8 @@ async function authorize(
     const pathVerdict = decidePath(req.detail, access, rules, ctx);
     if (pathVerdict.decision === "deny") {
       denials?.record("out_of_root", req.kind, req.detail);
-      if ("denied" in gate && Array.isArray((gate as any).denied)) {
-        (gate as any).denied.push({
+      if ("denied" in gate && Array.isArray(gate.denied)) {
+        gate.denied.push({
           kind: req.kind,
           summary: req.summary,
           detail: req.detail,
@@ -537,8 +547,8 @@ async function authorize(
     if (pathVerdict.covered) {
       if (pathVerdict.decision === "deny") {
         denials?.record("out_of_root", req.kind, req.detail);
-        if ("denied" in gate && Array.isArray((gate as any).denied)) {
-          (gate as any).denied.push({
+        if ("denied" in gate && Array.isArray(gate.denied)) {
+          gate.denied.push({
             kind: req.kind,
             summary: req.summary,
             detail: req.detail,
@@ -663,8 +673,8 @@ export function buildWriteOperations(cwd: string, gate: ApprovalGate, denials?: 
       const pathVerdict = decidePath(dir, "write", rules, ctx);
       if (pathVerdict.decision === "deny") {
         denials?.record("out_of_root", "write", dir);
-        if ("denied" in gate && Array.isArray((gate as any).denied)) {
-          (gate as any).denied.push({
+        if ("denied" in gate && Array.isArray(gate.denied)) {
+          gate.denied.push({
             kind: "write",
             summary: "create directory",
             detail: dir,

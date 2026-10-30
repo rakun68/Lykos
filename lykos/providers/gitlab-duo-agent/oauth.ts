@@ -10,7 +10,7 @@
 // A pasted callback whose `state` differs is refused with an error; the login surface asks once.
 
 import { randomBytes } from "node:crypto";
-import { generatePkce, postGitLabTokenForm } from "../gitlab-duo/oauth.js";
+import { generatePkce, postGitLabTokenForm, type GitLabTokenResponseBody } from "../gitlab-duo/oauth.js";
 
 // GitLab's VS Code OAuth application. Expiry is `created_at + expires_in`, less a 5 min skew.
 export const GITLAB_DUO_AGENT_CLIENT_ID = "36f2a70cddeb5a0889d4fd8295c241b7e9848e89cf9e599d0eed2d8e5350fbf5";
@@ -80,7 +80,7 @@ export function parseCallbackInput(input: string): { code?: string; state?: stri
 }
 
 /** Maps a token response to the stored credential. */
-function mapCredentials(body: any, now: () => number, previous?: GitLabDuoAgentCredentials): GitLabDuoAgentCredentials {
+function mapCredentials(body: GitLabTokenResponseBody | undefined, now: () => number, previous?: GitLabDuoAgentCredentials): GitLabDuoAgentCredentials {
   const access = typeof body?.access_token === "string" && body.access_token.length > 0 ? body.access_token : undefined;
   if (access === undefined) throw new Error("gitlab-duo-agent token response missing access token");
   const seconds = body?.expires_in;

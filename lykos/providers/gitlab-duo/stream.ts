@@ -102,9 +102,10 @@ async function run(
       stream.push(event as AssistantMessageEvent);
     }
 
-    if (typeof (delegateStream as any).result === "function") {
+    const streamWithResult = delegateStream as { result?: () => Promise<AssistantMessage> };
+    if (typeof streamWithResult.result === "function") {
       try {
-        const finalMsg = await (delegateStream as any).result();
+        const finalMsg = await streamWithResult.result();
         stream.end(finalMsg);
       } catch {
         stream.end();

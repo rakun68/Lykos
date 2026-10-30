@@ -333,14 +333,16 @@ export async function runChildSession(ctx: SpawnContext, req: ChildRunRequest): 
     let parentMode: InteractionMode;
     if (ctx.parentMode !== undefined) {
       parentMode = typeof ctx.parentMode === "function" ? ctx.parentMode() : ctx.parentMode;
-    } else if ((ctx.gate as any).mode !== undefined && isInteractionMode((ctx.gate as any).mode)) {
-      parentMode = (ctx.gate as any).mode;
+    } else if (ctx.gate.mode !== undefined && isInteractionMode(ctx.gate.mode)) {
+      parentMode = ctx.gate.mode;
     } else {
       parentMode = ctx.autoApprove ? "auto" : "manual";
     }
 
     const childRules: PathRule[] = [];
-    const rawRules = (resolvedSpecialist.file as any).path_rules;
+    const rawRules = "path_rules" in resolvedSpecialist.file
+      ? (resolvedSpecialist.file as { path_rules?: Record<string, Record<string, string>> }).path_rules
+      : undefined;
     if (rawRules && typeof rawRules === "object") {
       for (const access of ["read", "write"] as const) {
         const accessRules = rawRules[access];

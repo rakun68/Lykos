@@ -76,7 +76,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
   const headConfigContent = getFileAtCommit(head, ".lykos/config.yaml", cwd, env);
   if (headConfigContent) {
     try {
-      const parsedCfg = parseYaml(headConfigContent) as Record<string, any>;
+      const parsedCfg = parseYaml(headConfigContent) as { seal?: { base?: unknown } } | null | undefined;
       if (parsedCfg?.seal?.base && typeof parsedCfg.seal.base === "string") {
         configBase = parsedCfg.seal.base.trim();
       }

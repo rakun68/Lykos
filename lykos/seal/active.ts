@@ -160,7 +160,7 @@ function isPrunedBySealCommit(
           const cfgContent = getFileAtCommit(deletingCommit, ".lykos/config.yaml", cwd, env);
           if (cfgContent) {
             try {
-              const parsedCfg = parseYaml(cfgContent) as Record<string, any>;
+              const parsedCfg = parseYaml(cfgContent) as { seal?: { base?: unknown } } | null | undefined;
               if (parsedCfg?.seal?.base && typeof parsedCfg.seal.base === "string") {
                 otherBase = parsedCfg.seal.base.trim();
               }
@@ -340,7 +340,7 @@ export function activeSeals(opts: ActiveSealsOptions = {}): ActiveSeal[] {
       const headConfigContent = getFileAtCommit(head, ".lykos/config.yaml", cwd, env);
       if (headConfigContent) {
         try {
-          const parsedCfg = parseYaml(headConfigContent) as Record<string, any>;
+          const parsedCfg = parseYaml(headConfigContent) as { seal?: { base?: unknown } } | null | undefined;
           if (parsedCfg?.seal?.base && typeof parsedCfg.seal.base === "string") {
             firstBase = parsedCfg.seal.base.trim();
           }

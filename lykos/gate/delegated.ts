@@ -9,6 +9,8 @@ import {
   type ApprovalGate,
   type ApprovalRequest,
   type ApprovalDecision,
+  type DeniedAction,
+  type GatedToolKind,
   parseExtensionRequest,
   unwrapGate,
 } from "./approval.js";
@@ -31,12 +33,7 @@ import { activeSeals } from "../seal/active.js";
 import { SEAL_EXTENSION } from "../extensions/defaults/index.js";
 import { matchGlob } from "../seal/matcher.js";
 
-export interface DeniedAction {
-  kind: string;
-  summary: string;
-  detail: string;
-  rule: string;
-}
+export type { DeniedAction } from "./approval.js";
 
 export interface DelegatedGateOptions {
   mode: InteractionMode;
@@ -54,7 +51,7 @@ function actionOf(req: ApprovalRequest): GatedAction {
     }
     return { kind: "bash", command: req.detail };
   }
-  return { kind: req.kind as any };
+  return { kind: req.kind as Exclude<GatedToolKind, "bash"> };
 }
 
 export class DelegatedGate implements ApprovalGate {

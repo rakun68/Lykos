@@ -870,7 +870,7 @@ export class LykosExtensionHost {
         return self.getSpecialist();
       },
       getSessionId: () => this.getSessionId(),
-      on: ((event: string, handler: any) => {
+      on: ((event: string, handler: unknown) => {
         if (event === "tool_call") {
           this.toolCallVetoHandlers.push({
             extension: name,
@@ -1271,8 +1271,8 @@ export function gateWithExtensionEvents(gate: ApprovalGate, sink: LykosEventSink
     ...(gate.refuses !== undefined ? { refuses: (req: ApprovalRequest) => gate.refuses?.(req) ?? false } : {}),
     ...(gate.pathRules !== undefined ? { pathRules: gate.pathRules } : {}),
     ...(gate.pathContext !== undefined ? { pathContext: gate.pathContext } : {}),
-    ...((gate as any).mode !== undefined ? { mode: (gate as any).mode } : {}),
-    ...((gate as any).denied !== undefined ? { denied: (gate as any).denied } : {}),
-    ...(typeof (gate as any).refresh === "function" ? { refresh: () => (gate as any).refresh() } : {}),
+    ...(gate.mode !== undefined ? { mode: gate.mode } : {}),
+    ...(gate.denied !== undefined ? { denied: gate.denied } : {}),
+    ...(typeof gate.refresh === "function" ? { refresh: () => gate.refresh!() } : {}),
   };
 }

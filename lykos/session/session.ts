@@ -1422,8 +1422,8 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   let denied: DeniedAction[] | undefined = input.denied;
   if (input.gate !== undefined || input.approvalGate !== undefined) {
     gate = (input.gate ?? input.approvalGate)!;
-    if ("denied" in gate && Array.isArray((gate as any).denied)) {
-      denied = (gate as any).denied;
+    if ("denied" in gate && Array.isArray(gate.denied)) {
+      denied = gate.denied;
     }
     const unwrapped = unwrapGate(gate);
     if ((unwrapped instanceof DelegatedGate || unwrapped instanceof SubagentGate) && unwrapped.verifyCommand === undefined) {
@@ -1852,7 +1852,7 @@ ${decision.note}
 `);
 
   const deniedList: DeniedAction[] =
-    denied ?? ((gate && "denied" in gate && Array.isArray((gate as any).denied)) ? (gate as any).denied : []);
+    denied ?? ((gate && "denied" in gate && Array.isArray(gate.denied)) ? gate.denied : []);
   const deniedOut = deniedList.length > 0 ? { denied: deniedList } : {};
 
   if (skippedExtensions.length > 0) {

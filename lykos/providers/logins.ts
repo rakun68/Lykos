@@ -59,7 +59,7 @@ export interface LoginProvidersOptions {
 }
 
 function makeNoRefreshHandler(providerName: string) {
-  return async (credentials: any) => {
+  return async <T extends { expires?: unknown }>(credentials: T): Promise<T> => {
     if (typeof credentials.expires === "number" && Date.now() >= credentials.expires) {
       throw new Error(`${providerName} token has expired; run \`lykos login ${providerName}\` again`);
     }

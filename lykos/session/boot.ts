@@ -1100,7 +1100,7 @@ ${note}
       const id = sessionHolder.id?.();
       if (id === undefined) throw new Error("the session has no id yet");
       await recordSessionCommits(opts.ledgerPath, id, [record]);
-      (opts.gate as any)?.refresh?.();
+      opts.gate?.refresh?.();
     },
     gate: sessionGate,
     denials,
@@ -1360,8 +1360,8 @@ ${note}
   let mode: InteractionMode = "manual";
   if (opts.currentMode !== undefined) {
     mode = opts.currentMode();
-  } else if (typeof (unwrappedGate as any)?.mode === "string" && isInteractionMode((unwrappedGate as any).mode)) {
-    mode = (unwrappedGate as any).mode;
+  } else if (typeof unwrappedGate.mode === "string" && isInteractionMode(unwrappedGate.mode)) {
+    mode = unwrappedGate.mode;
   } else if (unwrappedGate instanceof AutoApproveGate) {
     mode = "auto";
   }
@@ -1589,6 +1589,7 @@ export async function boot(input: BootConfig, deps?: BootDeps): Promise<BootedSt
   }
   const continuationAvailable = contextStrategy.active === "continue" && continuationIndex < config.continuation.max;
 
+  const unwrappedGateMode = unwrapGate(gate).mode;
   const spawn =
     !isChild && (input.subagents === true || (specialistToolNames ?? toolNames).some((name) => canonicalToolName(name) === "agent"))
       ? {
@@ -1606,8 +1607,8 @@ export async function boot(input: BootConfig, deps?: BootDeps): Promise<BootedSt
             ? { parentMode: input.currentMode }
             : input.interactionMode !== undefined
               ? { parentMode: input.interactionMode }
-              : (unwrapGate(gate) as any).mode !== undefined
-                ? { parentMode: (unwrapGate(gate) as any).mode }
+              : unwrappedGateMode !== undefined
+                ? { parentMode: unwrappedGateMode }
                 : {}),
           ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
           ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),

@@ -60,10 +60,41 @@ export interface PeakWindow {
   ranges: string[];
 }
 
+interface ModelPriceBucket {
+  input_per_mtok?: number;
+  output_per_mtok?: number;
+  cache_read_per_mtok?: number;
+  [key: string]: unknown;
+}
+
+interface ModelPricing {
+  input_per_mtok?: number;
+  output_per_mtok?: number;
+  cache_read_per_mtok?: number;
+  cache_write_per_mtok?: number;
+  cache_write_1h_per_mtok?: number;
+  cache_write_5m_per_mtok?: number;
+  peak?: ModelPriceBucket;
+  off_peak?: ModelPriceBucket;
+  [key: string]: unknown;
+}
+
+interface ProviderPricing {
+  cache_semantics?: {
+    cache_tokens_inside_input_total?: boolean;
+    write_is_premium?: boolean;
+    ttl_default_seconds?: number;
+    [key: string]: unknown;
+  };
+  peak_windows_utc?: PeakWindow[];
+  models?: Record<string, ModelPricing>;
+  [key: string]: unknown;
+}
+
 interface PricesFile {
   version: string;
   source_checked: string;
-  providers: Record<string, any>;
+  providers: Record<string, ProviderPricing>;
 }
 
 let cachedPrices: PricesFile | undefined;
@@ -180,6 +211,9 @@ export function priceCall(input: PriceCallInput): PriceCallResult {
   let cacheWritePerMtok: number;
 
   if (input.provider === "deepseek") {
+    if (!provider.peak_windows_utc) {
+      throw new Error(`priceCall: missing or null price field "peak_windows_utc" for ${input.provider}/${input.model}`);
+    }
     const peak = isPeak(input.ts, provider.peak_windows_utc);
     rateWindow = peak ? "peak" : "off_peak";
     const bucket = peak ? model.peak : model.off_peak;
@@ -199,10 +233,14 @@ export function priceCall(input: PriceCallInput): PriceCallResult {
     inputPerMtok = requirePrice(model.input_per_mtok, input.provider, input.model, "input_per_mtok");
     outputPerMtok = requirePrice(model.output_per_mtok, input.provider, input.model, "output_per_mtok");
     cacheReadPerMtok = requirePrice(model.cache_read_per_mtok, input.provider, input.model, "cache_read_per_mtok");
-    const ttl = input.cacheTtlSeconds ?? provider.cache_semantics.ttl_default_seconds;
-    const writeField = ttl > provider.cache_semantics.ttl_default_seconds
-      ? "cache_write_1h_per_mtok"
-      : "cache_write_5m_per_mtok";
+    const ttlDefault = requirePrice(
+      provider.cache_semantics?.ttl_default_seconds,
+      input.provider,
+      input.model,
+      "ttl_default_seconds",
+    );
+    const ttl = input.cacheTtlSeconds ?? ttlDefault;
+    const writeField = ttl > ttlDefault ? "cache_write_1h_per_mtok" : "cache_write_5m_per_mtok";
     cacheWritePerMtok = requirePrice(model[writeField], input.provider, input.model, writeField);
   } else {
     inputPerMtok = requirePrice(model.input_per_mtok, input.provider, input.model, "input_per_mtok");
