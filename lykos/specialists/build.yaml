@@ -1,0 +1,11 @@
+# The default: small, well-understood changes. Ponytail ladder stays in the
+# system prompt, deliberation is low, and the post-edit feedback loop and the
+# verification gate stay on.
+description: Small, well-understood changes — do the smallest thing that works.
+role: primary
+read_only: false
+thinkingLevel: low
+feedback:
+  enabled: true
+gate:
+  enabled: true

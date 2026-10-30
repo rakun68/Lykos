@@ -1,0 +1,45 @@
+# Lykos runtime state — never commit
+.lykos/ledger.db
+.lykos/sessions/
+.lykos/cache/
+.lykos/today.json
+.lykos/resolved-config.json
+# Composer history: per machine, and a verbatim record of every prompt.
+.lykos/history.json
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets and local config
+.env
+.env.*
+prices.local.yaml
+
+# Node / Pi
+node_modules/
+dist/
+.pi/agents/
+.pi/sessions/
+*.log
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Local package extracts / scratch — never commit
+.tmp-pi-pack/
+
+# Maintainer-only material lives outside the repository.
+/reference/
+/research/
+
+# Per-developer agent and editor configuration
+.lykos/
+.claude/
+.codex/
+.mcp.json
+
+# Windows creates this from a stray '> NUL' in Git Bash
+/NUL

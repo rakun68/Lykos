@@ -1,0 +1,160 @@
+# Lykos price table
+#
+# Every dollar figure Lykos ever reports is computed from this file. With no
+# benchmark budget, a wrong price here does not bias one experiment — it
+# silently falsifies the entire ledger, and nothing downstream will catch it.
+#
+# Rules:
+#   - Primary provider documentation only. Never from memory, never from
+#     docs/archive/synthesis-original.md.
+#   - Bump `version` on ANY change. Every ledger row stores the version that
+#     priced it, so history stays comparable across price changes.
+#   - Re-check monthly. Record the date checked even when nothing changed.
+#
+# All figures are USD per 1,000,000 tokens.
+
+version: 2026-08-29
+source_checked: 2026-08-29
+# Re-verified 2026-08-28 (T2.1) against claude.com/pricing#api (Anthropic) and
+# api-docs.deepseek.com/quick_start/pricing (DeepSeek): every figure below
+# still matches. Note for the next re-check: Claude Sonnet 5's $2/$10 pricing,
+# originally introductory through 2026-08-31, is now confirmed as the
+# permanent standard price (the scheduled increase to $3/$15 was cancelled).
+#
+# 2026-08-29 (R-D3, docs/07-ui-and-hud.md §2.3): added `context_tokens` to all
+# three DeepSeek models, re-checked against the same
+# api-docs.deepseek.com/quick_start/pricing page — each lists a 1M-token
+# context window. Without this field the delegate context gauge could not be
+# drawn at all; before this only the three Anthropic models had it.
+
+providers:
+
+  anthropic:
+    # Source: Anthropic pricing docs, via the claude-api skill (2026-06-24 cache).
+    # Cache economics: reads ≈ 0.1× base input. Writes are a PREMIUM over input —
+    # 1.25× at the 5-minute TTL, 2× at the 1-hour TTL. This premium is the term
+    # that can make caching a net loss, and docs/03-telemetry.md §4.2 subtracts it.
+    cache_semantics:
+      write_is_premium: true          # writes cost MORE than plain input
+      read_multiplier: 0.1
+      write_multiplier_5m: 1.25
+      write_multiplier_1h: 2.0
+      ttl_default_seconds: 300
+      ttl_extended_seconds: 3600
+      # usage fields on the API response:
+      #   cache_creation_input_tokens  → cache_write_tokens
+      #   cache_read_input_tokens      → cache_read_tokens
+      # Both are reported ALONGSIDE input_tokens, not inside it.
+      cache_tokens_inside_input_total: false
+
+    models:
+      claude-opus-5:
+        input_per_mtok:           5.00
+        output_per_mtok:         25.00
+        cache_read_per_mtok:      0.50
+        cache_write_5m_per_mtok:  6.25
+        cache_write_1h_per_mtok: 10.00
+        context_tokens:        1000000
+
+      claude-sonnet-5:
+        input_per_mtok:           2.00
+        output_per_mtok:         10.00
+        cache_read_per_mtok:      0.20
+        cache_write_5m_per_mtok:  2.50
+        cache_write_1h_per_mtok:  4.00
+        context_tokens:        1000000
+
+      claude-haiku-4-5:
+        input_per_mtok:           1.00
+        output_per_mtok:          5.00
+        cache_read_per_mtok:      0.10
+        cache_write_5m_per_mtok:  1.25
+        cache_write_1h_per_mtok:  2.00
+        context_tokens:         200000
+
+  deepseek:
+    # Source: https://api-docs.deepseek.com/quick_start/pricing (checked 2026-08-28)
+    #
+    # TWO STRUCTURAL DIFFERENCES FROM ANTHROPIC — both matter for §4.2:
+    #
+    # 1. NO WRITE PREMIUM. A cache miss simply costs the normal input price;
+    #    there is no extra charge for populating the cache. The penalty term in
+    #    the cache accounting is therefore ZERO for DeepSeek. Caching here is
+    #    almost pure upside — a read costs ~3% of a miss.
+    #
+    # 2. PEAK / OFF-PEAK PRICING — a 2× swing. Off-peak is half of peak.
+    #    Peak windows: 01:00–04:00 and 06:00–10:00 UTC, Monday–Friday.
+    #    The ledger MUST record which rate applied to each call; otherwise the
+    #    same work appears to cost double on alternate days and every trend
+    #    reading is corrupted. See docs/03-telemetry.md.
+    cache_semantics:
+      write_is_premium: false         # a miss is just normal input price
+      read_multiplier: ~0.03          # cache-hit price ÷ cache-miss price
+      # Confirmed 2026-08-28 against a real deepseek-v4-flash call: a repeated
+      # prefix returned input=99, cacheRead=11520, output=44, totalTokens=11663
+      # — exactly 99+11520+44, so `input` already excludes cache-read tokens.
+      # Same convention as Anthropic: cache tokens are alongside, not inside.
+      cache_tokens_inside_input_total: false
+    peak_windows_utc:
+      - days: [mon, tue, wed, thu, fri]
+        ranges: ["01:00-04:00", "06:00-10:00"]
+
+    models:
+      deepseek-v4-flash:
+        peak:
+          input_per_mtok:         0.44   # cache miss
+          cache_read_per_mtok:    0.014  # cache hit
+          output_per_mtok:        1.32
+        off_peak:
+          input_per_mtok:         0.22
+          cache_read_per_mtok:    0.007
+          output_per_mtok:        0.66
+        cache_write_per_mtok:     0.0    # no write premium
+        context_tokens:          1000000
+
+      deepseek-v4-pro:
+        peak:
+          input_per_mtok:         1.32
+          cache_read_per_mtok:    0.044
+          output_per_mtok:        3.96
+        off_peak:
+          input_per_mtok:         0.66
+          cache_read_per_mtok:    0.022
+          output_per_mtok:        1.98
+        cache_write_per_mtok:     0.0
+        context_tokens:          1000000
+
+      deepseek-v4-flash-vision-exp:
+        peak:
+          input_per_mtok:         0.44
+          cache_read_per_mtok:    0.014
+          output_per_mtok:        1.32
+        off_peak:
+          input_per_mtok:         0.22
+          cache_read_per_mtok:    0.007
+          output_per_mtok:        0.66
+        cache_write_per_mtok:     0.0
+        context_tokens:          1000000
+
+  openrouter:
+    # Not yet used. Fill from https://openrouter.ai/models before routing any
+    # call through it — an unpriced model must fail loudly, never default to 0.
+    models: {}
+
+# ---------------------------------------------------------------------------
+# Cost formula (see docs/03-telemetry.md §3)
+#
+#   fresh_input = input_tokens - cache_read_tokens - cache_write_tokens
+#                 ...IF the provider reports cache tokens inside the input
+#                 total. Anthropic reports them alongside, so for Anthropic
+#                 fresh_input = input_tokens. Determine this empirically per
+#                 provider on the first real call and encode it above.
+#
+#   cost = fresh_input      / 1e6 * input_per_mtok
+#        + cache_read       / 1e6 * cache_read_per_mtok
+#        + cache_write      / 1e6 * cache_write_per_mtok
+#        + output_tokens    / 1e6 * output_per_mtok
+#
+# An unknown model or a null price is an ERROR, not a zero. A ledger row that
+# silently costs $0.00 is worse than a missing row.
+# ---------------------------------------------------------------------------

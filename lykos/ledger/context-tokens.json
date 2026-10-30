@@ -1,0 +1,8 @@
+{
+  "anthropic/claude-opus-5": 1000000,
+  "anthropic/claude-sonnet-5": 1000000,
+  "anthropic/claude-haiku-4-5": 200000,
+  "deepseek/deepseek-v4-flash": 1000000,
+  "deepseek/deepseek-v4-pro": 1000000,
+  "deepseek/deepseek-v4-flash-vision-exp": 1000000
+}

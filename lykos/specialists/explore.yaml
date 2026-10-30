@@ -1,0 +1,13 @@
+# Orientation in an unfamiliar codebase. `read_only: true` forbids every write and
+# edit; the surface is read plus bash for search. Feedback and gate are off —
+# nothing is edited, so there is nothing for either to verify.
+description: Explore an unfamiliar codebase — search and read, touch nothing.
+role: subagent
+read_only: true
+tools:
+  - read
+  - bash
+feedback:
+  enabled: false
+gate:
+  enabled: false

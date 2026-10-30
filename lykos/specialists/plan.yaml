@@ -1,0 +1,10 @@
+# Read-only planning. `read_only: true` is the enforcement — reads and read-only
+# commands run, any write or edit is refused by the read-only ceiling — and
+# the tool list is the read/search surface, stated positively (never by
+# subtraction).
+description: Read-only planning — think before changing anything, then stop with a plan.
+role: primary
+read_only: true
+tools:
+  - read
+  - bash

@@ -1,0 +1,12 @@
+# Reviewing somebody else's change. `read_only: true` forbids every write and edit
+# by the read-only ceiling (never by prompt text); the surface is read plus
+# bash so a diff can be read and searched. The verification gate is off —
+# reporting is the work, and nothing is modified to verify.
+description: Review a change without touching it — report findings, never fix them.
+role: subagent
+read_only: true
+tools:
+  - read
+  - bash
+gate:
+  enabled: false

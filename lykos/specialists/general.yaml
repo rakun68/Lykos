@@ -1,0 +1,4 @@
+# General helper for a side task. Can read, edit, and run commands as needed.
+description: General helper for a side task — read, edit, and run commands.
+role: subagent
+read_only: false

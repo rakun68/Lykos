@@ -1,0 +1,6 @@
+# Writes failing tests and stubs for sealed TDD. Commits them without implementing.
+description: Write failing tests and stubs, then commit without implementing.
+role: subagent
+read_only: false
+instructions: |
+  Write failing tests and the stubs they import, ensuring each test fails on an assertion rather than an import or syntax error. Commit the failing tests and stubs once verified. Do not implement the feature.
