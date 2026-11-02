@@ -65,6 +65,21 @@ mode**: one place decides the IO mode, every writer asks it.
 
 ---
 
+## Code quality
+
+**Type every value.** Use the exported type by name, or `unknown` narrowed where it is read. `any`
+is a last resort that carries a comment saying why nothing else compiles.
+
+**Import types at the top of the file.** Type positions name an imported type, never
+`import("x").T`. A runtime `await import()` stays where it defers loading for startup speed.
+
+**Read a dependency's types in `node_modules`** before writing code against it.
+
+**Search before writing a helper.** Extend the existing one; two implementations of one operation
+is a bug even when both work.
+
+---
+
 ## Traps
 
 **A guard that is never given anything to guard is decorative.** When you build a guard, test it

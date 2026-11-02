@@ -79,6 +79,7 @@ export function buildGatedTools(
   gate: ApprovalGate,
   denials?: DenialLog,
   opts: ShellOperationsOpts & { reads?: FileReadRecord | undefined } = {},
+  // `any`: each tool's renderCall takes its own params, so a mixed array fails TS2375 with `ToolDefinition[]`.
 ): ToolDefinition<any, any, any>[] {
   const reads = opts.reads;
   const write = createWriteToolDefinition(cwd, {
