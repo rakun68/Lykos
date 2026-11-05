@@ -230,6 +230,19 @@ The Markdown file a coordinator hands Lykos for one task, in Boxie's format: fro
 files, sealed tests, verification command, scope and issue, and a body that is the brief.
 _Avoid_: ticket file, job spec
 
+**Process identity**:
+A process as the ledger names it: its pid plus the time its record was written while it lived. A live
+process with that pid created after the record is a reused pid, not the recorded process.
+_Avoid_: pid (alone)
+
+**Liveness**:
+Whether a recorded process still runs: `alive`, `dead`, or `unknown` when the OS will not say. Never
+`dead` on a guess.
+
+**Spawn guard**:
+A small process recorded in the ledger before it starts the command it holds. It runs nothing until the
+record is written and kills the command's tree when its parent lets go or dies.
+
 **Failure signature**:
 How a failing run is identified when its runner names no tests: the exit code plus a hash of the
 output with what varies between runs taken out. Two runs of one failure have the same signature.

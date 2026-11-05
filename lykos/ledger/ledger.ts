@@ -281,6 +281,27 @@ export interface SealEventRow {
   detail: string | null;
 }
 
+/** T257: a process a session relies on, recorded while it lives. */
+export interface ProcessRecordInput {
+  kind: string;
+  sessionId?: string | null;
+  pid: number;
+  command: string;
+  /** Epoch ms. Default: now, which is right only while the process lives. */
+  recordedAtMs?: number;
+}
+
+export interface ProcessRecordRow {
+  id: number;
+  kind: string;
+  session_id: string | null;
+  pid: number;
+  recorded_at: string;
+  recorded_at_ms: number;
+  command: string;
+  ended_at: string | null;
+}
+
 export interface RecordCallInput {
   sessionId: string;
   parentCallId?: string;
@@ -699,6 +720,7 @@ function applySchema(db: Database.Database): void {
   migrateRediscoveryAnnotations(db);
   migrateCompactionsTable(db);
   migrateSealEvents(db);
+  migrateProcessRecords(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -855,6 +877,23 @@ function migrateSealEvents(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_seal_events_branch ON seal_events(branch);
     CREATE INDEX IF NOT EXISTS idx_seal_events_session ON seal_events(session_id);
+  `);
+}
+
+/** T257: create `process_records` on a ledger that predates it. */
+function migrateProcessRecords(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS process_records (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind            TEXT NOT NULL,
+      session_id      TEXT,
+      pid             INTEGER NOT NULL,
+      recorded_at     TEXT NOT NULL,
+      recorded_at_ms  INTEGER NOT NULL,
+      command         TEXT NOT NULL,
+      ended_at        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_process_records_session ON process_records(session_id);
   `);
 }
 
@@ -2273,6 +2312,39 @@ export class Ledger {
         paths,
         detail,
       });
+  }
+
+  /** T257: record a process while it lives. Returns the record's id. */
+  recordProcess(input: ProcessRecordInput): number {
+    const ms = input.recordedAtMs ?? Date.now();
+    const res = this.db
+      .prepare(
+        `INSERT INTO process_records (kind, session_id, pid, recorded_at, recorded_at_ms, command)
+         VALUES (@kind, @session_id, @pid, @recorded_at, @recorded_at_ms, @command)`,
+      )
+      .run({
+        kind: input.kind,
+        session_id: input.sessionId ?? null,
+        pid: input.pid,
+        recorded_at: new Date(ms).toISOString(),
+        recorded_at_ms: ms,
+        command: input.command,
+      });
+    return Number(res.lastInsertRowid);
+  }
+
+  /** T257: mark a process record as seen to end. */
+  endProcess(id: number, endedAt: string = new Date().toISOString()): void {
+    this.db.prepare(`UPDATE process_records SET ended_at = ? WHERE id = ? AND ended_at IS NULL`).run(endedAt, id);
+  }
+
+  /** T257: process records, optionally one session's, oldest first. */
+  processRecords(sessionId?: string): ProcessRecordRow[] {
+    const cols = "id, kind, session_id, pid, recorded_at, recorded_at_ms, command, ended_at";
+    if (sessionId !== undefined) {
+      return this.db.prepare(`SELECT ${cols} FROM process_records WHERE session_id = ? ORDER BY id ASC`).all(sessionId) as ProcessRecordRow[];
+    }
+    return this.db.prepare(`SELECT ${cols} FROM process_records ORDER BY id ASC`).all() as ProcessRecordRow[];
   }
 
   /** T195: retrieve seal events, optionally filtered by branch. */

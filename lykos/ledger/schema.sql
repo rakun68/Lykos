@@ -707,6 +707,25 @@ CREATE INDEX IF NOT EXISTS idx_seal_events_branch ON seal_events(branch);
 CREATE INDEX IF NOT EXISTS idx_seal_events_session ON seal_events(session_id);
 
 -- ---------------------------------------------------------------------------
+-- process_records — T257 (ADR-0060): a process a session relies on, recorded
+-- while it lives. Identity is pid plus `recorded_at_ms`: the same process
+-- later is a live process with that pid created before the record.
+-- `kind` names what the process is (`guard` for a spawn guard). `ended_at`
+-- is set when its owner saw it end; NULL means not seen to end.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS process_records (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind            TEXT NOT NULL,
+  session_id      TEXT,
+  pid             INTEGER NOT NULL,
+  recorded_at     TEXT NOT NULL,
+  recorded_at_ms  INTEGER NOT NULL,
+  command         TEXT NOT NULL,
+  ended_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_process_records_session ON process_records(session_id);
+
+-- ---------------------------------------------------------------------------
 -- calls — one row per model call, at any depth
 --
 -- Hop topology (DECISIONS.md, 2026-08-28): orchestrator <-> worker <-> subagent.

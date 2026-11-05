@@ -38,6 +38,8 @@ describe("Ledger", () => {
         "flaky_tests",
         "memory_eligibility",
         "price_versions",
+        // process_records joined on T257: each guard or process a session relies on, recorded before it runs.
+        "process_records",
         "projects",
         // prunes joined on T188: each superseded-read / useless-result prune pass.
         "prunes",
