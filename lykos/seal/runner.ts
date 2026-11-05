@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSy
 import { join, relative } from "node:path";
 import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
 import type { SealAdapter, SealRedTest } from "./types.js";
+import { failureSignature, isCargoTestCommand, parseCargoTestOutput, type FailureSignature } from "./failing-names.js";
 
 const REPORTER_CJS = `
 module.exports = async function* reporter(source) {
@@ -36,6 +37,8 @@ export interface RunSealedTestsResult {
   warnings?: string[] | undefined;
   fileErrors: Map<string, string>;
   rawOutput?: string | undefined;
+  /** Exit-code mode: the exit code and the hash of the normalised output, stable across runs of one failure. */
+  signature?: FailureSignature | undefined;
 }
 
 interface VitestAssertion {
@@ -107,9 +110,13 @@ export interface RunRedCheckResult {
   red: SealRedTest[];
   errors: string[];
   warnings?: string[] | undefined;
+  signature?: FailureSignature | undefined;
 }
 
 export function detectAdapter(template: string): SealAdapter {
+  if (isCargoTestCommand(template)) {
+    return "cargo";
+  }
   if (/\bvitest\b/i.test(template) || template.includes("vitest")) {
     return "vitest";
   }
@@ -257,6 +264,7 @@ async function runExitMode(
     child.once("error", reject);
     child.once("close", (code) => resolve(code));
   });
+  const signature = failureSignature(exitCode, `${stdout}\n${stderr}`, dirsOf(opts.dir));
 
   if (opts.mode === "red") {
     if (exitCode === 0) {
@@ -267,6 +275,7 @@ async function runExitMode(
         errors: ["the test command passed (sealed tests must fail)"],
         fileErrors: new Map(),
         rawOutput: `${stdout}\n${stderr}`,
+        signature,
       };
     }
     return {
@@ -277,6 +286,7 @@ async function runExitMode(
       warnings: ["warning: sealing in exit-code mode; this is a weaker guarantee with no per-test evidence"],
       fileErrors: new Map(),
       rawOutput: `${stdout}\n${stderr}`,
+      signature,
     };
   }
 
@@ -288,6 +298,7 @@ async function runExitMode(
       errors: [`test command failed with exit code ${exitCode}:\n${stderr || stdout}`],
       fileErrors: new Map(),
       rawOutput: `${stdout}\n${stderr}`,
+      signature,
     };
   }
   return {
@@ -297,7 +308,52 @@ async function runExitMode(
     errors: [],
     fileErrors: new Map(),
     rawOutput: `${stdout}\n${stderr}`,
+    signature,
   };
+}
+
+/** The run's directory as given and as resolved, so either spelling is taken out of output. */
+function dirsOf(dir: string): string[] {
+  try {
+    return [dir, realpathSync(dir)];
+  } catch {
+    return [dir];
+  }
+}
+
+/**
+ * cargo test: libtest's per-test lines, attributed to the target cargo announced on stderr. stdout and stderr are
+ * read into one buffer in arrival order for that. `{files}` in the template is replaced as in exit-code mode.
+ */
+async function runCargoMode(opts: RunSealedTestsOptions, testEnv: NodeJS.ProcessEnv): Promise<RunSealedTestsResult> {
+  const quotedFiles = opts.files.map((f) => `"${f}"`).join(" ");
+  const cmd = opts.template.includes("{files}") ? opts.template.replace("{files}", quotedFiles) : opts.template;
+  let merged = "";
+  const child = opts.executor.spawn(cmd, [], { cwd: opts.dir, shell: true, env: testEnv });
+  child.stdout?.on("data", (chunk: Buffer | string) => {
+    merged += chunk.toString();
+  });
+  child.stderr?.on("data", (chunk: Buffer | string) => {
+    merged += chunk.toString();
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code));
+  });
+
+  const [workdir, realDir] = [opts.dir, dirsOf(opts.dir).at(-1)!];
+  const testsByFile = new Map<string, SealedTestResult[]>();
+  for (const t of parseCargoTestOutput(merged)) {
+    const file = mapReportedPath(t.file, opts.files, workdir, realDir);
+    const list = testsByFile.get(file) ?? [];
+    list.push({ ...t, file });
+    testsByFile.set(file, list);
+  }
+  const fileErrors = new Map<string, string>();
+  if (testsByFile.size === 0 && exitCode !== 0) {
+    for (const f of opts.files) fileErrors.set(f.replace(/\\/g, "/"), `cargo test exited ${exitCode} before running any test`);
+  }
+  return validateResults(opts, "cargo", testsByFile, fileErrors, new Map(), merged);
 }
 
 async function runVitestMode(
@@ -651,6 +707,10 @@ export async function runSealedTests(opts: RunSealedTestsOptions): Promise<RunSe
     return runVitestMode(opts, testEnv);
   }
 
+  if (adapter === "cargo") {
+    return runCargoMode(opts, testEnv);
+  }
+
   return runNodeTestMode(opts, testEnv);
 }
 
@@ -680,5 +740,6 @@ export async function runRedCheck(opts: RunRedCheckOptions): Promise<RunRedCheck
     red,
     errors: res.errors,
     ...(res.warnings ? { warnings: res.warnings } : {}),
+    ...(res.signature ? { signature: res.signature } : {}),
   };
 }

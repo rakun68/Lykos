@@ -1,0 +1,65 @@
+   Compiling fx v0.1.0 (C:/work/fx)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.12s
+     Running unittests src\lib.rs (target\debug\deps\fx-af2278f331fb8647.exe)
+
+running 4 tests
+test tests::nested::skipped ... ignored
+test tests::subtracts_zero ... ok
+test tests::nested::deep_failure ... FAILED
+test tests::adds_two ... FAILED
+
+failures:
+
+---- tests::nested::deep_failure stdout ----
+
+thread 'tests::nested::deep_failure' (12700) panicked at src\lib.rs:12:29:
+boom
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::adds_two stdout ----
+
+thread 'tests::adds_two' (10788) panicked at src\lib.rs:7:21:
+assertion `left == right` failed
+  left: 0
+ right: 4
+
+
+failures:
+    tests::adds_two
+    tests::nested::deep_failure
+
+test result: FAILED. 1 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+     Running tests\api.rs (target\debug\deps\api-a244f634deb2dc6a.exe)
+
+running 2 tests
+test api_ok ... ok
+test api_adds ... FAILED
+
+failures:
+
+---- api_adds stdout ----
+
+thread 'api_adds' (18448) panicked at tests\api.rs:2:17:
+assertion `left == right` failed
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    api_adds
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test api`
+   Doc-tests fx
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 2 targets failed:
+    `--lib`
+    `--test api`

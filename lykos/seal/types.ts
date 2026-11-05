@@ -1,4 +1,4 @@
-export type SealAdapter = "node:test" | "vitest" | "exit";
+export type SealAdapter = "node:test" | "vitest" | "cargo" | "exit";
 
 export interface SealRedTest {
   file: string;
@@ -18,6 +18,8 @@ export interface SealFile {
   test_command: string;
   adapter: SealAdapter;
   red: SealRedTest[];
+  /** Exit-code mode only: the red run's exit code and the hash of its normalised output (T251). */
+  red_signature?: { exit: number | null; hash: string } | undefined;
   created_at: string;
   key_id: string;
   signature?: string | undefined;

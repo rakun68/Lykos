@@ -200,6 +200,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
   const worktree = createTemporaryWorktree(cwd, writerCommit, env);
   let redTests: SealRedTest[];
   let adapter: SealAdapter;
+  let redSignature: SealFile["red_signature"];
   let warnings: string[] | undefined;
   let containment: { executor: ProjectExecutor; notice?: string; dispose: () => Promise<void> } | undefined;
   try {
@@ -245,6 +246,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     redTests = checkResult.red;
     adapter = checkResult.adapter;
     warnings = checkResult.warnings;
+    redSignature = checkResult.signature;
   } finally {
     try {
       if (containment) {
@@ -267,6 +269,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     test_command: config.seal.test_command,
     adapter,
     red: redTests,
+    ...(adapter === "exit" && redSignature !== undefined ? { red_signature: redSignature } : {}),
     created_at: new Date().toISOString(),
     key_id: chosenKey.keyId,
   };

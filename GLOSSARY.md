@@ -219,6 +219,11 @@ An implementer's claim that a sealed test is wrong, filed with `dispute_test` in
 decided by the test writer, the orchestrator or a human. An upheld dispute leads to a reseal.
 _Avoid_: test change request, objection, override
 
+**Failure signature**:
+How a failing run is identified when its runner names no tests: the exit code plus a hash of the
+output with what varies between runs taken out. Two runs of one failure have the same signature.
+_Avoid_: fingerprint, output hash (alone)
+
 **Result flag**:
 A named warning a delegated session's result carries about its change (`OUT-OF-SCOPE`, `SENSITIVE`,
 `STAND-IN`, `LEFTOVERS`, `MISREPORT` and others), computed by the harness from git, never by the model.
