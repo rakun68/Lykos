@@ -5,7 +5,8 @@
 import type { CacheGaugeEntry, CacheObservation } from "./cache-gauge.js";
 
 export interface RunTotals {
-  costUsd: number;
+  /** Null while no call is recorded: usage unknown. */
+  costUsd: number | null;
   input: number;
   output: number;
   cacheRead: number;
@@ -159,7 +160,7 @@ export interface ChildSessionView {
 
 export interface ViewModel {
   cost: {
-    runUsd: number;
+    runUsd: number | null;
     todayUsd: number | null;
     capRunUsd: number;
     capDayUsd: number;

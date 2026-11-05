@@ -30,8 +30,8 @@ import { deriveCacheGauge } from "./cache-gauge.js";
 
 const DELEGATE_SILENT_MS = 90_000;
 
-function costAlert(runUsd: number, perRunUsd: number, todayUsd: number | null, perDayUsd: number): Alert | null {
-  const runPct = perRunUsd > 0 ? runUsd / perRunUsd : 0;
+function costAlert(runUsd: number | null, perRunUsd: number, todayUsd: number | null, perDayUsd: number): Alert | null {
+  const runPct = runUsd !== null && perRunUsd > 0 ? runUsd / perRunUsd : 0;
   const dayPct = todayUsd !== null && perDayUsd > 0 ? todayUsd / perDayUsd : 0;
   const pct = Math.max(runPct, dayPct);
   const horizon = runPct >= dayPct ? "run" : "day";

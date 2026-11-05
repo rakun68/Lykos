@@ -17,7 +17,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, wr
 import { dirname, join } from "node:path";
 
 export interface LiveTotals {
-  costUsd: number;
+  /** T238: null while no call is recorded (a session before its ingest): usage unknown, never $0. */
+  costUsd: number | null;
   input: number;
   output: number;
   cacheRead: number;
@@ -53,6 +54,8 @@ export interface LiveSnapshot {
   outcomeSource: string | null;
   totals: LiveTotals;
   lastCall: LiveLastCall | null;
+  /** T238: model turns ended so far, written at each turn end. Absent when nothing counted them. */
+  turns?: number;
 }
 
 export interface TodayRollup {
@@ -105,6 +108,16 @@ export function readLiveSnapshot(ledgerPath: string, sessionId: string): LiveSna
   } catch {
     return null;
   }
+}
+
+/**
+ * T238: records the turn count at a turn end. Only an existing snapshot is updated (the boot row writes the
+ * first one); a missing or unreadable one is a cache miss and nothing is written.
+ */
+export function recordLiveTurns(ledgerPath: string, sessionId: string, turns: number): void {
+  const snap = readLiveSnapshot(ledgerPath, sessionId);
+  if (snap === null) return;
+  writeLiveSnapshot(ledgerPath, { ...snap, turns, heartbeatUtc: new Date().toISOString() });
 }
 
 /** Removes the per-session cache file. Safe to call on an already-removed one. */

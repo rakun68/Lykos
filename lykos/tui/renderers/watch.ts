@@ -68,7 +68,7 @@ function renderNow(vm: ViewModel, theme: ResolvedTheme): string[] {
 }
 
 function renderCost(vm: ViewModel, theme: ResolvedTheme): string[] {
-  const runPct = vm.cost.capRunUsd > 0 ? vm.cost.runUsd / vm.cost.capRunUsd : null;
+  const runPct = vm.cost.runUsd !== null && vm.cost.capRunUsd > 0 ? vm.cost.runUsd / vm.cost.capRunUsd : null;
   const dayPct =
     vm.cost.todayUsd !== null && vm.cost.capDayUsd > 0 ? vm.cost.todayUsd / vm.cost.capDayUsd : null;
   const ascii = theme.glyphs === "ascii";

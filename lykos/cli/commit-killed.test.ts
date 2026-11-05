@@ -30,8 +30,11 @@ describe("commit in a session that dies (T179)", () => {
       assert.equal(rows[0]!.sha, head);
       assert.equal(rows[0]!.subject, "Made before the kill");
       assert.equal(ledger.commits(rows[0]!.session_id as string).length, 1, "and it is listed against the session");
-      // Why the row cannot lean on `sessions`: the killed session never got one.
-      assert.equal((ledger.db.prepare("SELECT COUNT(*) AS n FROM sessions WHERE id = ?").get(rows[0]!.session_id) as { n: number }).n, 0);
+      // T238: the killed session has only the row it wrote at boot, never finalised by an ingest.
+      const session = ledger.db
+        .prepare("SELECT boot_row, total_cost_usd FROM sessions WHERE id = ?")
+        .get(rows[0]!.session_id) as { boot_row: number | null; total_cost_usd: number | null } | undefined;
+      assert.deepEqual(session, { boot_row: 1, total_cost_usd: null });
     } finally {
       ledger.close();
     }

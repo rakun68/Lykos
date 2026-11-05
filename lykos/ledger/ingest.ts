@@ -21,7 +21,7 @@ import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { loadConfig } from "../config/load.js";
 import { resolveCallAccounting } from "../config/providers.js";
 import type { ProvidersConfig } from "../config/types.js";
-import { defaultLedgerPath, Ledger, type ExecutionShape, type Runtime, type SessionModelSource } from "./ledger.js";
+import { defaultLedgerPath, Ledger, type ExecutionShape, type Runtime, type SessionModelSource, type StartSessionInput } from "./ledger.js";
 import { priceCall } from "./prices.js";
 import { formatSessionSummary, loadSessionSummary } from "./summary.js";
 import { estimateTokensChars4, measureToolset, piDefaultBaseline, schemaShareOfPrompt } from "./tool-schema.js";
@@ -576,6 +576,60 @@ export interface IngestOpts {
   liveTranscript?: LiveTranscriptRecorder;
 }
 
+/** The mechanism flags a session row records, from its snapshot. One place for the boot row and ingest. */
+function sessionFlags(snap: DelegateSnapshot): NonNullable<StartSessionInput["flags"]> {
+  return {
+    delegation: true,
+    cacheStableHead: snap.headContract?.enabled === true,
+    proactiveCompaction: snap.compaction?.enabled === true,
+    trimmedToolSurface: matchesDocumentedSurface(snap.activeTools),
+    promptDiet: snap.promptDiet?.enabled === true,
+    outputDiet: snap.outputDiet?.enabled === true,
+    memoryInject: snap.memory?.enabled === true && (snap.memory.injectedIds?.length ?? 0) > 0,
+    // T69: the first writer flag_retrieval has ever had. True only when a
+    // map actually rode the head — "configured on with no map" is not the
+    // arm an on/off comparison wants.
+    retrieval: snap.repoMap?.enabled === true && (snap.repoMap.tokens ?? 0) > 0,
+  };
+}
+
+/**
+ * T238: the session row, written at boot before the session runs anything, so a session killed before its
+ * ingest is still a row: findable, resumable, its usage `unknown` (no `calls` rows, `total_cost_usd` NULL).
+ * Ingest finalises it (`startSession({ upsert })`). A row that already exists (a resume, a parent ensured
+ * for a spawn) is left alone.
+ */
+export function writeBootRow(ledger: Ledger, snap: DelegateSnapshot, opts?: IngestOpts): void {
+  if (ledger.db.prepare(`SELECT 1 AS ok FROM sessions WHERE id = ?`).get(snap.sessionId) !== undefined) return;
+  const isLykosChild = opts?.parentSessionId !== undefined;
+  const identity = resolveIdentity(ledger, opts?.workspace, snap.label ?? "(no brief)", opts);
+  const resumable = opts?.resumable ?? (isLykosChild ? true : undefined);
+  ledger.startSession({
+    id: snap.sessionId,
+    bootRow: true,
+    ...(snap.label !== undefined ? { brief: snap.label } : {}),
+    flags: sessionFlags(snap),
+    agentRole: opts?.agentRole ?? (isLykosChild ? "subagent" : "worker"),
+    model: parseProviderModel(snap.model).model,
+    ...(snap.modelPath !== undefined ? { modelPath: snap.modelPath } : {}),
+    ...(snap.specialist !== undefined ? { specialist: snap.specialist } : {}),
+    ...((opts?.trustSource ?? snap.trustSource) !== undefined ? { trustSource: opts?.trustSource ?? snap.trustSource } : {}),
+    ...(opts?.modelSource !== undefined ? { modelSource: opts.modelSource } : {}),
+    ...(snap.containment !== undefined ? { containment: snap.containment } : {}),
+    ...(opts?.executionShape !== undefined ? { executionShape: opts.executionShape } : isLykosChild ? { executionShape: "subagent" as const } : {}),
+    captureMode: opts?.liveTranscript ? "stream" : "snapshot",
+    runtime: opts?.runtime ?? "container",
+    ...identity,
+    ...(opts?.parentSessionId !== undefined ? { parentSessionId: opts.parentSessionId } : {}),
+    ...(opts?.resumedFrom !== undefined ? { resumedFrom: opts.resumedFrom } : {}),
+    ...(opts?.continuationsUsed !== undefined ? { continuationsUsed: opts.continuationsUsed } : {}),
+    ...(resumable !== undefined ? { resumable } : {}),
+    ...(opts?.notResumableReason !== undefined ? { notResumableReason: opts.notResumableReason } : {}),
+    ...(opts?.workspace !== undefined ? { workspace: opts.workspace } : {}),
+    ...(snap.startedAt !== undefined ? { startedUtc: snap.startedAt } : {}),
+  });
+}
+
 export function ingestDelegateSnapshot(
   ledger: Ledger,
   snap: DelegateSnapshot,
@@ -756,7 +810,19 @@ function ingestSnapshotBody(
         : "cli_delegate");
 
   const sessionBrief = brief ?? (executionShape === "cli_delegate" ? "(delegate)" : null);
-  const identity = resolveIdentity(ledger, opts?.workspace, sessionBrief ?? "(no brief)", opts);
+  // T238: the row this session wrote at boot. Ingest finalises it, on the task the boot row already chose.
+  const bootRow = ledger.db
+    .prepare(`SELECT task_id, project_id FROM sessions WHERE id = ? AND boot_row = 1`)
+    .get(snap.sessionId) as { task_id: string | null; project_id: string | null } | undefined;
+  const identityOpts: IngestOpts | undefined =
+    bootRow !== undefined && opts?.taskId === undefined && opts?.projectId === undefined && (bootRow.task_id ?? bootRow.project_id) !== null
+      ? {
+          ...opts,
+          ...(bootRow.task_id !== null ? { taskId: bootRow.task_id } : {}),
+          ...(bootRow.project_id !== null ? { projectId: bootRow.project_id } : {}),
+        }
+      : opts;
+  const identity = resolveIdentity(ledger, opts?.workspace, sessionBrief ?? "(no brief)", identityOpts);
 
   // T53: declared here, above startSession(), because `capture_mode` is
   // written on the row this function inserts and the transcript decision
@@ -783,6 +849,7 @@ function ingestSnapshotBody(
   // T39: the parent row may already exist (ensured on first Agent spawn).
   // Re-INSERT would violate the PK; skip start and keep the existing identity.
   const sessionAlreadyExists =
+    bootRow === undefined &&
     (ledger.db.prepare(`SELECT 1 AS ok FROM sessions WHERE id = ?`).get(snap.sessionId) as
       | { ok: number }
       | undefined) !== undefined;
@@ -793,21 +860,10 @@ function ingestSnapshotBody(
 
   if (!sessionAlreadyExists) {
     ledger.startSession({
+      ...(bootRow !== undefined ? { upsert: true } : {}),
       id: snap.sessionId,
       ...(sessionBrief !== null ? { brief: sessionBrief } : {}),
-      flags: {
-        delegation: true,
-        cacheStableHead: snap.headContract?.enabled === true,
-        proactiveCompaction: snap.compaction?.enabled === true,
-        trimmedToolSurface: matchesDocumentedSurface(snap.activeTools),
-        promptDiet: snap.promptDiet?.enabled === true,
-        outputDiet: snap.outputDiet?.enabled === true,
-        memoryInject: snap.memory?.enabled === true && (snap.memory.injectedIds?.length ?? 0) > 0,
-        // T69: the first writer flag_retrieval has ever had. True only when a
-        // map actually rode the head — "configured on with no map" is not the
-        // arm an on/off comparison wants.
-        retrieval: snap.repoMap?.enabled === true && (snap.repoMap.tokens ?? 0) > 0,
-      },
+      flags: sessionFlags(snap),
       ...(snap.repoMap
         ? {
             repoMapTokens: snap.repoMap.tokens ?? 0,

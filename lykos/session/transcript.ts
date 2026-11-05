@@ -29,7 +29,7 @@
 // that directly. Documented here rather than silently relabelling it.
 
 import type { ContainmentRecord } from "../containment/containment.js";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, truncateSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
@@ -45,6 +45,12 @@ export interface ToolCallEvent {
   result?: unknown;
   /** T9.4: the same tool call repeated with identical args this many times in a row, collapsed into one line. */
   repeat_count?: number;
+  /**
+   * T238: the runtime's id for this call, on a stream start record. A start carrying one is written the moment
+   * the tool starts, never buffered, so a kill mid-tool leaves the start on disk; its `tool_result` names the
+   * same id. A start with no result is a call whose outcome is unknown.
+   */
+  tool_call_id?: string;
 }
 
 export interface UsageEvent {
@@ -229,6 +235,20 @@ export interface ShakeEvent {
   tokens_saved: number;
 }
 
+/**
+ * T238: the working tree as a resume found it, appended to the resumed session's transcript before the replay.
+ * The earlier session may have been cut off mid-tool; this is what that tool, or anything after it, left behind.
+ */
+export interface RecoveryEvent {
+  kind: "recovery";
+  /** `git status --short` output; absent when git could not answer. */
+  git_status?: string;
+  /** `git diff --stat` output; absent when git could not answer. */
+  diff_stat?: string;
+  /** Tool calls the earlier session started and never finished, by id. */
+  interrupted?: string[];
+}
+
 export interface ErrorEvent {
   kind: "error";
   message: string;
@@ -258,6 +278,7 @@ export type TranscriptEventInput =
   | SelfCompactNoteEvent
   | PruneEvent
   | ShakeEvent
+  | RecoveryEvent
   | ErrorEvent
   | OutcomeEvent;
 
@@ -443,10 +464,37 @@ export class TranscriptWriter {
     this.path = transcriptFilePath(ledgerPath, sessionId);
     this.artifactsDir = join(transcriptDir(ledgerPath, sessionId), "artifacts");
     mkdirSync(dirname(this.path), { recursive: true });
+    this.reopen();
+  }
+
+  /**
+   * T238: a writer opened on a transcript already on disk continues it. A partial trailing record (the process
+   * was killed mid-write) is dropped, so the next line does not land on its end; the turn index and the
+   * artifact numbering continue from what is there, so no artifact is overwritten.
+   */
+  private reopen(): void {
+    if (existsSync(this.path)) {
+      const raw = readFileSync(this.path, "utf8");
+      const end = raw.lastIndexOf("\n") + 1;
+      if (end < raw.length) truncateSync(this.path, Buffer.byteLength(raw.slice(0, end), "utf8"));
+      this.turnIndex = raw.slice(0, end).split("\n").filter((l) => l.length > 0).length;
+    }
+    if (existsSync(this.artifactsDir)) {
+      for (const name of readdirSync(this.artifactsDir)) {
+        const seq = /^(\d+)-/.exec(name)?.[1];
+        if (seq !== undefined) this.artifactSeq = Math.max(this.artifactSeq, Number(seq));
+      }
+    }
   }
 
   append(event: TranscriptEventInput, ts: Date = new Date()): void {
     const tsIso = ts.toISOString();
+    if (event.kind === "tool_call" && event.tool_call_id !== undefined) {
+      // T238: a stream start record goes to disk before the tool runs.
+      this.flushPending();
+      this.writeLine(this.capOversized(event), tsIso);
+      return;
+    }
     if (event.kind === "tool_call") {
       const capped = this.capOversized(event);
       const key = JSON.stringify({ name: capped.name, args: capped.args });
@@ -550,6 +598,19 @@ export function readTranscript(path: string): ReadTranscriptResult {
  * compressed form, and `doctor` reports the same verdict before and after an
  * archive run.
  */
+/**
+ * T238: whether the transcript's first `bytes` bytes are the ones a hash was recorded over. A resume continues
+ * the same transcript, so a resumed run killed before its own ingest leaves a file longer than its last
+ * recorded hash: the recorded part still verifies, and only what follows it is unverified.
+ */
+export function verifyTranscriptPrefix(path: string, expectedSha256: string, bytes: number): boolean {
+  const resolved = resolveTranscriptFile(path);
+  if (!resolved) return false;
+  const buf = readTranscriptBytes(resolved.path);
+  if (buf.length < bytes) return false;
+  return createHash("sha256").update(buf.subarray(0, bytes)).digest("hex") === expectedSha256;
+}
+
 export function verifyTranscriptHash(path: string, expectedSha256: string): boolean {
   const resolved = resolveTranscriptFile(path);
   if (!resolved) return false;

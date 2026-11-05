@@ -15,6 +15,7 @@ import { measureToolset, type ToolSchemaMeasurement } from "./tool-schema.js";
 import type { RiskTier } from "../tools.js";
 import {
   LiveWriteThrottle,
+  readLiveSnapshot,
   writeLiveSnapshot,
   writeTodayRollup,
   type LiveSnapshot,
@@ -84,6 +85,10 @@ export interface SessionFlags {
 
 export interface StartSessionInput {
   id?: string;
+  /** T238: written at boot, before the session runs anything; ingest finalises it. */
+  bootRow?: boolean;
+  /** T238: finalise this session's boot row instead of inserting a new one. */
+  upsert?: boolean;
   taskId?: string;
   brief?: string;
   difficultyEstimate?: number;
@@ -1167,6 +1172,8 @@ function migrateSessionsTable(db: Database.Database): void {
     // L3 (issue #93 item 3): count of unpriced calls for this session.
     // NULL on rows written before L3 (never backfilled).
     ["unpriced_calls", "INTEGER"],
+    // T238: 1 while the row is the one its session wrote at boot; ingest clears it.
+    ["boot_row", "INTEGER"],
   ];
   // T31.1: unlike T25's auth_mode/price_basis (which recordCall() ALWAYS
   // supplies going forward, so an unconditional backfill can never touch a
@@ -1367,6 +1374,12 @@ function gitHead(workspace: string | undefined): string {
   return run.ok ? run.stdout : "unknown";
 }
 
+/** The column names an `INSERT INTO sessions (...) VALUES` statement lists, in order. */
+function sessionInsertColumns(insert: string): string[] {
+  const list = /INSERT INTO sessions \(([^)]*)\) VALUES/.exec(insert)?.[1] ?? "";
+  return list.split(",").map((c) => c.trim()).filter((c) => c.length > 0);
+}
+
 export class Ledger {
   readonly path: string;
   readonly db: Database.Database;
@@ -1413,9 +1426,7 @@ export class Ledger {
 
   startSession(input: StartSessionInput): string {
     const id = input.id ?? randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO sessions (
+    const insert = `INSERT INTO sessions (
            id, task_id, started_utc, harness_commit, brief, difficulty_estimate, notes,
            flag_retrieval, flag_proactive_compaction, flag_routing,
            flag_draft_verify, flag_delegation, flag_cache_stable_head,
@@ -1432,7 +1443,7 @@ export class Ledger {
            closed_utc, deleted_utc, browser_fanout_ms, browser_projects_scanned, browser_rows_returned,
            execution_shape, runtime, capture_mode, archive_state,
            containment_requested, containment_used, container_runtime, container_runtime_version,
-           container_image, container_network, container_mount
+           container_image, container_network, container_mount, boot_row
          ) VALUES (
            @id, @task_id, @started_utc, @harness_commit, @brief, @difficulty_estimate, @notes,
            @flag_retrieval, @flag_proactive_compaction, @flag_routing,
@@ -1450,10 +1461,20 @@ export class Ledger {
            @closed_utc, @deleted_utc, @browser_fanout_ms, @browser_projects_scanned, @browser_rows_returned,
            @execution_shape, @runtime, @capture_mode, 'live',
            @containment_requested, @containment_used, @container_runtime, @container_runtime_version,
-           @container_image, @container_network, @container_mount
-         )`,
-      )
+           @container_image, @container_network, @container_mount, @boot_row
+         )`;
+    // T238: ingest finalises the row its session wrote at boot. Every column the insert names takes ingest's
+    // value, `boot_row` is cleared, and a row that is not a boot row is never touched this way.
+    const sql = input.upsert
+      ? `${insert} ON CONFLICT(id) DO UPDATE SET ${sessionInsertColumns(insert)
+          .filter((c) => c !== "id" && c !== "boot_row")
+          .map((c) => `${c} = excluded.${c}`)
+          .join(", ")}, boot_row = NULL WHERE sessions.boot_row = 1`
+      : insert;
+    this.db
+      .prepare(sql)
       .run({
+        boot_row: input.bootRow === true ? 1 : null,
         id,
         task_id: input.taskId ?? null,
         started_utc: input.startedUtc ?? new Date().toISOString(),
@@ -2648,7 +2669,8 @@ export class Ledger {
         outcome: session.outcome,
         outcomeSource: session.outcome_source,
         totals: {
-          costUsd: totals.costUsd ?? 0,
+          // T238: no call recorded yet is usage unknown, never $0.
+          costUsd: totals.n === 0 ? null : (totals.costUsd ?? 0),
           input: totals.input,
           output: totals.output,
           cacheRead: totals.cacheRead,
@@ -2671,7 +2693,9 @@ export class Ledger {
             }
           : null,
       };
-      writeLiveSnapshot(this.path, snapshot);
+      // T238: the turn count the live session wrote is kept across a refresh.
+      const turns = readLiveSnapshot(this.path, sessionId)?.turns;
+      writeLiveSnapshot(this.path, turns !== undefined ? { ...snapshot, turns } : snapshot);
 
       const today = this.db
         .prepare(

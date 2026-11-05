@@ -57,6 +57,25 @@ export interface ReplayBundle {
   truncatedResults: boolean;
 }
 
+/** T238: what a replay says for a tool call that started and has no result. */
+export const INTERRUPTED_OUTCOME = "interrupted: outcome unknown";
+
+/**
+ * T238: the tool calls a transcript started and never finished, in start order: a start record with an id and
+ * no `tool_result` naming it. A start without an id (before T238, or the snapshot path) is never counted.
+ */
+export function interruptedToolCalls(records: readonly TranscriptRecord[]): Array<{ id: string; name: string }> {
+  const finished = new Set<string>();
+  for (const r of records) if (r.kind === "tool_result" && r.tool_call_id !== undefined) finished.add(r.tool_call_id);
+  const out: Array<{ id: string; name: string }> = [];
+  for (const r of records) {
+    if (r.kind === "tool_call" && r.tool_call_id !== undefined && !finished.has(r.tool_call_id)) {
+      out.push({ id: r.tool_call_id, name: r.name });
+    }
+  }
+  return out;
+}
+
 export const DEFAULT_MAX_TOOL_RESULT_CHARS = 2000;
 export const DEFAULT_MAX_TOOL_ARG_CHARS = 500;
 
@@ -101,6 +120,8 @@ export function buildReplay(
     for (const id of record.tool_call_ids) if (!replaced.has(id)) replaced.set(id, SHAKE_NOTICE);
   }
 
+  const interrupted = new Set(interruptedToolCalls(records).map((c) => c.id));
+
   for (const record of records) {
     switch (record.kind) {
       case "user_message":
@@ -120,7 +141,28 @@ export function buildReplay(
       case "tool_call": {
         const args = record.args === undefined ? "" : ` ${clip(record.args, maxArgs).text}`;
         const repeat = record.repeat_count && record.repeat_count > 1 ? ` (x${record.repeat_count})` : "";
-        lines.push(`[tool] ${record.name}${args}${repeat}`);
+        const id = record.tool_call_id !== undefined ? ` (${record.tool_call_id})` : "";
+        lines.push(`[tool] ${record.name}${id}${args}${repeat}`);
+        events += 1;
+        // T238: no rerun. The call is reported as cut off; the recovery note says what the tree looks like now.
+        if (record.tool_call_id !== undefined && interrupted.has(record.tool_call_id)) {
+          lines.push(`[tool result] ${record.name} (${record.tool_call_id}): ${INTERRUPTED_OUTCOME}`);
+          events += 1;
+        }
+        break;
+      }
+      case "recovery": {
+        const cut = record.interrupted ?? [];
+        const show = (out: string | undefined, empty: string): string =>
+          out === undefined ? "unknown" : out.trim() === "" ? empty : `\n${out.trimEnd()}`;
+        lines.push(
+          [
+            (cut.length > 0 ? `[recovery] the earlier session never finished tool call(s) ${cut.join(", ")}. ` : "[recovery] ") +
+              "The working tree when this session resumed:",
+            `git status --short: ${show(record.git_status, "clean")}`,
+            `git diff --stat: ${show(record.diff_stat, "no changes")}`,
+          ].join("\n"),
+        );
         events += 1;
         break;
       }

@@ -77,7 +77,7 @@ import { resolveGatePolicy, renderGateOutcome, renderGateStart, runSessionGate, 
 export const PLAN_CONTINUE_AUTO = "yes — continue in Auto";
 export const PLAN_CONTINUE_MANUAL = "yes — continue in Manual, approving each step";
 export const PLAN_STAY = "no — keep planning";
-import { transcriptDir } from "./transcript.js";
+import { transcriptDir, type RecoveryEvent } from "./transcript.js";
 import { builtinProviderDecls, cacheModelsPath, generateProviderConfig, specialistModelSpec, resolveBootModel } from "../config/providers.js";
 import { assertHostProviderUsable, assertSpecialistProviderUsable } from "../config/specialist-credentials.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
@@ -92,7 +92,7 @@ import { defaultLedgerPath, openLedger, openLedgerSync, type Ledger } from "../l
 import { deriveSessionName } from "./preview.js";
 import { gitStatus, resolveProject } from "./identity.js";
 import { deleteSessionConversation } from "./mutations.js";
-import { ingestDelegateSnapshot, parseProviderModel, type DelegateSnapshot } from "../ledger/ingest.js";
+import { ingestDelegateSnapshot, parseProviderModel, writeBootRow, type DelegateSnapshot, type IngestOpts } from "../ledger/ingest.js";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createLykosModelRuntime, forwardRotationsToSink, RotationRelay, type Provider } from "./model-runtime.js";
 import {
@@ -1227,6 +1227,11 @@ export interface ResumePlan {
    * — which T56 warns about rather than passing off as inherited.
    */
   tools?: string[];
+  /**
+   * T238: the working tree as the preflight found it, when the earlier run did not end cleanly (killed, or a
+   * tool call with no result). Written after the marker; its text is already in `replayText`.
+   */
+  recovery?: Omit<RecoveryEvent, "kind">;
 }
 
 export interface RunInteractiveStandaloneSessionInput {
@@ -1609,6 +1614,7 @@ export async function injectReplay(
     price_version: plan.priceVersion,
     ...(plan.flags !== undefined ? { inherited_flags: plan.flags } : {}),
   });
+  if (plan.recovery !== undefined) recorder?.recovery(plan.recovery);
   await session.sendCustomMessage?.(
     { customType: "lykos_resume", content: plan.replayText, display: false },
     { triggerTurn: false },
@@ -1625,6 +1631,89 @@ export async function injectReplay(
  * source and a plain stderr writer, because by the time this runs its own
  * `RawLineSource` and the terminal it needed have already been torn down.
  */
+/** What an interactive session's ingest is told, at boot (T238's boot row) and at the end alike. */
+type InteractiveIngestInput = Pick<
+  Parameters<typeof finishInteractiveSession>[0],
+  "booted" | "boot" | "config" | "cwd" | "recorder" | "resume" | "taskId" | "projectId" | "continuation"
+>;
+
+function interactiveIngestOpts(opts: InteractiveIngestInput): IngestOpts {
+  return {
+    workspace: opts.cwd,
+    executionShape: "standalone",
+    runtime: "host",
+    modelSource: opts.boot.source,
+    providers: opts.config.providers,
+    // T57: the resume's task wins over the spawn context's, because
+    // sharing the ORIGINAL's task_id is the clause with the metric
+    // consequence — a task resumed four times is one expensive task, not
+    // four cheap ones.
+    // Precedence, worst-consequence-first: a resume's task wins over an
+    // explicit --task, which wins over a spawn context's. All three are
+    // deliberate statements about which task this session belongs to; the
+    // resume's is the one whose absence would silently split a task.
+    ...(opts.resume?.taskId !== undefined
+      ? { taskId: opts.resume.taskId }
+      : opts.taskId !== undefined
+        ? { taskId: opts.taskId }
+        : opts.booted.spawnContext?.taskId !== undefined
+          ? { taskId: opts.booted.spawnContext.taskId }
+          : {}),
+    ...(opts.resume?.projectId !== undefined
+      ? { projectId: opts.resume.projectId }
+      : opts.projectId !== undefined
+        ? { projectId: opts.projectId }
+        : opts.booted.spawnContext?.projectId !== undefined
+          ? { projectId: opts.booted.spawnContext.projectId }
+          : {}),
+    ...(opts.continuation !== undefined
+      ? {
+          resumedFrom: opts.continuation.predecessorSessionId,
+          continuationsUsed: opts.continuation.index,
+        }
+      : {}),
+    // Item 1: no `resumed_from`. The row this ingest lands on IS the
+    // original — `sessionAlreadyExists` in `ingest.ts` sees it and
+    // updates rather than inserting — so an edge from a session to itself
+    // is neither needed nor meaningful.
+    ...(opts.recorder !== undefined ? { liveTranscript: opts.recorder } : {}),
+  };
+}
+
+/**
+ * T238: the interactive session's row, written once capture has started and before anything runs, so a
+ * session killed before its ingest is a row that can be found and resumed.
+ */
+export async function writeInteractiveBootRow(
+  opts: InteractiveIngestInput & {
+    session: InteractiveSession;
+    state: StandaloneSessionState;
+    model: Awaited<ReturnType<typeof resolveHostModel>>;
+    ledgerPath: string;
+    label?: string;
+  },
+): Promise<void> {
+  const ledger = await openLedger(opts.ledgerPath);
+  try {
+    writeBootRow(
+      ledger,
+      buildStandaloneSnapshot({
+        booted: opts.booted,
+        state: opts.state,
+        sessionId: opts.session.sessionId,
+        label: opts.label,
+        runState: "done",
+        sawError: undefined,
+        modelRef: `${opts.model.provider}/${opts.model.id}`,
+        activeTools: opts.session.getActiveToolNames(),
+      }),
+      interactiveIngestOpts(opts),
+    );
+  } finally {
+    ledger.close();
+  }
+}
+
 export async function finishInteractiveSession(opts: {
   booted: BootedStandaloneSession;
   session: InteractiveSession;
@@ -1714,45 +1803,8 @@ export async function finishInteractiveSession(opts: {
   const ledger = await openLedger(ledgerPath);
   try {
     ingestDelegateSnapshot(ledger, snapshot, {
-      workspace: cwd,
-      executionShape: "standalone",
-      runtime: "host",
-      modelSource: boot.source,
-      providers: config.providers,
-      // T57: the resume's task wins over the spawn context's, because
-      // sharing the ORIGINAL's task_id is the clause with the metric
-      // consequence — a task resumed four times is one expensive task, not
-      // four cheap ones.
-      // Precedence, worst-consequence-first: a resume's task wins over an
-      // explicit --task, which wins over a spawn context's. All three are
-      // deliberate statements about which task this session belongs to; the
-      // resume's is the one whose absence would silently split a task.
-      ...(opts.resume?.taskId !== undefined
-        ? { taskId: opts.resume.taskId }
-        : opts.taskId !== undefined
-          ? { taskId: opts.taskId }
-          : booted.spawnContext?.taskId !== undefined
-            ? { taskId: booted.spawnContext.taskId }
-            : {}),
-      ...(opts.resume?.projectId !== undefined
-        ? { projectId: opts.resume.projectId }
-        : opts.projectId !== undefined
-          ? { projectId: opts.projectId }
-          : booted.spawnContext?.projectId !== undefined
-            ? { projectId: booted.spawnContext.projectId }
-            : {}),
-      ...(opts.continuation !== undefined
-        ? {
-            resumedFrom: opts.continuation.predecessorSessionId,
-            continuationsUsed: opts.continuation.index,
-          }
-        : {}),
-      // Item 1: no `resumed_from`. The row this ingest lands on IS the
-      // original — `sessionAlreadyExists` in `ingest.ts` sees it and
-      // updates rather than inserting — so an edge from a session to itself
-      // is neither needed nor meaningful.
+      ...interactiveIngestOpts(opts),
       ...(loopResult.closeRequested ? { closedUtc: new Date().toISOString() } : {}),
-      ...(opts.recorder !== undefined ? { liveTranscript: opts.recorder } : {}),
     });
     // A CONTINUED session (UI feedback item 1) already had a row, so
     // `startSession()` was skipped and the brief above never landed. A name

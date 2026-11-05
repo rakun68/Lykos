@@ -28,13 +28,16 @@ import type { Ledger } from "../ledger/ledger.js";
 import { priceCall, type PriceCallResult } from "../ledger/prices.js";
 import { estimateTokensChars4 } from "../ledger/tool-schema.js";
 import { currentGitCommit } from "./identity.js";
-import { buildReplay, type ReplayBundle, type TranscriptRecord } from "./replay.js";
+import { hostGit } from "../git/host-git.js";
+import { buildReplay, interruptedToolCalls, type ReplayBundle, type TranscriptRecord } from "./replay.js";
 import {
   readSessionMeta,
   readTranscript,
   resolveTranscriptFile,
   transcriptFilePath,
   verifyTranscriptHash,
+  verifyTranscriptPrefix,
+  type RecoveryEvent,
   type SessionMeta,
 } from "./transcript.js";
 
@@ -85,6 +88,8 @@ export interface ResumePreflight {
   cost?: RebuildCost;
   /** The row and meta the checks were computed from, so a caller need not re-read them. */
   meta?: SessionMeta | null;
+  /** T238: present when the earlier run did not end cleanly. Its text is the last part of `replay`. */
+  recovery?: Omit<RecoveryEvent, "kind">;
 }
 
 export interface PreflightInput {
@@ -115,6 +120,7 @@ interface SessionRow {
   git_dirty: number | null;
   transcript_path: string | null;
   transcript_sha256: string | null;
+  transcript_bytes: number | null;
   ended_utc: string | null;
   execution_shape: string | null;
   parent_session_id: string | null;
@@ -205,7 +211,7 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   const row = ledger.db
     .prepare(
       `SELECT id, model, capture_mode, resumable, not_resumable_reason, git_commit, git_dirty,
-              transcript_path, transcript_sha256, ended_utc, execution_shape, parent_session_id, runtime
+              transcript_path, transcript_sha256, transcript_bytes, ended_utc, execution_shape, parent_session_id, runtime
          FROM sessions WHERE id = ?`,
     )
     .get(sessionId) as SessionRow | undefined;
@@ -274,9 +280,16 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   const rawPath = row.transcript_path ?? transcriptFilePath(ledger.path, row.id);
   const resolved = resolveTranscriptFile(rawPath);
   let records: TranscriptRecord[] = [];
+  // T238: a resumed run killed before its ingest appended to a hashed transcript. The hashed part must still match.
+  const continued =
+    resolved !== null &&
+    row.transcript_sha256 !== null &&
+    row.transcript_bytes !== null &&
+    !verifyTranscriptHash(resolved.path, row.transcript_sha256) &&
+    verifyTranscriptPrefix(resolved.path, row.transcript_sha256, row.transcript_bytes);
   if (!resolved) {
     checks.push({ id: "transcript_integrity", verdict: "refuse", message: `transcript file missing: ${rawPath}` });
-  } else if (row.transcript_sha256 && !verifyTranscriptHash(resolved.path, row.transcript_sha256)) {
+  } else if (row.transcript_sha256 && !continued && !verifyTranscriptHash(resolved.path, row.transcript_sha256)) {
     checks.push({
       id: "transcript_integrity",
       verdict: "refuse",
@@ -298,6 +311,14 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
           id: "transcript_integrity",
           verdict: "warn",
           message: "no recorded hash — this session ended without finalizing (a crash), so integrity is unverified",
+        });
+      } else if (continued) {
+        checks.push({
+          id: "transcript_integrity",
+          verdict: "warn",
+          message:
+            `the first ${row.transcript_bytes} bytes match the recorded hash; what follows is a resumed run that ` +
+            "ended without finalizing (a crash), so that part is unverified",
         });
       } else if (read.truncated) {
         checks.push({
@@ -348,8 +369,18 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   // --- Rebuild cost -------------------------------------------------------
   let replay: ReplayBundle | undefined;
   let cost: RebuildCost | undefined;
+  // T238: the earlier run did not end cleanly, so say what the working tree looks like now. Nothing reruns.
+  let recovery: Omit<RecoveryEvent, "kind"> | undefined;
+  const interrupted = interruptedToolCalls(records).map((c) => c.id);
+  if (records.length > 0 && (row.ended_utc === null || interrupted.length > 0)) {
+    recovery = recoveryState(workspace, interrupted);
+  }
   if (records.length > 0) {
-    replay = buildReplay(row.id, records);
+    const tail: TranscriptRecord[] =
+      recovery !== undefined
+        ? [{ kind: "recovery", ...recovery, ts_utc: now.toISOString(), turn_index: records.length }]
+        : [];
+    replay = buildReplay(row.id, [...records, ...tail]);
     const ref = splitModel(modelSpec);
     const tokens = estimateTokensChars4(replay.text);
     if (ref) {
@@ -457,6 +488,18 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
     ...(replay !== undefined ? { replay } : {}),
     ...(cost !== undefined ? { cost } : {}),
     meta,
+    ...(recovery !== undefined ? { recovery } : {}),
+  };
+}
+
+/** T238: `git status --short` and `git diff --stat` now; a field git could not answer is absent. */
+export function recoveryState(workspace: string, interrupted: readonly string[]): Omit<RecoveryEvent, "kind"> {
+  const status = hostGit(["status", "--short"], workspace);
+  const stat = hostGit(["diff", "--stat"], workspace);
+  return {
+    ...(status.ok ? { git_status: status.stdout } : {}),
+    ...(stat.ok ? { diff_stat: stat.stdout } : {}),
+    ...(interrupted.length > 0 ? { interrupted: [...interrupted] } : {}),
   };
 }
 

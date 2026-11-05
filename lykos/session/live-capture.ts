@@ -43,11 +43,13 @@ import {
   TranscriptWriter,
   writeSessionMeta,
   type CaptureMode,
+  type RecoveryEvent,
   type ResumeEvent,
   type SessionMeta,
   type TranscriptEventInput,
 } from "./transcript.js";
 import { isFileChangingCall, resolveActualToolArgs } from "../tools/tool-call.js";
+import { readLiveSnapshot, recordLiveTurns } from "../ledger/live.js";
 import { SELF_COMPACT_NOTE_TYPE } from "../loop/self-compact.js";
 import { PRUNE_ENTRY_TYPE, prunePartialFromEntry } from "../loop/tool-result-prune.js";
 import { SHAKE_ENTRY_TYPE, shakeRecordFromData } from "../loop/shake.js";
@@ -102,12 +104,15 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
   private toolCallArgs = new Map<string, unknown>();
   /** T146: the next `turn_start`'s number — the same session-wide count the harness writes on checkpoints. */
   private nextTurn = 0;
+  /** T238: turns ended, written to `live.json` at each turn end. A resumed session continues its count. */
+  private turnsEnded: number;
 
   constructor(
     readonly ledgerPath: string,
     readonly sessionId: string,
   ) {
     this.writer = new TranscriptWriter(ledgerPath, sessionId);
+    this.turnsEnded = readLiveSnapshot(ledgerPath, sessionId)?.turns ?? 0;
   }
 
   /**
@@ -155,6 +160,11 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
     this.append({ kind: "resume", ...event });
   }
 
+  /** T238: the working tree a resume found, after the marker and before the replay. */
+  recovery(event: Omit<RecoveryEvent, "kind">): void {
+    this.append({ kind: "recovery", ...event });
+  }
+
   error(message: string): void {
     this.append({ kind: "error", message });
   }
@@ -179,6 +189,10 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
         case "turn_start":
           this.append({ kind: "turn_start", turn: this.nextTurn++ });
           break;
+        case "turn_end":
+          this.turnsEnded += 1;
+          recordLiveTurns(this.ledgerPath, this.sessionId, this.turnsEnded);
+          break;
         case "tool_execution_start": {
           if (ev.toolCallId && ev.toolName) this.toolCallNames.set(ev.toolCallId, ev.toolName);
           if (ev.toolCallId && ev.args !== undefined) this.toolCallArgs.set(ev.toolCallId, ev.args);
@@ -186,6 +200,7 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
             kind: "tool_call",
             name: ev.toolName ?? "(unknown)",
             state: "running",
+            ...(ev.toolCallId !== undefined ? { tool_call_id: ev.toolCallId } : {}),
             ...(ev.args !== undefined ? { args: ev.args } : {}),
           });
           break;

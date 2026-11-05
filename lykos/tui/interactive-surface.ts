@@ -32,6 +32,7 @@ import {
   closeSessionForBrowser,
   createReadlineLineSource,
   injectReplay,
+  writeInteractiveBootRow,
   PLAN_CONTINUE_AUTO,
   PLAN_CONTINUE_MANUAL,
   PLAN_STAY,
@@ -332,6 +333,22 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
       : {}),
   });
 
+  await writeInteractiveBootRow({
+    booted,
+    session,
+    state,
+    model,
+    boot,
+    config,
+    cwd,
+    ledgerPath,
+    ...(input.label !== undefined ? { label: input.label } : {}),
+    ...(recorder !== undefined ? { recorder } : {}),
+    ...(input.resume !== undefined ? { resume: input.resume } : {}),
+    ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+    ...(input.continuation !== undefined ? { continuation: input.continuation } : {}),
+  });
   if (input.resume) await injectReplay(session, recorder, input.resume);
 
   const width = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
@@ -912,6 +929,22 @@ Start carrying this plan out?`,
         : {}),
     });
 
+    await writeInteractiveBootRow({
+      booted,
+      session,
+      state,
+      model,
+      boot,
+      config,
+      cwd,
+      ledgerPath,
+      ...(input.label !== undefined ? { label: input.label } : {}),
+      ...(recorder !== undefined ? { recorder } : {}),
+      ...(input.resume !== undefined ? { resume: input.resume } : {}),
+      ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(input.continuation !== undefined ? { continuation: input.continuation } : {}),
+    });
     if (input.resume) await injectReplay(session, recorder, input.resume);
 
     const headerInfo = {

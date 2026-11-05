@@ -44,7 +44,7 @@ Session payloads live outside SQLite as filesystem artifacts under `.lykos/sessi
 .lykos/sessions/<session-id>/
   meta.json          Session contract (v2): model, agent, task, git commit, dirty flag
   transcript.jsonl   Append-only event stream (user, assistant, turn_start, tool_call, tool_result, usage)
-  live.json          Ephemeral status snapshot updated during active turns
+  live.json          Ephemeral status snapshot: heartbeat, spend (null until a call is recorded), `turns` ended
   tasks.json         The task list as its last change left it, each item with its state
   post-edit.jsonl    One line per post-edit run: command, verdict, exit code, and the text the model saw
   artifacts/         Spilled tool outputs, diffs, and verification artifacts
@@ -62,6 +62,24 @@ Invoking `lykos resume <session-id>` continues the designated session directly:
 2. The transcript is replayed into `createAgentSession` context up to the last turn.
 3. Subsequent turns append new events directly to `transcript.jsonl`.
 4. Subsequent model calls record to the existing session in `.lykos/ledger.db`.
+
+**On disk first (T238).** The session's ledger row is written at boot, before anything runs (the
+*boot row*: model, flags, specialist, model path, execution shape); ingest at the end finalises it on
+the same task. A session killed before its ingest is therefore a row: findable, resumable, its usage
+`unknown` (no `calls` rows, `total_cost_usd` NULL, `live.json` cost null), never $0.
+
+A tool call's start record carries the runtime's `tool_call_id` and is written before the tool runs;
+its `tool_result` names the same id. On resume, a start with no result is replayed as
+`interrupted: outcome unknown`, and nothing reruns by itself. When the earlier run did not end
+cleanly (killed, or a call with no result), a `recovery` event is written after the resume marker:
+`git status --short`, `git diff --stat` and the ids of the interrupted calls. The replay ends with
+the same text.
+
+Reopening a transcript drops a partial trailing record (a process killed mid-write) and continues
+the turn index and the artifact numbering. Because a resume continues the same transcript, a
+resumed run killed before its own ingest leaves the file longer than its recorded hash: the resume
+check verifies the recorded first `transcript_bytes` bytes and warns that what follows is
+unverified. A change inside the hashed part is still refused.
 
 ### 2.2 Turns, Edits and Checkpoints
 A stream transcript marks the start of every model turn with a `turn_start` event whose `turn` is

@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
   total_cost_usd        REAL,
   unpriced_calls        INTEGER,
+  boot_row              INTEGER,
   total_avoided_usd     REAL,                   -- MODELLED, not measured
 
   turns                 INTEGER DEFAULT 0,

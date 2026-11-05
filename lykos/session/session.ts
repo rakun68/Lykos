@@ -99,6 +99,8 @@ import { gitStatus, resolveProject } from "./identity.js";
 import { guardToolCall, recordBudgetTrip, type BudgetVerdict } from "../ledger/budget.js";
 import {
   ingestDelegateSnapshot,
+  writeBootRow,
+  type IngestOpts,
   parseProviderModel,
   type DelegateSnapshot,
   type DelegateToolCall,
@@ -1573,6 +1575,59 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
         }
       : {}),
   });
+  // T238: one set of ingest options for the boot row and the final ingest, so the two describe one session.
+  const ingestOpts: IngestOpts = {
+    workspace: cwd,
+    executionShape,
+    runtime: "host",
+    modelSource: input.modelSource ?? modelBoot.source,
+    providers: config.providers,
+    ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
+    ...(input.continuation !== undefined
+      ? {
+          resumedFrom: input.continuation.predecessorSessionId,
+          continuationsUsed: input.continuation.index,
+        }
+      : {}),
+    ...(input.trustSource !== undefined ? { trustSource: input.trustSource } : {}),
+    ...(input.resume?.taskId !== undefined
+      ? { taskId: input.resume.taskId }
+      : input.taskId !== undefined
+      ? { taskId: input.taskId }
+      : booted.spawnContext?.taskId !== undefined
+        ? { taskId: booted.spawnContext.taskId }
+        : {}),
+    ...(input.resume?.projectId !== undefined
+      ? { projectId: input.resume.projectId }
+      : input.projectId !== undefined
+      ? { projectId: input.projectId }
+      : booted.spawnContext?.projectId !== undefined
+        ? { projectId: booted.spawnContext.projectId }
+        : {}),
+    ...(isChild ? { resumable: true, agentRole: input.agentRole ?? "subagent" } : {}),
+    ...(recorder !== undefined ? { liveTranscript: recorder } : {}),
+  };
+  {
+    const bootLedger = await openLedger(ledgerPath);
+    try {
+      writeBootRow(
+        bootLedger,
+        buildStandaloneSnapshot({
+          booted,
+          state,
+          sessionId: session.sessionId,
+          label: input.label,
+          runState: "done",
+          sawError: undefined,
+          modelRef: `${model.provider}/${model.id}`,
+          activeTools: session.getActiveToolNames(),
+        }),
+        ingestOpts,
+      );
+    } finally {
+      bootLedger.close();
+    }
+  }
   if (input.resume !== undefined) {
     // T57's `injectReplay`, for this shape: the marker first, then the
     // conversation appended after the frozen head without starting a turn.
@@ -1585,6 +1640,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
       price_version: input.resume.priceVersion,
       ...(input.resume.flags !== undefined ? { inherited_flags: input.resume.flags } : {}),
     });
+    if (input.resume.recovery !== undefined) recorder?.recovery(input.resume.recovery);
     await session.sendCustomMessage(
       { customType: "lykos_resume", content: input.resume.replayText, display: false },
       { triggerTurn: false },
@@ -1701,37 +1757,7 @@ ${decision.note}
 
   const ledger = await openLedger(ledgerPath);
   try {
-    ingestDelegateSnapshot(ledger, snapshot, {
-      workspace: cwd,
-      executionShape,
-      runtime: "host",
-      modelSource: input.modelSource ?? modelBoot.source,
-      providers: config.providers,
-      ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
-      ...(input.continuation !== undefined
-        ? {
-            resumedFrom: input.continuation.predecessorSessionId,
-            continuationsUsed: input.continuation.index,
-          }
-        : {}),
-      ...(input.trustSource !== undefined ? { trustSource: input.trustSource } : {}),
-      ...(input.resume?.taskId !== undefined
-        ? { taskId: input.resume.taskId }
-        : input.taskId !== undefined
-        ? { taskId: input.taskId }
-        : booted.spawnContext?.taskId !== undefined
-          ? { taskId: booted.spawnContext.taskId }
-          : {}),
-      ...(input.resume?.projectId !== undefined
-        ? { projectId: input.resume.projectId }
-        : input.projectId !== undefined
-        ? { projectId: input.projectId }
-        : booted.spawnContext?.projectId !== undefined
-          ? { projectId: booted.spawnContext.projectId }
-          : {}),
-      ...(isChild ? { resumable: true, agentRole: input.agentRole ?? "subagent" } : {}),
-      ...(recorder !== undefined ? { liveTranscript: recorder } : {}),
-    });
+    ingestDelegateSnapshot(ledger, snapshot, ingestOpts);
   } finally {
     ledger.close();
   }

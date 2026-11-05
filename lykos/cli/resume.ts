@@ -170,6 +170,7 @@ export function planFromPreflight(
     estimateUsd: pre.cost?.usd ?? null,
     priceVersion: pre.cost?.priceVersion ?? null,
     flags: { promptDiet: flags.promptDiet, outputDiet: flags.outputDiet, overridden: flags.overridden },
+    ...(pre.recovery !== undefined ? { recovery: pre.recovery } : {}),
   };
 }
 

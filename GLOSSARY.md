@@ -230,6 +230,16 @@ The Markdown file a coordinator hands Lykos for one task, in Boxie's format: fro
 files, sealed tests, verification command, scope and issue, and a body that is the brief.
 _Avoid_: ticket file, job spec
 
+**Boot row**:
+A session's ledger row written at boot, before the session runs anything. Ingest finalises it. A row
+still marked as one is a session killed before its ingest: its usage is unknown, never $0.
+
+**Recovery event**:
+The transcript line a resume writes when the earlier run did not end cleanly: the working tree's
+status and diff stat, and the tool calls that started and never finished. Those calls replay as
+`interrupted: outcome unknown`; none reruns by itself.
+_Avoid_: retry, rerun
+
 **Process identity**:
 A process as the ledger names it: its pid plus the time its record was written while it lived. A live
 process with that pid created after the record is a reused pid, not the recorded process.
