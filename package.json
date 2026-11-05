@@ -20,7 +20,7 @@
   "dependencies": {
     "@ast-grep/napi": "0.45.3",
     "@earendil-works/pi-coding-agent": "0.84.3",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@mozilla/readability": "0.6.0",
     "better-sqlite3": "^13.0.3",
     "linkedom": "0.18.13",
@@ -29,7 +29,7 @@
     "vscode-jsonrpc": "9.0.2",
     "vscode-languageserver-protocol": "3.18.3",
     "yaml": "^2.7.0",
-    "zod": "^4.5.2"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
