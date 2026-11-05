@@ -372,6 +372,16 @@ export interface McpConfig {
   warm_pool?: number;
 }
 
+/** P18: driving Lykos on a task from a coordinator. */
+export interface DelegationConfig {
+  /**
+   * T231: the project's filtered test command for a task, when the task file names no `test:`. `{files}` stands
+   * for the task's test files, `{tests}` for Gradle `--tests` filters of its Java tests, `{dirs}` for their
+   * directories. Empty: no command; a task without `test:` then has none, never a guessed one.
+   */
+  test_command?: string;
+}
+
 /**
  * T105: a deterministic policy as a command rather than as prompt text.
  * `event` is one of session_start / turn_start / pre_tool / post_tool /
@@ -597,6 +607,8 @@ export interface ConfigFile {
   containment?: ContainmentConfig;
   /** T223: MCP worker settings. */
   mcp?: McpConfig;
+  /** P18: delegation settings. */
+  delegation?: DelegationConfig;
   /** T210: path access rules determining allow | ask | deny per path (ADR-0042). */
   path_rules?: RawPathRules;
   /**
@@ -711,6 +723,7 @@ export interface ResolvedConfig {
   containment: Required<ContainmentConfig>;
   /** T223. MCP worker settings. Always resolved. */
   mcp: Required<McpConfig>;
+  delegation: Required<DelegationConfig>;
   /** T210 (ADR-0042). Path rules kept per layer ({ global, project }) so source and trust survive. */
   path_rules: { global: RawPathRules; project: RawPathRules };
   /** T105. Empty by default: the built-in policies are code, not config. */

@@ -331,6 +331,9 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
     ask_timeout: DEFAULT_MCP_ASK_TIMEOUT,
     warm_pool: DEFAULT_MCP_WARM_POOL,
   },
+  delegation: {
+    test_command: "",
+  },
   // T210 (ADR-0042): path rules default to empty sets of read and write rules per layer.
   path_rules: {
     global: {},

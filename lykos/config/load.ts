@@ -31,6 +31,7 @@ import type {
   FlagsConfig,
   LspConfig,
   McpConfig,
+  DelegationConfig,
   MemoryConfig,
   ModelsConfig,
   ProvidersConfig,
@@ -316,6 +317,7 @@ function applyLayer(current: ResolvedConfig, layer: ConfigFile): ResolvedConfig 
     containment: mergeSection(current.containment, layer.containment as Required<ContainmentConfig> | undefined),
     // T223: MCP worker settings.
     mcp: mergeSection(current.mcp, layer.mcp as Required<McpConfig> | undefined),
+    delegation: mergeSection(current.delegation, layer.delegation as Required<DelegationConfig> | undefined),
     path_rules: current.path_rules,
     // T105: replace, never merge — same rule as `extensions:` above, because
     // the order is the authority.
@@ -523,6 +525,30 @@ function validateMcpConfig(layer: ConfigLayer): void {
   }
 }
 
+const VALID_DELEGATION_KEYS = new Set(["test_command"]);
+
+function validateDelegationConfig(layer: ConfigLayer): void {
+  const val = layer.value as Record<string, unknown>;
+  if (!Object.hasOwn(val, "delegation")) return;
+  const delegation = val.delegation;
+  if (delegation === undefined || delegation === null) return;
+  const where = layer.path !== undefined ? ` in ${layer.path}` : ` in the ${layer.name} layer`;
+  if (typeof delegation !== "object" || Array.isArray(delegation)) {
+    throw new Error(`lykos config: delegation must be an object${where}`);
+  }
+  for (const k of Object.keys(delegation as Record<string, unknown>)) {
+    if (!VALID_DELEGATION_KEYS.has(k)) {
+      throw new Error(
+        `lykos config: unknown key "${k}" in delegation (allowed: ${Array.from(VALID_DELEGATION_KEYS).join(", ")})${where}`,
+      );
+    }
+  }
+  const d = delegation as DelegationConfig;
+  if (d.test_command !== undefined && typeof d.test_command !== "string") {
+    throw new Error(`lykos config: delegation.test_command must be a string${where}`);
+  }
+}
+
 export function detectDefaultBase(cwd: string): string {
   try {
     const originHead = execFileSync("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], {
@@ -670,6 +696,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     if (modeProb !== undefined) throw new Error(`lykos config: ${modeProb}`);
     validateSealConfig(layer);
     validateMcpConfig(layer);
+    validateDelegationConfig(layer);
     resolved = applyLayer(resolved, layer.name === "global" ? globalImageApart(layer.value) : layer.value);
   }
   const globalLayer = layers.find((l) => l.name === "global");

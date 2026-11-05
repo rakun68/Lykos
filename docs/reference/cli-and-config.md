@@ -549,6 +549,14 @@ mcp:
   warm_pool: 2                # Pre-spawned session-child processes per workspace and trust source (default: 2; 0 disables; costs K idle node processes per workspace and trust source)
                               # Measured 2026-10-26, Windows host, built dist, Node 24.11.1, 30 s idle, 6 children: 126.5-127.6 MB working set, 94.9-96.4 MB private each
 
+# Driving Lykos on a task from a coordinator (P18)
+delegation:
+  test_command: ""            # T231: a task's filtered test command when its task file names no `test:`.
+                              # {files} = the task's sealed files and the test files among `files`;
+                              # {tests} = Gradle `--tests` filters of its Java tests; {dirs} = their directories.
+                              # e.g. "./gradlew :app:test {tests}". Empty: a task without `test:` has no command;
+                              # one is never guessed from file names or the project's layout (R10).
+
 # Terminal user interface
 ui:
   theme: "sky"                # "sky" | "mono" | "rose-pine" | "nord" | ...
@@ -628,6 +636,26 @@ The on-screen line says when a rerun happened and names the flaky tests. A flaky
 written from, a directory covering every file under it); an edit made through `bash` is not in them.
 
 ---
+
+### 3.1a Task files (T231)
+
+A coordinator hands Lykos a task as Boxie's task file, unchanged: Markdown with optional YAML
+frontmatter. The body is the brief.
+
+| Key | Type | |
+| --- | --- | --- |
+| `files` | list | Paths the task is about. A new file beside one of them, or a test of one, counts as in scope. |
+| `areas` | list | Boxie's context-map areas. Parsed and kept; Lykos does not use them yet. |
+| `sealed` | list | Test files the session may not edit. |
+| `test` | string | The exact verification command the session may run. |
+| `scope` | list | More globs the session may change; a changed file outside them is flagged `OUT-OF-SCOPE`. |
+| `red` | boolean | `false` skips the check that sealed tests fail on the base. Default `true`. |
+| `steps` | positive integer | The step cap. |
+| `issue` | `N`, `#N`, `owner/repo#N`, or a list | Fetched on the host with `gh issue view`: the issue with its comments (newest kept, up to 12,000 characters), the issue its `Spec: #N` (or `Parent: #N`, `Parent issue: #N`, or `## Parent` heading) line names **whole**, never cut (R17), and up to six other issues it cites, each cut to 1,500 characters. A failed fetch of the issue or its spec stops the task. |
+
+A key of the wrong type, or frontmatter that is not a YAML mapping, is an error. An unknown key is a
+warning and is ignored, as in Boxie. The verification command is the task's `test:`, else
+`delegation.test_command` filled with the task's test files, else none (R10).
 
 ### 3.2 Sealed TDD configuration (T195)
 

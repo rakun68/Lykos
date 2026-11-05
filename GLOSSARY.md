@@ -219,6 +219,11 @@ An implementer's claim that a sealed test is wrong, filed with `dispute_test` in
 decided by the test writer, the orchestrator or a human. An upheld dispute leads to a reseal.
 _Avoid_: test change request, objection, override
 
+**Task file**:
+The Markdown file a coordinator hands Lykos for one task, in Boxie's format: frontmatter naming its
+files, sealed tests, verification command, scope and issue, and a body that is the brief.
+_Avoid_: ticket file, job spec
+
 **Failure signature**:
 How a failing run is identified when its runner names no tests: the exit code plus a hash of the
 output with what varies between runs taken out. Two runs of one failure have the same signature.

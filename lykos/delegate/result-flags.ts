@@ -94,6 +94,11 @@ const STAND_IN =
 
 const TEST_NAME = /(\.(test|spec)\.[cm]?[jt]sx?|Test\.java|_test\.\w+|^test_[^/]*\.py)$/;
 
+/** A test file by its base name: `*.test.ts`, `*.spec.js`, `FooTest.java`, `foo_test.go`, `test_foo.py`. */
+export function isTestFileName(path: string): boolean {
+  return TEST_NAME.test(posix.basename(path.replace(/\\/g, "/")));
+}
+
 /** A test file's subject: `foo.test.ts`, `FooTest.java`, `foo_test.go` and `test_foo.py` are about `foo`/`Foo`. */
 function stem(path: string): string {
   return posix
