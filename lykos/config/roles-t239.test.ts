@@ -38,10 +38,8 @@ describe("T239: each role runs as a specialist on its Boxie model", () => {
       const spec = resolveSpecialist(role, cwd, globalDir);
       assert.equal(spec.file.model, undefined, "the file names no model of its own, so its role's applies");
       const { resolved } = loadConfig({ cwd, globalDir, env: {} });
-      const boot = resolveBootModel({
-        defaultModel: resolved.models.default,
-        ...(sessionRoleModel(resolved.models.roles, role) !== undefined ? { roleModel: sessionRoleModel(resolved.models.roles, role)! } : {}),
-      });
+      const roleModel = sessionRoleModel(resolved.models.roles, role);
+      const boot = resolveBootModel({ defaultModel: resolved.models.default, ...(roleModel !== undefined ? { roleModel } : {}) });
       assert.equal(boot.spec, BOXIE[role]);
       assert.ok(resolved.models.roles[`${role}-alt`], `${role} has an alternate`);
     });

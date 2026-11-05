@@ -572,8 +572,7 @@ export const COMMANDS: readonly Command[] = [
       const { runConfigRoles } = await import("./config-show.js");
       const [sub] = rest;
       if (sub === "roles") return runConfigRoles(cwd, rest.includes("--json"));
-      process.stderr.write(`lykos config: unknown subcommand "${sub ?? ""}". Use "roles [--json]".
-`);
+      process.stderr.write(`lykos config: unknown subcommand "${sub ?? ""}". Use "roles [--json]".\n`);
       return 1;
     },
   },

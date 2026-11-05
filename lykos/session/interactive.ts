@@ -1496,11 +1496,12 @@ export async function runInteractiveStandaloneSession(
   // layers — `runStandaloneTask`'s own seam (`session.ts`'s `specialistModel`),
   // mirrored here rather than left dormant.
   const specialistModel = specialistModelSpec(config);
+  const roleModel = sessionRoleModel(config.models.roles, input.specialist);
   const boot = resolveBootModel({
     ...(input.model !== undefined ? { callerModel: input.model } : {}),
     ...(specialistModel !== undefined ? { specialistModel } : {}),
     defaultModel: config.models.default,
-    ...(sessionRoleModel(config.models.roles, input.specialist) !== undefined ? { roleModel: sessionRoleModel(config.models.roles, input.specialist)! } : {}),
+    ...(roleModel !== undefined ? { roleModel } : {}),
   });
   const modelSpec = boot.spec;
 

@@ -1301,11 +1301,12 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   // seam (`specialistModel`) reserved since T35.3; nothing consumed it before
   // now.
   const specialistModel = specialistModelSpec(config);
+  const roleModel = sessionRoleModel(config.models.roles, specialist);
   const modelBoot = resolveBootModel({
     ...(input.model !== undefined ? { callerModel: input.model } : {}),
     ...(specialistModel !== undefined ? { specialistModel } : {}),
     defaultModel: config.models.default,
-    ...(sessionRoleModel(config.models.roles, specialist) !== undefined ? { roleModel: sessionRoleModel(config.models.roles, specialist)! } : {}),
+    ...(roleModel !== undefined ? { roleModel } : {}),
   });
   const modelSpec = modelBoot.spec;
 
