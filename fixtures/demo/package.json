@@ -1,0 +1,9 @@
+{
+  "name": "lykos-demo-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "slow-check": "node scripts/slow-check.js"
+  }
+}

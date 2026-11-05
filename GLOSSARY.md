@@ -243,6 +243,12 @@ Whether a recorded process still runs: `alive`, `dead`, or `unknown` when the OS
 A small process recorded in the ledger before it starts the command it holds. It runs nothing until the
 record is written and kills the command's tree when its parent lets go or dies.
 
+**Demonstration fixture**:
+The small repository in `fixtures/demo/` the P18 demonstration runs on, with a planted bug its sealed
+tests miss and its spec forbids. Its answer key, `fixtures/demo.KEY.md`, stays outside the copy an
+agent is given.
+_Avoid_: test repo, sample project
+
 **Failure signature**:
 How a failing run is identified when its runner names no tests: the exit code plus a hash of the
 output with what varies between runs taken out. Two runs of one failure have the same signature.
