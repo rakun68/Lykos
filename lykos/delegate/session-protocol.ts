@@ -70,6 +70,13 @@ export interface SessionRequest {
   specialist?: string;
   /** The starting branch for a new worktree. Ignored when continuing a session (sessionId). */
   base?: string;
+  /** The most model turns the session may take before it stops (T250). A positive integer. */
+  maxSteps?: number;
+  /**
+   * The caller's id for this request (T250). A cycle sets it to its cycle id plus step id, so a step that ran is
+   * never run twice.
+   */
+  requestId?: string;
 }
 
 export type { CommitSummary } from "../git/worktree.js";
@@ -105,14 +112,31 @@ export type NextToken =
   | "resolve_test_dispute"
   | "continue_with_failure"
   | "run_verification"
-  | "fix_environment";
+  | "fix_environment"
+  | "approve"
+  | "answer_spec"
+  | "triage"
+  | "decide"
+  | "resume"
+  | "recover";
 
-export type ResultFlagKind = "OUT-OF-SCOPE" | "MISREPORT";
+export type ResultFlagKind =
+  | "OUT-OF-SCOPE"
+  | "MISREPORT"
+  | "SEALED-EDIT"
+  | "REVIEW-EDIT"
+  | "WEAK-SPEC"
+  | "LEFTOVERS"
+  | "STAND-IN"
+  | "SENSITIVE"
+  | "SAME-FAMILY";
 
 export interface SessionFlag {
   flag: ResultFlagKind;
   detail: string;
   files?: string[];
+  /** The session that caused it. */
+  session?: string;
 }
 
 export interface SessionDispute {
@@ -359,5 +383,7 @@ export function parseRequest(line: string): SessionRequest | undefined {
   if (v.version !== PROTOCOL_VERSION) return undefined;
   if (v.newSessionId !== undefined && typeof v.newSessionId !== "string") return undefined;
   if (typeof v.workspace !== "string" || typeof v.prompt !== "string" || typeof v.tool !== "string" || typeof v.label !== "string") return undefined;
+  if (v.maxSteps !== undefined && !(typeof v.maxSteps === "number" && Number.isInteger(v.maxSteps) && v.maxSteps > 0)) return undefined;
+  if (v.requestId !== undefined && (typeof v.requestId !== "string" || v.requestId === "")) return undefined;
   return v as SessionRequest;
 }

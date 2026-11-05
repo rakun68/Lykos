@@ -33,7 +33,7 @@ import { readTranscript, transcriptFilePath, type TranscriptEventInput, type Tra
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
 import { sealCreate } from "../seal/create.js";
 import { createTemporaryWorktree, getBranchOrNull, gitExec, resolveRef } from "../seal/git.js";
-import { matchAnyGlob } from "../seal/matcher.js";
+import { addedLines, changeFlags, parseNameStatus, type ChangedPath } from "./result-flags.js";
 import { verifySeals } from "../seal/verify.js";
 import { ensureWorkspaceTrust } from "../gate/trust.js";
 import { stderrWrite } from "../tui/io-mode.js";
@@ -114,6 +114,7 @@ const TaskInputShape = {
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
   model: z.string().optional().describe('Model override, e.g. "deepseek/deepseek-v4-pro". Defaults to the configured model.'),
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
+  max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -136,6 +137,7 @@ const StartInputShape = {
   brief: z.string().min(1).describe("The task to delegate: a specific, self-contained brief."),
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
+  max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -172,6 +174,7 @@ const SpecialistInputShape = {
   brief: z.string().min(1).describe("The task to delegate: a specific, self-contained brief."),
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
+  max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -227,6 +230,7 @@ type TaskInput = {
   constraints?: string | undefined;
   model?: string | undefined;
   budget?: number | undefined;
+  max_steps?: number | undefined;
   containment?: ContainmentChoice | undefined;
   session_id?: string | undefined;
   write_in_place?: boolean | undefined;
@@ -785,7 +789,9 @@ async function buildSessionOutcomeResult(
 
     const sessionWroteInPlace = !isEffectiveReadOnly && ((outcome && "write_in_place" in outcome && outcome.write_in_place === true) || (request.writeInPlace === true && !outcome?.branch));
     let diffStat: DiffStat | undefined;
-    let changedFiles: string[] = [];
+    let changedPaths: ChangedPath[] = [];
+    let addedDiffLines: string[] = [];
+    const removedLines = new Map<string, number>();
     if (outcome?.branch || sessionWroteInPlace) {
       const baseForDiff = sessionWroteInPlace ? headAtStart : diffBase;
       if (baseForDiff) {
@@ -813,12 +819,12 @@ async function buildSessionOutcomeResult(
         try {
           const branchTargetForFiles =
             writerTipSha !== undefined ? writerTipSha : outcome?.branch;
-          const nameArgs = branchTargetForFiles
-            ? ["-c", "core.quotepath=false", "diff", "--name-only", `${baseForDiff}..${branchTargetForFiles}`]
-            : ["-c", "core.quotepath=false", "diff", "--name-only", baseForDiff];
-          const nameOut = gitExec(nameArgs, workspace).trim();
-          if (nameOut) {
-            changedFiles = nameOut.split("\n").map((s) => s.trim().replace(/\\/g, "/")).filter(Boolean);
+          const range = branchTargetForFiles ? [`${baseForDiff}..${branchTargetForFiles}`] : [baseForDiff];
+          changedPaths = parseNameStatus(gitExec(["-c", "core.quotepath=false", "diff", "--name-status", "--no-renames", ...range], workspace));
+          addedDiffLines = addedLines(gitExec(["diff", "-U0", "--no-renames", ...range], workspace));
+          for (const line of gitExec(["-c", "core.quotepath=false", "diff", "--numstat", "--no-renames", ...range], workspace).split("\n")) {
+            const [, del, file] = line.replace(/\r$/, "").split("\t");
+            if (file !== undefined) removedLines.set(file, del === "-" ? 1 : Number(del));
           }
         } catch {}
       }
@@ -846,15 +852,17 @@ async function buildSessionOutcomeResult(
     const isRefused = finalOutcome === "error" && !hasEndedSession;
     const flags: SessionFlag[] = [];
     if (!isRefused) {
-      if (scope !== undefined && scope.length > 0 && changedFiles.length > 0) {
-        const outOfScope = changedFiles.filter((f) => !matchAnyGlob(f, scope));
-        if (outOfScope.length > 0) {
-          flags.push({
-            flag: "OUT-OF-SCOPE",
-            detail: `${outOfScope.length} changed file${outOfScope.length === 1 ? "" : "s"} outside scope: ${outOfScope.join(", ")}`,
-            files: outOfScope,
-          });
-        }
+      if (!isEffectiveReadOnly) {
+        flags.push(
+          ...changeFlags({
+            ...(targetSessionId !== undefined ? { sessionId: targetSessionId } : {}),
+            changed: changedPaths,
+            added: addedDiffLines,
+            commits,
+            ...(scope !== undefined ? { scope } : {}),
+            removedLines,
+          }),
+        );
       }
 
       const GREEN_OVER_RED_PATTERNS = [
@@ -898,6 +906,7 @@ async function buildSessionOutcomeResult(
         flags.push({
           flag: "MISREPORT",
           detail: misreportReasons.join("; "),
+          ...(targetSessionId !== undefined ? { session: targetSessionId } : {}),
         });
       }
     }
@@ -1124,6 +1133,7 @@ async function startTrackedSession(
     ...(args.base !== undefined && args.session_id === undefined ? { base: args.base } : {}),
     ...(def.isAlias && args.model !== undefined ? { model: args.model } : {}),
     ...(args.budget !== undefined ? { budgetUsd: args.budget } : {}),
+    ...(args.max_steps !== undefined ? { maxSteps: args.max_steps } : {}),
     ...(args.containment !== undefined ? { containment: args.containment } : {}),
     ...(args.session_id !== undefined ? { sessionId: args.session_id } : (newSessionId !== undefined ? { newSessionId } : {})),
     ...(args.write_in_place !== undefined ? { writeInPlace: args.write_in_place } : {}),

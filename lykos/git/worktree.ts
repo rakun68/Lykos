@@ -26,6 +26,13 @@ import { hostGit, probeGit, type GitRun } from "./host-git.js";
 export const BRANCH_PREFIX = "lykos/";
 
 /** The branch a session's work is on. */
+/** The subject of the commit that saves a session's uncommitted changes when its worktree is released. */
+export const LEFTOVER_SUBJECT_PREFIX = "lykos: work left uncommitted when session ";
+
+export function leftoverSubject(sessionId: string): string {
+  return `${LEFTOVER_SUBJECT_PREFIX}${sessionId} ended`;
+}
+
 export function branchOf(sessionId: string): string {
   return `${BRANCH_PREFIX}${sessionId}`;
 }
@@ -334,7 +341,7 @@ function finish(path: string, workspace: string, sessionId: string, archiveBase:
   let savedUncommitted = false;
   let saved: ReleaseResult["saved"];
   let note: string | undefined;
-  const subject = `lykos: work left uncommitted when session ${sessionId} ended`;
+  const subject = leftoverSubject(sessionId);
   const dirty = hostGit(["status", "--porcelain", "--untracked-files=all"], path);
   if (dirty.ok && dirty.stdout !== "") {
     const staged = hostGit(["add", "-A"], path);

@@ -16,7 +16,8 @@ import { defaultLedgerPath, openLedger } from "../ledger/use.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { stderrWrite } from "../tui/io-mode.js";
-import { recordWork, rootSessionOf, withWorkTarget, workFields, type WorkReport } from "../delegate/work-target.js";
+import { joinNotes, recordWork, rootSessionOf, withWorkTarget, workFields, type WorkReport } from "../delegate/work-target.js";
+import { stepCapNote, watchStepCap, type StepCappable } from "../delegate/step-cap.js";
 import { runStandaloneTask, type RunStandaloneTaskInput, type RunStandaloneTaskResult } from "../session/session.js";
 import {
   encodeFrame,
@@ -200,7 +201,10 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
     });
   };
 
+  let stepCapped = false;
   const onSessionCreated = (session: unknown): void => {
+    const cap = request?.maxSteps;
+    if (cap !== undefined) watchStepCap(session as StepCappable, cap, () => { stepCapped = true; });
     steerChain = steerChain.then(async () => {
       activeAgentSession = session as { steer: (msg: string) => Promise<void> };
       while (pendingSteers.length > 0) {
@@ -250,17 +254,18 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
     progressIntervalFromEnv(env),
   );
   try {
+    const result = await runRequest(
+      request,
+      deps,
+      env,
+      (message) => send({ type: "progress", message }),
+      onSessionCreated,
+      coordinator,
+      () => givenUpQuestion,
+    );
     send({
       type: "result",
-      result: await runRequest(
-        request,
-        deps,
-        env,
-        (message) => send({ type: "progress", message }),
-        onSessionCreated,
-        coordinator,
-        () => givenUpQuestion,
-      ),
+      result: stepCapped && request.maxSteps !== undefined ? { ...result, note: joinNotes(result.note, stepCapNote(request.maxSteps))! } : result,
     });
   } catch (err) {
     send({ type: "result", result: { outcome: "error", message: err instanceof Error ? err.message : String(err) } });

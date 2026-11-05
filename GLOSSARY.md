@@ -219,6 +219,17 @@ An implementer's claim that a sealed test is wrong, filed with `dispute_test` in
 decided by the test writer, the orchestrator or a human. An upheld dispute leads to a reseal.
 _Avoid_: test change request, objection, override
 
+**Result flag**:
+A named warning a delegated session's result carries about its change (`OUT-OF-SCOPE`, `SENSITIVE`,
+`STAND-IN`, `LEFTOVERS`, `MISREPORT` and others), computed by the harness from git, never by the model.
+Each names the session that caused it.
+_Avoid_: warning, lint
+
+**Step cap**:
+The most model turns a delegated session may take, set by the request's `max_steps`. Reaching it
+aborts the session after the turn in progress.
+_Avoid_: turn limit, max iterations
+
 **Veto**:
 The refusal of a tool call before execution by a Lykos extension (e.g. `lykos-seal` vetoing edits or writes to sealed paths). Unlike a gate denial which prompts or enforces permission modes, a veto unconditionally blocks the action and logs a vetoed event.
 _Avoid_: rejection, denial, block (unqualified)

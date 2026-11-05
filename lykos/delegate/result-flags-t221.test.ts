@@ -182,11 +182,11 @@ function flagOf(r: Result, name: string): Flag | undefined {
 /** Every flag has the documented shape: a known name, a non-empty detail, files only as a string array. */
 function assertFlagShapes(r: Result): void {
   for (const f of r.flags ?? []) {
-    assert.ok(["OUT-OF-SCOPE", "MISREPORT"].includes(f.flag), `known flag: ${JSON.stringify(f)}`);
+    assert.ok(["OUT-OF-SCOPE", "MISREPORT", "SENSITIVE", "STAND-IN", "LEFTOVERS"].includes(f.flag), `known flag: ${JSON.stringify(f)}`);
     assert.equal(typeof f.detail, "string");
     assert.ok(f.detail.length > 0, `a flag says why: ${JSON.stringify(f)}`);
     if (f.files !== undefined) assert.ok(Array.isArray(f.files) && f.files.every((x) => typeof x === "string"), JSON.stringify(f));
-    assert.deepEqual(Object.keys(f).filter((k) => !["flag", "detail", "files"].includes(k)), [], `no other keys: ${JSON.stringify(f)}`);
+    assert.deepEqual(Object.keys(f).filter((k) => !["flag", "detail", "files", "session"].includes(k)), [], `no other keys: ${JSON.stringify(f)}`);
   }
 }
 
