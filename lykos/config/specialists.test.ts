@@ -543,13 +543,13 @@ describe("resolveSpecialistLayer (ticket 05: specialist-referenced skills)", () 
 // selectable by name with zero user configuration, overridable by a project
 // or global specialist of the same name.
 describe("the shipped specialist library (ticket 07)", () => {
-  const SHIPPED_NAMES = ["build", "explore", "general", "implementer", "plan", "review", "test-writer"];
+  const SHIPPED_NAMES = ["build", "explore", "general", "implement", "implementer", "plan", "quick", "review", "review-both", "test-writer"];
 
   function emptyWorkspace(): { cwd: string; globalDir: string } {
     return { cwd: tmp(), globalDir: tmp() };
   }
 
-  it("ships all seven specialists, discoverable with no project or global config", () => {
+  it("ships all ten specialists, discoverable with no project or global config", () => {
     const { cwd, globalDir } = emptyWorkspace();
     const locations = discoverSpecialists(cwd, globalDir);
     assert.deepEqual(locations.map((l) => l.name), SHIPPED_NAMES);
@@ -680,7 +680,7 @@ describe("the shipped specialist library (ticket 07)", () => {
 
   it("shippedSpecialistsDir points at the package's own specialists directory", () => {
     const { cwd, globalDir } = emptyWorkspace();
-    // The seven shipped files live exactly where `shippedSpecialistsDir` says.
+    // The ten shipped files live exactly where `shippedSpecialistsDir` says.
     const names = discoverSpecialists(cwd, globalDir, shippedSpecialistsDir()).map((p) => p.name);
     assert.deepEqual(names, SHIPPED_NAMES);
   });

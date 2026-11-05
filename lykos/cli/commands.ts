@@ -564,6 +564,20 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "config",
+    help: [
+      "  config    show resolved settings: `lykos config roles [--json]` (each role, its model, and the layer that set it)",
+    ],
+    run: async (rest, { cwd }) => {
+      const { runConfigRoles } = await import("./config-show.js");
+      const [sub] = rest;
+      if (sub === "roles") return runConfigRoles(cwd, rest.includes("--json"));
+      process.stderr.write(`lykos config: unknown subcommand "${sub ?? ""}". Use "roles [--json]".
+`);
+      return 1;
+    },
+  },
+  {
     name: "budget",
     help: [
       "  budget    caps [show|set <key> <value>]",

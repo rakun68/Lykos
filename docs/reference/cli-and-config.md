@@ -60,6 +60,7 @@ The `lykos` executable provides the following commands:
 | `theme` | Preview and inspect terminal UI color themes |
 | `agents` | List or inspect specialist agent markdown definitions |
 | `export claude [--global]` | Export exposed specialists as Claude Code agents: writes a marked Haiku shim per specialist whose effective role is subagent or all (an absent role means all; project beating user beating shipped; only primary is hidden) to `<agents>/lykos-<name>.md`, delegating to MCP tool `mcp__lykos__lykos_<name>` and returning the tool's result unchanged. Specialist names are sanitized to MCP tool names (`specialistToolName`); when multiple specialists sanitize to the same tool name, exact raw name matching the sanitized suffix wins first, otherwise alphabetical precedence (`localeCompare`), keeping collision losers silent. Specialists colliding with reserved async tools (`lykos_start`, `lykos_status`, `lykos_steer`, `lykos_stop`) are omitted with a warning to stderr matching `lykos mcp`. Project scope writes to `<cwd>/.claude/agents/` and adds `mcpServers.lykos` to `<cwd>/.mcp.json` (preserving other entries, creating if missing, refusing unparseable JSON without overwriting). `--global` writes to `~/.claude/agents/`, never touches `~/.claude.json` or project files, and prints the user-scope `claude mcp add` command. An unmarked `lykos-*.md` file is never overwritten (refused, named on stderr, exit 1 while writing remaining files) and never deleted. Re-running regenerates marked files from current specialists and prunes stale marked shims whose specialist is no longer exposed (including now-ineligible reserved tools) |
+| `config roles [--json]` | Each role in `models.roles`, the model it runs on, and the layer that set it (`defaults`, `global (<path>)`, `project (<path>)`, `env`, `flags`) (T239) |
 | `budget [show\|set]` | Show current caps or set cap values in `.lykos/config.yaml` |
 | `memory [list\|add\|forget]` | Manage project mistake memory entries |
 | `prompt --show` | Display the assembled system prompt head block and tool schemas (flags: `--specialist`, `--output-style`, `--context`, `--tools`, `--subagents`, `--json`); also prints the specialist stream message in its own labelled section (ADR-0044) |
@@ -157,7 +158,17 @@ models:
   default: "deepseek/deepseek-v4-flash"
   roles:
     scout: "deepseek/deepseek-v4-flash"
-    worker: "deepseek/deepseek-v4-pro"
+    worker: "deepseek/deepseek-v4-pro"   # a session whose specialist has no role of its own
+    # T239: a role named after a specialist is that specialist's model, below --model and the
+    # specialist file's own provider/model. The P18 roles default to Boxie's models (boxie.conf,
+    # Boxie 5e8561c), reached through an `omniroute` provider (and `opencode` for the free lane)
+    # that must be declared under `providers:`:
+    implement: "omniroute/antigravity/gemini-3.8-flash-high"
+    implement-alt: "omniroute/deepseek/deepseek-flash-max"
+    quick: "opencode/deepseek-v4.1-flash-free"
+    quick-alt: "opencode/glm-5.3-flash-free"
+    review-both: "omniroute/deepseek/deepseek-flash-high"
+    review-both-alt: "omniroute/antigravity/claude-opus-4-6-thinking"
   fallback: []
 
 # Spending limits

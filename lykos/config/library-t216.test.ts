@@ -16,10 +16,10 @@ function sandbox() {
 }
 
 describe("T216: the shipped library", () => {
-  it("is exactly plan, build, explore, general, implementer, review and test-writer", () => {
+  it("is exactly plan, build, explore, general, implementer, review and test-writer, and the P18 roles implement, quick and review-both", () => {
     const { cwd, globalDir } = sandbox();
     const shipped = discoverSpecialists(cwd, globalDir).filter((s) => s.shippedPath !== undefined).map((s) => s.name).sort();
-    assert.deepEqual(shipped, ["build", "explore", "general", "implementer", "plan", "review", "test-writer"]);
+    assert.deepEqual(shipped, ["build", "explore", "general", "implement", "implementer", "plan", "quick", "review", "review-both", "test-writer"]);
   });
 
   it("each validates with its role and read_only", () => {

@@ -1,0 +1,11 @@
+# P18 role `quick` (T239): trivial edits whose place is already known. Low deliberation. Its model is
+# `models.roles.quick`, Boxie's quick model; `models.roles.quick-alt` is its alternate. Primary: run by
+# name, no MCP tool of its own.
+description: Make a small edit whose place is already known — the smallest change that works.
+role: primary
+read_only: false
+thinkingLevel: low
+feedback:
+  enabled: true
+gate:
+  enabled: true

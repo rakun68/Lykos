@@ -168,7 +168,7 @@ continue to run.
 
 ## 3. The shipped library
 
-Seven specialists, discoverable by name with no configuration
+Ten specialists, discoverable by name with no configuration
 .
 
 | Name | Role | Shape |
@@ -180,6 +180,16 @@ Seven specialists, discoverable by name with no configuration
 | `review` | subagent | Reviewing a change it did not write |
 | `test-writer` | subagent | Writes failing tests and stubs, then commits them without implementing |
 | `implementer` | subagent | Makes sealed tests pass without modifying them, reporting wrong tests with dispute_test |
+| `implement` | primary | P18 role (T239): implements one task from a coordinator's brief; feedback loop and gate on |
+| `quick` | primary | P18 role: a small edit whose place is known; low thinking |
+| `review-both` | primary | P18 role: one read-only review on the spec and the repository's standards |
+
+The P18 roles run on the model `models.roles.<name>` names, Boxie's model for that role by default,
+and each has an alternate, `models.roles.<name>-alt`. When `review-both`'s model is the implementer's
+model family and its alternate's is not, the alternate reviews: a model rates its own family's output
+higher. Families are vendors, not routers (`omniroute/antigravity/claude-…` is `anthropic`). The roles
+are primary so they never replace the deprecated `lykos_implement` MCP alias; over MCP a coordinator
+runs them with `lykos_start`. `lykos config roles` prints every role, its model and the layer that set it.
 
 A session started without `--specialist` runs `build`. `minimal` became an output style
 . `deliberate` and `scout` are deleted. Switching specialists live applies

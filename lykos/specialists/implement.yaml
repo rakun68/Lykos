@@ -1,0 +1,12 @@
+# P18 role `implement` (T239): every coding task a coordinator delegates starts here. Writes on a
+# branch of its own; the post-edit feedback loop and the verification gate stay on. Its model is
+# `models.roles.implement`, Boxie's implement model; `models.roles.implement-alt` is its alternate.
+# Primary: a coordinator runs it by name (`lykos_start` over MCP), so it is no MCP tool of its own and
+# never replaces the deprecated `lykos_implement` alias.
+description: Implement one task from a coordinator's brief — change the code, run the task's verification command, commit.
+role: primary
+read_only: false
+feedback:
+  enabled: true
+gate:
+  enabled: true

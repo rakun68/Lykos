@@ -46,6 +46,7 @@
 // session with exact, scripted timing, with no network call and no real
 // terminal.
 
+import { sessionRoleModel } from "../config/roles.js";
 import { startContainment, type Containment } from "../containment/containment.js";
 import { collectPathRules } from "../gate/path-rules.js";
 import { isWorkspaceTrusted } from "../gate/trust.js";
@@ -1494,7 +1495,7 @@ export async function runInteractiveStandaloneSession(
     ...(input.model !== undefined ? { callerModel: input.model } : {}),
     ...(specialistModel !== undefined ? { specialistModel } : {}),
     defaultModel: config.models.default,
-    ...(config.models.roles.worker !== undefined ? { roleModel: config.models.roles.worker } : {}),
+    ...(sessionRoleModel(config.models.roles, input.specialist) !== undefined ? { roleModel: sessionRoleModel(config.models.roles, input.specialist)! } : {}),
   });
   const modelSpec = boot.spec;
 

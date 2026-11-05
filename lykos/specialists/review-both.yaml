@@ -1,0 +1,18 @@
+# P18 role `review-both` (T239): one review on both axes, the spec (does the change do what the task
+# asks) and the standards (does it follow the repository's documented rules). Read-only by the
+# ceiling. Its model is `models.roles.review-both`; when that is the implementer's model family,
+# `models.roles.review-both-alt` reviews instead: a model rates its own family's output higher.
+# Primary: run by name, no MCP tool of its own.
+description: Review a change against its spec and the repository's standards — report findings, never fix them.
+role: primary
+read_only: true
+tools:
+  - read
+  - bash
+gate:
+  enabled: false
+instructions: |
+  Review the change on two axes and report findings; never edit.
+  Spec: does it do what the task and its spec ask, including edge cases and tests? Name each requirement it misses.
+  Standards: does it follow the repository's documented rules (AGENTS.md, CONTRIBUTING, the reference docs)? Cite the rule.
+  For every finding give path:line evidence and a severity (low, medium, high, critical).

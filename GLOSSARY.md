@@ -14,6 +14,12 @@ to, so there is no second place that decides what a delegate may hold. An agent 
 for the subagent it spawns; a person picks one for the session in front of them.
 _Avoid_: preset, profile, mode, persona, configuration bundle, wolf
 
+**Role**:
+A name in `models.roles` that maps to a model. A role named after a specialist is that specialist's
+model. The P18 roles (`implement`, `quick`, `review-both`) each have an **alternate**, `<role>-alt`, a
+model of another family used when the main one would review its own family's work.
+_Avoid_: lane, tier (for the mapping itself)
+
 **Primary specialist**:
 A specialist the user switches to in their own session, as opposed to one only an agent spawns for a
 subagent. Plan and Build are primary.

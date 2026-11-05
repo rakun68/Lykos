@@ -130,6 +130,15 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
       worker: "deepseek-v4-flash",
       scout: "deepseek-v4-flash",
       watcher: "deepseek-v4-flash",
+      // T239: the P18 roles on Boxie's models (boxie.conf ROLE_*, read 2026-11-06 at Boxie 5e8561c). Each
+      // role is the specialist of the same name. Boxie reaches these through OmniRoute; Lykos needs an
+      // `omniroute` provider (and `opencode` for the free lane) declared under `providers:`.
+      implement: "omniroute/antigravity/gemini-3.8-flash-high", // ROLE_implement
+      "implement-alt": "omniroute/deepseek/deepseek-flash-max", // ROLE_implement_hard: Boxie's other-family implementer
+      quick: "opencode/deepseek-v4.1-flash-free", // ROLE_quick
+      "quick-alt": "opencode/glm-5.3-flash-free", // ROLE_free_glm: Boxie's other free lane
+      "review-both": "omniroute/deepseek/deepseek-flash-high", // ROLE_review_both
+      "review-both-alt": "omniroute/antigravity/claude-opus-4-6-thinking", // ROLE_review_both_alt
     },
     // T89: empty means off. A session must never quietly finish on a
     // different model than the one requested.

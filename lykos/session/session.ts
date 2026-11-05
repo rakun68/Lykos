@@ -36,6 +36,7 @@
 // and the host's answer to a full context is the context strategy
 // (`loop/context-strategy.ts`).
 
+import { sessionRoleModel } from "../config/roles.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { computeHitQuality, type HitQualityToolCall } from "./hit-quality.js";
@@ -1302,7 +1303,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
     ...(input.model !== undefined ? { callerModel: input.model } : {}),
     ...(specialistModel !== undefined ? { specialistModel } : {}),
     defaultModel: config.models.default,
-    ...(config.models.roles.worker !== undefined ? { roleModel: config.models.roles.worker } : {}),
+    ...(sessionRoleModel(config.models.roles, specialist) !== undefined ? { roleModel: sessionRoleModel(config.models.roles, specialist)! } : {}),
   });
   const modelSpec = modelBoot.spec;
 
