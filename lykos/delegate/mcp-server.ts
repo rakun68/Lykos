@@ -15,6 +15,7 @@ import { existsSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { loadConfig } from "../config/load.js";
 import {
@@ -254,6 +255,21 @@ function buildSpecialistPrompt(brief: string, constraints: string | undefined): 
 }
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+
+// MCP tool hints, all four set on every tool. They are fixed per tool name, so a tool
+// that can start a writing session declares the worst case.
+/** A session that may edit and commit, and on seal rewrite or delete files in a checked-out worktree. Calls model providers and the web. */
+const WRITER_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+/** A read-only session. Calls model providers and the web; writes only Lykos's own ledger and transcript. */
+const READER_HINTS: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+const STATUS_HINTS: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const STEER_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+/** Stopping leaves the session resumable; stopping it twice changes nothing more. */
+const STOP_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
+function taskHints(readOnly: boolean | undefined): ToolAnnotations {
+  return readOnly === true ? READER_HINTS : WRITER_HINTS;
+}
 
 function toResult(outcome: Record<string, unknown> | SessionOutcome): ToolResult {
   return {
@@ -1596,6 +1612,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
     {
       description: "Start an asynchronous Lykos session with a specialist and return immediately with its session_id.",
       inputSchema: StartInputShape,
+      annotations: WRITER_HINTS,
     },
     async (args, extra) => {
       const def: ToolDef = {
@@ -1612,6 +1629,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
     {
       description: "Check the status of one or more Lykos sessions, optionally waiting for completion.",
       inputSchema: StatusInputShape,
+      annotations: STATUS_HINTS,
     },
     async (args) => {
       return handleStatus(opts.workspace, args, registry);
@@ -1623,6 +1641,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
     {
       description: "Steer a running Lykos session by delivering a message into its agent loop.",
       inputSchema: SteerInputShape,
+      annotations: STEER_HINTS,
     },
     async (args) => {
       return handleSteer(args, registry);
@@ -1634,6 +1653,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
     {
       description: "Stop a running Lykos session and leave it in a resumable state.",
       inputSchema: StopInputShape,
+      annotations: STOP_HINTS,
     },
     async (args) => {
       return handleStop(args, registry);
@@ -1662,7 +1682,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
       registeredToolNames.add(aliasName);
       server.registerTool(
         aliasName,
-        { description: toolDef.description, inputSchema: TaskInputShape },
+        { description: toolDef.description, inputSchema: TaskInputShape, annotations: taskHints(toolDef.readOnly) },
         async (args: TaskInput, extra) => startTrackedSession(opts.workspace, toolDef, args, extra as unknown as Extra, deps, registry, true),
       );
     } else {
@@ -1674,7 +1694,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
       registeredToolNames.add(aliasName);
       server.registerTool(
         aliasName,
-        { description: toolDef.description, inputSchema: TaskInputShape },
+        { description: toolDef.description, inputSchema: TaskInputShape, annotations: taskHints(toolDef.readOnly) },
         async (args: TaskInput, extra) => startTrackedSession(opts.workspace, toolDef, args, extra as unknown as Extra, deps, registry, true),
       );
     }
@@ -1697,7 +1717,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
     registeredToolNames.add(toolName);
     server.registerTool(
       toolName,
-      { description: toolDef.description, inputSchema: SpecialistInputShape },
+      { description: toolDef.description, inputSchema: SpecialistInputShape, annotations: taskHints(toolDef.readOnly) },
       async (args: TaskInput, extra) => startTrackedSession(opts.workspace, toolDef, args, extra as unknown as Extra, deps, registry, true),
     );
   }
