@@ -76,7 +76,7 @@ export const COMMANDS: readonly Command[] = [
   {
     name: "seal",
     help: [
-      "  seal      sealed TDD [key init | create [<commit>] | status [--json] | verify [--branch <name>] [--commit <sha>] | hook install]",
+      "  seal      sealed TDD [key init | create [<commit>] [--path <file>]... [--no-red] | status [--json] | verify [--branch <name>] [--commit <sha>] | hook install]",
     ],
     run: async (rest, { cwd }) => {
       const { runSeal } = await import("./seal.js");

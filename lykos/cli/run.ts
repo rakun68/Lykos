@@ -172,6 +172,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
   let brief = prompt ?? "";
   let taskScope: string[] | undefined;
   let taskSteps: number | undefined;
+  let taskSealed: { sealed: string[]; red: boolean } | undefined;
   if (opts.taskFile !== undefined) {
     let task: TaskFile;
     try {
@@ -185,6 +186,8 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
     brief = `${brief.trim()}\n\n${testCommandBrief(resolveTestCommand(task, config))}`;
     if (task.scope.length > 0 || task.files.length > 0) taskScope = [...task.files, ...task.scope];
     taskSteps = task.steps;
+    // T254: the sealed tests are sealed before the model runs.
+    if (task.sealed.length > 0) taskSealed = { sealed: task.sealed, red: task.red };
   }
 
   // T243: one delegation core. This process owns the session (it holds the session child's stdin); the result is the
@@ -210,6 +213,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
         ...(opts.base !== undefined ? { base: opts.base } : {}),
         ...(opts.requestId !== undefined ? { request_id: opts.requestId } : {}),
         ...(taskScope !== undefined ? { scope: taskScope } : {}),
+        ...(taskSealed !== undefined ? { sealed: taskSealed.sealed, ...(taskSealed.red ? {} : { red: false }) } : {}),
         cli: {
           ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
           ...(opts.network !== undefined ? { network: opts.network } : {}),

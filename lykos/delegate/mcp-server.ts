@@ -32,7 +32,7 @@ import { resolveProject } from "../session/identity.js";
 import { readTranscript, transcriptFilePath, type TranscriptEventInput, type TranscriptEventRecord } from "../session/transcript.js";
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
 import { sealCreate } from "../seal/create.js";
-import { createTemporaryWorktree, getBranchOrNull, gitExec, resolveRef } from "../seal/git.js";
+import { createTemporaryWorktree, fallbackGitIdentity, getBranchOrNull, gitExec, resolveRef } from "../seal/git.js";
 import { addedLines, changeFlags, parseNameStatus, type ChangedPath } from "./result-flags.js";
 import { verifySeals } from "../seal/verify.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
@@ -136,6 +136,9 @@ const TaskInputShape = {
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
   max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
   request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the session it started instead of starting another."),
+  sealed: z.array(z.string().min(1)).optional().describe("T254: test files, as they are in your tree, to seal before the model runs. They are committed over the base as the writer commit and must fail first: one that already passes ends the call with WEAK-SPEC and next answer_spec."),
+  red: z.boolean().optional().describe("T254: false skips the check that the sealed tests fail; the seal records it. Default true."),
+  reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -160,6 +163,9 @@ const StartInputShape = {
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
   max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
   request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the session it started instead of starting another."),
+  sealed: z.array(z.string().min(1)).optional().describe("T254: test files, as they are in your tree, to seal before the model runs. They are committed over the base as the writer commit and must fail first: one that already passes ends the call with WEAK-SPEC and next answer_spec."),
+  red: z.boolean().optional().describe("T254: false skips the check that the sealed tests fail; the seal records it. Default true."),
+  reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -198,6 +204,9 @@ const SpecialistInputShape = {
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
   max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
   request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the session it started instead of starting another."),
+  sealed: z.array(z.string().min(1)).optional().describe("T254: test files, as they are in your tree, to seal before the model runs. They are committed over the base as the writer commit and must fail first: one that already passes ends the call with WEAK-SPEC and next answer_spec."),
+  red: z.boolean().optional().describe("T254: false skips the check that the sealed tests fail; the seal records it. Default true."),
+  reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -257,6 +266,10 @@ type TaskInput = {
   base?: string | undefined;
   scope?: string[] | undefined;
   request_id?: string | undefined;
+  /** T254: the task's sealed tests, its red check, and a reseal on a continuation. */
+  sealed?: string[] | undefined;
+  red?: boolean | undefined;
+  reseal?: string | undefined;
   /** T243, `lykos run` only: the interaction mode, and the session fields the CLI carries. */
   mode?: InteractionMode | undefined;
   cli?: SessionRequest["cli"] | undefined;
@@ -302,23 +315,6 @@ function toResult(outcome: Record<string, unknown> | SessionOutcome): ToolResult
   return {
     content: [{ type: "text", text: JSON.stringify(outcome, null, 2) }],
     ...(outcome.outcome === "blocked" || outcome.outcome === "error" ? { isError: true } : {}),
-  };
-}
-
-function fallbackGitIdentity(workspace: string): NodeJS.ProcessEnv {
-  const hasEnvName = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME;
-  const hasEnvEmail = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL;
-  if (hasEnvName && hasEnvEmail) return {};
-  try {
-    const hasName = gitExec(["config", "user.name"], workspace).trim();
-    const hasEmail = gitExec(["config", "user.email"], workspace).trim();
-    if (hasName.length > 0 && hasEmail.length > 0) return {};
-  } catch {}
-  return {
-    GIT_AUTHOR_NAME: "Lykos",
-    GIT_AUTHOR_EMAIL: "lykos@localhost",
-    GIT_COMMITTER_NAME: "Lykos",
-    GIT_COMMITTER_EMAIL: "lykos@localhost",
   };
 }
 
@@ -934,6 +930,9 @@ async function buildSessionOutcomeResult(
       }
     }
 
+    // T254: a flag the session child raised before any model ran (WEAK-SPEC).
+    if (outcome?.outcome === "needs_answer" && outcome.flags !== undefined) flags.push(...outcome.flags);
+
     let nextToken: NextToken;
     if (sealError !== undefined) {
       nextToken = "fix_environment";
@@ -943,6 +942,8 @@ async function buildSessionOutcomeResult(
       nextToken = "inspect_seal";
     } else if (finalOutcome === "disputed") {
       nextToken = "resolve_test_dispute";
+    } else if (finalOutcome === "needs_answer" && outcome?.next === "answer_spec") {
+      nextToken = "answer_spec";
     } else if (finalOutcome === "needs_answer") {
       nextToken = "answer_question";
     } else if (outcome && "next" in outcome && outcome.next === "answer_question") {
@@ -1184,6 +1185,9 @@ async function startTrackedSession(
     ...(args.session_id !== undefined ? { sessionId: args.session_id } : (newSessionId !== undefined ? { newSessionId } : {})),
     ...(args.write_in_place !== undefined ? { writeInPlace: args.write_in_place } : {}),
     ...(args.request_id !== undefined ? { requestId: args.request_id } : {}),
+    ...(args.sealed !== undefined && args.sealed.length > 0 && args.session_id === undefined ? { sealed: args.sealed } : {}),
+    ...(args.red === false ? { red: false } : {}),
+    ...(args.reseal !== undefined && args.session_id !== undefined ? { reseal: args.reseal } : {}),
     ...(args.cli !== undefined ? { cli: args.cli } : {}),
   };
 

@@ -32,12 +32,26 @@ export async function runSeal(cwd: string, args: string[]): Promise<number> {
   if (sub === "create") {
     let branch: string | undefined;
     let commit: string | undefined;
+    // T254: `--path <file>`, repeated, seals exactly those files.
+    const paths: string[] = [];
+    let noRed = false;
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i]!;
       if (a === "--branch") {
         branch = rest[++i];
       } else if (a.startsWith("--branch=")) {
         branch = a.slice("--branch=".length);
+      } else if (a === "--path") {
+        const p = rest[++i];
+        if (p === undefined) {
+          process.stderr.write("lykos seal create: --path needs a file\n");
+          return 1;
+        }
+        paths.push(p);
+      } else if (a.startsWith("--path=")) {
+        paths.push(a.slice("--path=".length));
+      } else if (a === "--no-red") {
+        noRed = true;
       } else if (!a.startsWith("-") && !commit) {
         commit = a;
       }
@@ -50,8 +64,11 @@ export async function runSeal(cwd: string, args: string[]): Promise<number> {
         targetCommit: commit,
         homeDir,
         branch,
+        ...(paths.length > 0 ? { paths } : {}),
+        ...(noRed ? { red: false } : {}),
       });
       if (!res.ok) {
+        if (res.red === "passing") process.stderr.write("lykos seal create: WEAK-SPEC: the sealed tests already pass (next: answer_spec)\n");
         for (const err of res.errors ?? ["seal creation failed"]) {
           process.stderr.write(`${err}\n`);
         }

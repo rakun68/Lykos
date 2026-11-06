@@ -77,6 +77,15 @@ export interface SessionRequest {
    * never run twice.
    */
   requestId?: string;
+  /**
+   * T254: test files in the caller's tree to seal before the model runs, committed over the base as the writer
+   * commit. A new session only.
+   */
+  sealed?: string[];
+  /** T254: false skips the red check, and the seal records it. Default true. */
+  red?: boolean;
+  /** T254 (R9): on a continuation, the commit on the session's branch to seal again at before it continues. */
+  reseal?: string;
   /** T243: what `lykos run` carries that an MCP call does not. */
   cli?: {
     tools?: string[];
@@ -296,6 +305,8 @@ export interface NeedsAnswerOutcome {
   skipped_extensions?: string[];
   denied?: DeniedAction[];
   disputes?: SessionDispute[];
+  /** T254: WEAK-SPEC, raised before any model ran. */
+  flags?: SessionFlag[];
   next?: NextToken;
 }
 
@@ -408,5 +419,8 @@ export function parseRequest(line: string): SessionRequest | undefined {
   if (v.maxSteps !== undefined && !(typeof v.maxSteps === "number" && Number.isInteger(v.maxSteps) && v.maxSteps > 0)) return undefined;
   if (v.requestId !== undefined && (typeof v.requestId !== "string" || v.requestId === "")) return undefined;
   if (v.cli !== undefined && (typeof v.cli !== "object" || v.cli === null || Array.isArray(v.cli))) return undefined;
+  if (v.sealed !== undefined && !(Array.isArray(v.sealed) && v.sealed.every((p) => typeof p === "string" && p !== ""))) return undefined;
+  if (v.red !== undefined && typeof v.red !== "boolean") return undefined;
+  if (v.reseal !== undefined && (typeof v.reseal !== "string" || v.reseal === "")) return undefined;
   return v as SessionRequest;
 }

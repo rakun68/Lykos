@@ -61,7 +61,7 @@ export const WAIT_USAGE =
   "usage: lykos wait <session-id>... [--any] [--questions] [--timeout <seconds>]    block until the sessions end (or one, with --any; or one asks a question nobody answered, with --questions)";
 export const STEER_USAGE = "usage: lykos steer <session-id> -m <message|->    send a live session a message; it answers the session's open question";
 export const CONTINUE_USAGE =
-  "usage: lykos continue <session-id> -m <message|-> [--max-steps n] [--request-id id] [--trust-workspace]    resume an ended session on its branch with a new message";
+  "usage: lykos continue <session-id> -m <message|-> [--max-steps n] [--request-id id] [--reseal <commit>] [--trust-workspace]    resume an ended session on its branch with a new message; --reseal seals its branch again at the commit that corrects a sealed test";
 export const STOP_USAGE = "usage: lykos stop <session-id>    ask the session's owner to stop it, and wait up to 10 s for it to end";
 
 function usage(line: string): number {
@@ -168,7 +168,7 @@ export async function runSteer(cwd: string, args: readonly string[]): Promise<nu
 
 export async function runContinue(cwd: string, args: readonly string[]): Promise<number> {
   if (args.length === 0) return usage(CONTINUE_USAGE);
-  const parsed = parseFlags(args, "continue", ["message", "max-steps", "request-id"], ["trust-workspace"]);
+  const parsed = parseFlags(args, "continue", ["message", "max-steps", "request-id", "reseal"], ["trust-workspace"]);
   if ("error" in parsed) {
     process.stderr.write(`${parsed.error}\n`);
     return 1;
@@ -198,6 +198,7 @@ export async function runContinue(cwd: string, args: readonly string[]): Promise
     return 1;
   }
   const requestId = parsed.flags.get("request-id");
+  const reseal = parsed.flags.get("reseal");
   const result = await runDelegated(
     cwd,
     {
@@ -205,6 +206,7 @@ export async function runContinue(cwd: string, args: readonly string[]): Promise
       session_id: parsed.ids[0]!,
       ...(maxSteps !== undefined ? { max_steps: maxSteps } : {}),
       ...(typeof requestId === "string" ? { request_id: requestId } : {}),
+      ...(typeof reseal === "string" ? { reseal } : {}),
     },
     { trustSource: trust.source, onProgress: (line) => process.stderr.write(`lykos continue: ${line}\n`) },
   );

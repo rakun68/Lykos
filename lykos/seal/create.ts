@@ -22,7 +22,7 @@ import {
   resolveRef,
 } from "./git.js";
 import { matchAnyGlob } from "./matcher.js";
-import { runRedCheck } from "./runner.js";
+import { detectAdapter, runRedCheck, type RedOutcome } from "./runner.js";
 import type { SealAdapter, SealFile, SealRedTest } from "./types.js";
 import type { ContainmentChoice } from "../delegate/session-protocol.js";
 
@@ -37,10 +37,25 @@ export interface SealCreateOptions {
   ledgerPath?: string | undefined;
   branch?: string | undefined;
   containmentLevel?: ContainmentChoice | undefined;
+  /**
+   * T254: the sealed test files, named. Absent, the writer commit's changed files matching `seal.test_globs`. Every
+   * path must exist at the writer commit.
+   */
+  paths?: readonly string[] | undefined;
+  /** T254: false skips the red check; the seal records `red_check: "skipped"`. Default true. */
+  red?: boolean | undefined;
+  /** T254: the branch the sealed one was made from. Absent, `seal.base`, then the default branch. */
+  base?: string | undefined;
 }
 
 export interface SealCreateResult {
   ok: boolean;
+  /** T254: the red check's outcome, or `skipped`. Absent when creation was refused before it ran. */
+  red?: RedOutcome | "skipped" | undefined;
+  /** T254, `passing`: the sealed tests that already pass. */
+  passing?: string[] | undefined;
+  /** T254, `error`: the runner's output. */
+  output?: string | undefined;
   seal?: SealFile | undefined;
   sealCommit?: string | undefined;
   pruned?: string[] | undefined;
@@ -83,7 +98,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     } catch {}
   }
   const { resolved: config } = loadConfig({ cwd, ...(env ? { env } : {}) });
-  const baseBranch = (configBase && configBase.length > 0) ? configBase : detectDefaultBase(cwd);
+  const baseBranch = opts.base !== undefined && opts.base !== "" ? opts.base : (configBase && configBase.length > 0) ? configBase : detectDefaultBase(cwd);
   const baseSha = resolveRef(baseBranch, cwd, env);
   if (!baseSha) {
     return {
@@ -103,12 +118,22 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     };
   }
 
-  // Files changed by writer commit vs its first parent matching test_globs
-  const writerFiles = getCommitChangedFiles(writerCommit, cwd, env);
-  const writerTestFiles = writerFiles.filter((f) => matchAnyGlob(f, config.seal.test_globs));
-
   // All tracked files at writerCommit matching always_sealed
   const allTracked = listTrackedFiles(writerCommit, cwd, env);
+
+  // Files changed by writer commit vs its first parent matching test_globs, or (T254) the paths named
+  const explicit = opts.paths?.map((p) => p.replace(/\\/g, "/").replace(/^\.\//, ""));
+  if (explicit !== undefined) {
+    const tracked = new Set(allTracked);
+    const missing = explicit.filter((p) => !tracked.has(p));
+    if (explicit.length === 0 || missing.length > 0) {
+      return {
+        ok: false,
+        errors: [explicit.length === 0 ? "lykos seal create: the path list is empty" : `lykos seal create: not in the writer commit: ${missing.join(", ")}`],
+      };
+    }
+  }
+  const writerTestFiles = explicit ?? getCommitChangedFiles(writerCommit, cwd, env).filter((f) => matchAnyGlob(f, config.seal.test_globs));
   const alwaysSealedFiles = allTracked.filter((f) => matchAnyGlob(f, config.seal.always_sealed));
 
   const sealRelPath = `.lykos/seals/${branch}.json`;
@@ -161,7 +186,8 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
   // On reseal, red requirement applies to tests this writer commit adds or changes.
   // Previously sealed tests the writer did not touch stay sealed but are not required to fail.
   // Reseal with no added/changed test runs all sealed tests matching run_globs.
-  const writerRunTests = writerTestFiles.filter((f) => matchAnyGlob(f, config.seal.run_globs));
+  // Named paths are the tests the coordinator means to run, whatever `run_globs` says.
+  const writerRunTests = explicit ?? writerTestFiles.filter((f) => matchAnyGlob(f, config.seal.run_globs));
   const testFiles = writerRunTests.length > 0
     ? writerRunTests
     : sealedPaths.filter((f) => matchAnyGlob(f, config.seal.run_globs));
@@ -196,64 +222,71 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     }
   }
 
-  // Execute red check in temporary worktree of writerCommit
-  const worktree = createTemporaryWorktree(cwd, writerCommit, env);
-  let redTests: SealRedTest[];
-  let adapter: SealAdapter;
+  let redTests: SealRedTest[] = [];
+  let adapter: SealAdapter = detectAdapter(config.seal.test_command);
   let redSignature: SealFile["red_signature"];
   let warnings: string[] | undefined;
-  let containment: { executor: ProjectExecutor; notice?: string; dispose: () => Promise<void> } | undefined;
-  try {
-    const containmentLevel = opts.containmentLevel ?? config.containment.level ?? "off";
-    let executor: ProjectExecutor = localExecutor;
-
-    if (containmentLevel !== "off") {
-      const { startContainment } = await import("../containment/containment.js");
-      let gitWorktree: { commonDir: string; gitDir: string } | undefined;
-      const gitFilePath = join(worktree.dir, ".git");
-      if (existsSync(gitFilePath) && statSync(gitFilePath).isFile()) {
-        const gitContent = readFileSync(gitFilePath, "utf8").trim();
-        const match = gitContent.match(/^gitdir:\s*(.+)$/);
-        if (match && match[1]) {
-          const commonOut = gitExec(["rev-parse", "--git-common-dir"], worktree.dir, env);
-          const commonDir = resolve(worktree.dir, commonOut);
-          gitWorktree = { commonDir, gitDir: resolve(worktree.dir, match[1]) };
-        }
-      }
-      containment = await startContainment({
-        config: config.containment.level === containmentLevel ? config.containment : { ...config.containment, level: containmentLevel },
-        workspace: worktree.dir,
-        ...(gitWorktree !== undefined ? { gitWorktree } : {}),
-        hostEnv: env,
-        log: (line) => process.stderr.write(`${line}\n`),
-      });
-      if (containment.notice !== undefined) {
-        process.stderr.write(`${containment.notice}\n`);
-      }
-      executor = containment.executor;
-    }
-
-    const checkResult = await runRedCheck({
-      worktreeDir: worktree.dir,
-      testFiles,
-      testCommandTemplate: config.seal.test_command,
-      env,
-      executor,
-    });
-    if (!checkResult.ok) {
-      return { ok: false, errors: checkResult.errors };
-    }
-    redTests = checkResult.red;
-    adapter = checkResult.adapter;
-    warnings = checkResult.warnings;
-    redSignature = checkResult.signature;
-  } finally {
+  let redOutcome: RedOutcome | "skipped" = "skipped";
+  if (opts.red !== false) {
+    // Execute red check in temporary worktree of writerCommit
+    const worktree = createTemporaryWorktree(cwd, writerCommit, env);
+    let containment: { executor: ProjectExecutor; notice?: string; dispose: () => Promise<void> } | undefined;
     try {
-      if (containment) {
-        await containment.dispose();
+      const containmentLevel = opts.containmentLevel ?? config.containment.level ?? "off";
+      let executor: ProjectExecutor = localExecutor;
+
+      if (containmentLevel !== "off") {
+        const { startContainment } = await import("../containment/containment.js");
+        let gitWorktree: { commonDir: string; gitDir: string } | undefined;
+        const gitFilePath = join(worktree.dir, ".git");
+        if (existsSync(gitFilePath) && statSync(gitFilePath).isFile()) {
+          const gitContent = readFileSync(gitFilePath, "utf8").trim();
+          const match = gitContent.match(/^gitdir:\s*(.+)$/);
+          if (match && match[1]) {
+            const commonOut = gitExec(["rev-parse", "--git-common-dir"], worktree.dir, env);
+            const commonDir = resolve(worktree.dir, commonOut);
+            gitWorktree = { commonDir, gitDir: resolve(worktree.dir, match[1]) };
+          }
+        }
+        containment = await startContainment({
+          config: config.containment.level === containmentLevel ? config.containment : { ...config.containment, level: containmentLevel },
+          workspace: worktree.dir,
+          ...(gitWorktree !== undefined ? { gitWorktree } : {}),
+          hostEnv: env,
+          log: (line) => process.stderr.write(`${line}\n`),
+        });
+        if (containment.notice !== undefined) {
+          process.stderr.write(`${containment.notice}\n`);
+        }
+        executor = containment.executor;
       }
+
+      const checkResult = await runRedCheck({
+        worktreeDir: worktree.dir,
+        testFiles,
+        testCommandTemplate: config.seal.test_command,
+        env,
+        executor,
+      });
+      redOutcome = checkResult.outcome;
+      if (checkResult.outcome === "passing") {
+        return { ok: false, red: "passing", passing: checkResult.passing, errors: checkResult.errors };
+      }
+      if (!checkResult.ok || checkResult.outcome === "error") {
+        return { ok: false, red: "error", errors: checkResult.errors, ...(checkResult.output !== undefined ? { output: checkResult.output } : {}) };
+      }
+      redTests = checkResult.red;
+      adapter = checkResult.adapter;
+      warnings = checkResult.warnings;
+      redSignature = checkResult.signature;
     } finally {
-      worktree.cleanup();
+      try {
+        if (containment) {
+          await containment.dispose();
+        }
+      } finally {
+        worktree.cleanup();
+      }
     }
   }
 
@@ -269,6 +302,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     test_command: config.seal.test_command,
     adapter,
     red: redTests,
+    ...(redOutcome === "skipped" ? { red_check: "skipped" as const } : {}),
     ...(adapter === "exit" && redSignature !== undefined ? { red_signature: redSignature } : {}),
     created_at: new Date().toISOString(),
     key_id: chosenKey.keyId,
@@ -347,6 +381,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     specialist: opts.specialist ?? null,
     detail: {
       tests: redTests.length,
+      red: redOutcome,
       key_id: chosenKey.keyId,
       writer_commit: writerCommit,
     },
@@ -354,6 +389,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
 
   return {
     ok: true,
+    red: redOutcome,
     seal: finalSealFile,
     sealCommit,
     pruned: prunedPaths,

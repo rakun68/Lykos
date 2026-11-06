@@ -264,6 +264,14 @@ child, every guard and the tree its command started, and every container, which 
 `unknown` never counts as gone. `lykos recover` asks for it first.
 _Avoid_: stopped, cleaned up (without the proof)
 
+**Red outcome**:
+What the red check found at the writer commit: `failing`, `failing-exit-only` (the weaker guarantee), `passing`
+(WEAK-SPEC: the spec asks for nothing) or `error`.
+
+**WEAK-SPEC**:
+The flag for a sealed test that already passes before any work: the call ends before a model runs, with
+`next answer_spec`.
+
 **Inbox**:
 The ledger table of steers for a delegated session sent from a process that does not own it. The owner polls it and
 delivers each message to the session in order.

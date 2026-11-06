@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { unlinkLinksUnder } from "../git/links.js";
 
 export function gitExec(args: string[], cwd: string, env?: NodeJS.ProcessEnv): string {
   return execFileSync("git", args, {
@@ -192,21 +193,13 @@ export function createTemporaryWorktree(
   }
 
   const cleanup = () => {
-    try {
-      unlinkSync(targetNm);
-    } catch {}
+    // G7 (T254): every link under the worktree goes first, the node_modules junction and any a test made, so the
+    // removal below cannot reach through one into the main checkout.
+    const stayed = unlinkLinksUnder(dir);
 
-    let junctionStillExists = false;
-    try {
-      lstatSync(targetNm);
-      junctionStillExists = true;
-    } catch {
-      junctionStillExists = false;
-    }
-
-    if (junctionStillExists) {
+    if (stayed.length > 0) {
       process.stderr.write(
-        `lykos seal: warning: node_modules junction at "${targetNm}" could not be unlinked; leaving worktree directory "${dir}" in place\n`,
+        `lykos seal: warning: link${stayed.length === 1 ? "" : "s"} ${stayed.map((p) => `"${p}"`).join(", ")} could not be unlinked; leaving worktree directory "${dir}" in place\n`,
       );
       try {
         gitExec(["worktree", "prune"], cwd, env);
@@ -269,4 +262,22 @@ export function findCommitIntroducingFile(
   } catch {
     return null;
   }
+}
+
+/** A git identity for commits Lykos makes itself, when the repository and environment have none. */
+export function fallbackGitIdentity(workspace: string): NodeJS.ProcessEnv {
+  const hasEnvName = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME;
+  const hasEnvEmail = process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL;
+  if (hasEnvName && hasEnvEmail) return {};
+  try {
+    const hasName = gitExec(["config", "user.name"], workspace).trim();
+    const hasEmail = gitExec(["config", "user.email"], workspace).trim();
+    if (hasName.length > 0 && hasEmail.length > 0) return {};
+  } catch {}
+  return {
+    GIT_AUTHOR_NAME: "Lykos",
+    GIT_AUTHOR_EMAIL: "lykos@localhost",
+    GIT_COMMITTER_NAME: "Lykos",
+    GIT_COMMITTER_EMAIL: "lykos@localhost",
+  };
 }

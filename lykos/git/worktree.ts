@@ -22,6 +22,7 @@ import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirS
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { hostGit, probeGit, type GitRun } from "./host-git.js";
+import { unlinkLinksUnder } from "./links.js";
 
 export const BRANCH_PREFIX = "lykos/";
 
@@ -370,6 +371,11 @@ function finish(path: string, workspace: string, sessionId: string, archiveBase:
     return { removed: false, savedUncommitted, ...(saved ? { saved } : {}), note: `could not archive the ignored files the session wrote in ${path}: ${err instanceof Error ? err.message : String(err)}; the worktree was left in place` };
   }
   const archived = kept === undefined ? undefined : describeArchive(kept);
+  // G7 (T254): never follow a link out of the worktree while removing it.
+  const stayed = unlinkLinksUnder(path);
+  if (stayed.length > 0) {
+    return { removed: false, savedUncommitted, ...(saved ? { saved } : {}), note: [`could not unlink ${stayed.join(", ")} in ${path}; the worktree was left in place`, archived].filter(Boolean).join("; ") };
+  }
   const removed = hostGit(["worktree", "remove", "--force", path], workspace);
   if (!removed.ok) {
     return { removed: false, savedUncommitted, ...(saved ? { saved } : {}), note: [`could not remove the worktree ${path}: ${removed.stderr}`, archived].filter(Boolean).join("; ") };

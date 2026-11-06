@@ -104,13 +104,36 @@ export interface RunRedCheckOptions {
   executor?: ProjectExecutor | undefined;
 }
 
+/**
+ * T254: what the red check found. `failing`: the named tests fail on assertions. `failing-exit-only`: a runner with
+ * no per-test results exited non-zero, the weaker guarantee. `passing`: a sealed test already passes, so the spec
+ * asks for nothing (WEAK-SPEC). `error`: the tests could not be run or failed on something other than an assertion.
+ */
+export type RedOutcome = "failing" | "failing-exit-only" | "passing" | "error";
+
 export interface RunRedCheckResult {
   ok: boolean;
+  outcome: RedOutcome;
   adapter: SealAdapter;
   red: SealRedTest[];
+  /** `passing`: the tests that passed, `file > describe > name`; the whole command in exit-code mode. */
+  passing: string[];
   errors: string[];
+  /** The runner's output, for an `error` the caller has to fix. */
+  output?: string | undefined;
   warnings?: string[] | undefined;
   signature?: FailureSignature | undefined;
+}
+
+/** T254: the red outcome of a red-mode run. */
+export function redOutcomeOf(res: Pick<RunSealedTestsResult, "ok" | "adapter" | "tests" | "signature">): { outcome: RedOutcome; passing: string[] } {
+  if (res.adapter === "exit") {
+    if (res.ok) return { outcome: "failing-exit-only", passing: [] };
+    return res.signature?.exit === 0 ? { outcome: "passing", passing: ["the test command"] } : { outcome: "error", passing: [] };
+  }
+  const passing = res.tests.filter((t) => t.status === "pass").map((t) => [t.file, ...t.describe, t.name].join(" > "));
+  if (passing.length > 0) return { outcome: "passing", passing };
+  return { outcome: res.ok ? "failing" : "error", passing: [] };
 }
 
 export function detectAdapter(template: string): SealAdapter {
@@ -734,11 +757,15 @@ export async function runRedCheck(opts: RunRedCheckOptions): Promise<RunRedCheck
       failure: "assertion",
     }));
 
+  const { outcome, passing } = redOutcomeOf(res);
   return {
     ok: res.ok,
+    outcome,
     adapter: res.adapter,
     red,
+    passing,
     errors: res.errors,
+    ...(res.rawOutput !== undefined ? { output: res.rawOutput } : {}),
     ...(res.warnings ? { warnings: res.warnings } : {}),
     ...(res.signature ? { signature: res.signature } : {}),
   };

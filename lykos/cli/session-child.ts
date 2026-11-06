@@ -33,7 +33,8 @@ import {
 import type { Coordinator } from "../tools/coordinator.js";
 import { resolveSpecialist, DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
-import { resolveRef } from "../seal/git.js";
+import { getBranchOrNull, resolveRef } from "../seal/git.js";
+import { resealAt, sealFromSpec } from "../seal/spec.js";
 import { findSealedPathMatch } from "../extensions/defaults/lykos-seal.js";
 import { commandPathAccesses } from "../gate/bash-paths.js";
 import type { BootDeps } from "../session/boot.js";
@@ -295,6 +296,54 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
   return parentGone ? 1 : 0;
 }
 
+/**
+ * T254: seals the task's `sealed:` tests on the session's branch (a new session), or seals the branch again at
+ * `reseal` (a continuation), before any model runs. Undefined when the session may run; otherwise the outcome that
+ * ends the call: WEAK-SPEC with `next answer_spec` when a sealed test already passes, `fix_environment` otherwise.
+ */
+async function sealBeforeModel(
+  request: SessionRequest,
+  worktree: string | undefined,
+  ledgerPath: string,
+  sessionId: string,
+  env: NodeJS.ProcessEnv,
+  progress: (message: string) => void,
+): Promise<SessionOutcome | undefined> {
+  const sealing = request.sessionId === undefined && request.sealed !== undefined && request.sealed.length > 0;
+  const resealing = request.sessionId !== undefined && request.reseal !== undefined;
+  if (!sealing && !resealing) return undefined;
+  if (worktree === undefined) {
+    return { outcome: "error", message: "sealed: the session has no branch of its own to seal (write_in_place and read-only sessions cannot carry sealed tests)", next: "fix_environment" };
+  }
+  const common = {
+    worktree,
+    ledgerPath,
+    sessionId,
+    env: { ...process.env, ...env },
+    base: request.base ?? getBranchOrNull(request.workspace, { ...process.env, ...env }) ?? undefined,
+    ...(request.containment !== undefined ? { containmentLevel: request.containment } : {}),
+  };
+  const sealedNow = sealing
+    ? await sealFromSpec({ ...common, workspace: request.workspace, paths: request.sealed!, red: request.red !== false })
+    : await resealAt({ ...common, commit: request.reseal! });
+  if (sealedNow.ok) {
+    progress(`sealed at ${sealedNow.writerCommit?.slice(0, 12) ?? "?"} (red check: ${sealedNow.red ?? "?"})`);
+    return undefined;
+  }
+  if (sealedNow.red === "passing") {
+    const detail = `the sealed tests already pass: ${(sealedNow.passing ?? []).join("; ")}`;
+    return {
+      outcome: "needs_answer",
+      question: `${detail}. A sealed test must fail before the work; what should it assert?`,
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+      flags: [{ flag: "WEAK-SPEC", detail, files: [...(request.sealed ?? [])], session: request.sessionId ?? sessionId }],
+      next: "answer_spec",
+    };
+  }
+  const output = sealedNow.output !== undefined ? `\n${sealedNow.output.slice(-2000)}` : "";
+  return { outcome: "error", message: `${sealedNow.message ?? "seal creation refused"}${output}`, next: "fix_environment" };
+}
+
 function progressIntervalFromEnv(env: NodeJS.ProcessEnv): number {
   const raw = Number(env.LYKOS_SESSION_PROGRESS_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROGRESS_INTERVAL_MS;
@@ -347,7 +396,10 @@ async function runRequest(
       ...(request.writeInPlace !== undefined ? { writeInPlace: request.writeInPlace } : {}),
       ...(deps.worktreesRoot !== undefined ? { worktreesRoot: deps.worktreesRoot } : {}),
     },
-    async (target) => {
+    async (target): Promise<{ result: RunStandaloneTaskResult } | { refused: string } | { spec: SessionOutcome }> => {
+      // T254: the seal from `sealed:`, and a reseal, come before any model runs.
+      const sealed = await sealBeforeModel(request, target.workTree?.path, ledgerPath, sessionId, env, progress);
+      if (sealed !== undefined) return { spec: sealed };
       const existingCreateSession = deps.sessionExtras?.bootDeps?.createSession;
       const wrappedCreateSession: typeof createAgentSession = async (bootOpts) => {
         const create = existingCreateSession ?? createAgentSession;
@@ -412,6 +464,10 @@ async function runRequest(
     return { outcome: "error", message: worked.message, ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}), ...work };
   }
   const continued = worked.value;
+  if ("spec" in continued) {
+    const work = workFields(await recordWork(ledgerPath, request.sessionId ?? sessionId, worked.work, report));
+    return { ...continued.spec, ...work } as SessionOutcome;
+  }
   if ("refused" in continued) {
     const work = workFields(await recordWork(ledgerPath, request.sessionId!, worked.work, report));
     return { outcome: "error", message: continued.refused, sessionId: request.sessionId!, ...work };
