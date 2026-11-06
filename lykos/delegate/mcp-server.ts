@@ -1702,14 +1702,16 @@ async function handleStop(workspace: string, args: { session_id: string }, regis
   s.abortController.abort();
   recordSessionStoppedInLedger(s.workspace, s.sessionId, s.specialist, s.startTime, s.stoppedReason);
 
-  await Promise.race([
-    s.runnerPromise,
-    new Promise<void>((r) => setTimeout(r, 10000)),
+  // Fail-closed (ADR-0060): the row and its tree lock are let go only once the runner has ended. A runner still
+  // tearing down after 10 s keeps them; it lets go when it ends, or its row reads crashed if this process dies.
+  const settled = await Promise.race([
+    s.runnerPromise.then(() => true, () => true),
+    new Promise<boolean>((r) => setTimeout(() => r(false), 10000)),
   ]);
 
   if (s.state === "running" || s.state === "waiting") {
     s.state = "stopped";
-    endOwnership(s, ownedIdOf(s));
+    if (settled) endOwnership(s, ownedIdOf(s));
     const notifyList = s.listeners;
     s.listeners = [];
     for (const fn of notifyList) {
@@ -1834,7 +1836,8 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
       s.state = "stopped";
       s.abortController.abort();
       recordSessionStoppedInLedger(s.workspace, s.sessionId, s.specialist, s.startTime, s.stoppedReason);
-      endOwnership(s, ownedIdOf(s));
+      // Fail-closed (ADR-0060): the row and its tree lock stay until the child has torn down; if this server exits
+      // first, the row reads crashed and waits for `lykos recover`, which confirms quiescence.
       for (const fn of s.listeners) {
         try { fn(); } catch {}
       }
