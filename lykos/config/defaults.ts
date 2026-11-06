@@ -342,6 +342,9 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
   },
   delegation: {
     test_command: "",
+    shell_path: "",
+    powershell: false,
+    max_sessions: 4,
   },
   // T210 (ADR-0042): path rules default to empty sets of read and write rules per layer.
   path_rules: {

@@ -380,6 +380,18 @@ export interface DelegationConfig {
    * directories. Empty: no command; a task without `test:` then has none, never a guessed one.
    */
   test_command?: string;
+  /**
+   * T247: the bash every delegated host shell runs in, before Pi's search order (Git Bash, then bash on PATH).
+   * Empty: Pi's order. `lykos doctor` names the one that resolves.
+   */
+  shell_path?: string;
+  /** T247: give a delegated session the `powershell` tool. Default false: one shell, the resolved bash. */
+  powershell?: boolean;
+  /**
+   * T243: delegated sessions this project runs at once, counted from its `owners` rows whose owner is not `dead`.
+   * `mcp.max_sessions` caps one server too; the smallest wins. Default 4.
+   */
+  max_sessions?: number;
 }
 
 /**

@@ -607,6 +607,8 @@ export interface BootConfig {
   containment?: ContainmentRecord;
   /** T219: items withheld from an untrusted project. */
   withheld?: readonly string[];
+  /** T247: tools this session never gets, neither on the wire nor through `tool_call` (a delegated session's `powershell`). */
+  withheldTools?: readonly string[];
   /** T182: the runtimes a child this session spawns may start its own container on. Tests only; absent means the machine's. */
   containmentDrivers?: readonly ContainerRuntimeDriver[];
   /** Used with `config.continuation` to decide whether the threshold fires. */
@@ -713,6 +715,8 @@ interface AssembleOpts {
   model: BootConfig["model"];
   modelRuntime: ModelRuntime;
   toolNames: string[];
+  /** T247: see `BootConfig.withheldTools`. */
+  withheldTools?: readonly string[];
   gate: ApprovalGate;
   memory?: MemoryHeadPolicy;
   repoMap?: RepoMapPolicy;
@@ -1152,6 +1156,13 @@ ${note}
       : {}),
     ...(opts.coordinator !== undefined ? { coordinator: opts.coordinator } : {}),
   });
+
+  // T247: a withheld tool is neither active nor a `tool_call` target.
+  if (opts.withheldTools !== undefined && opts.withheldTools.length > 0) {
+    const withheld = new Set(opts.withheldTools.map(canonicalToolName));
+    for (let i = activeToolNames.length - 1; i >= 0; i--) if (withheld.has(canonicalToolName(activeToolNames[i]!))) activeToolNames.splice(i, 1);
+    for (let i = customTools.length - 1; i >= 0; i--) if (withheld.has(canonicalToolName(customTools[i]!.name))) customTools.splice(i, 1);
+  }
 
   // P10.9 (ticket 21, D4): an extension's tools ride the same `customTools`
   // array every Lykos tool does, because they ARE registry rows — there is
@@ -1727,6 +1738,7 @@ export async function boot(input: BootConfig, deps?: BootDeps): Promise<BootedSt
     ...(config.thinkingLevel !== undefined ? { thinkingLevel: config.thinkingLevel } : {}),
     ...(allowedSpecialistTools !== undefined ? { specialistToolNames: allowedSpecialistTools } : {}),
     ...(explicitToolNames !== undefined ? { explicitToolNames } : {}),
+    ...(input.withheldTools !== undefined ? { withheldTools: input.withheldTools } : {}),
     ...(readOnly ? { readOnly: true } : {}),
     ...(readOnlyChildTest !== undefined ? { readOnlyChildTest } : {}),
     reviewer: { enabled: config.reviewer.enabled, model: config.reviewer.model.trim() },

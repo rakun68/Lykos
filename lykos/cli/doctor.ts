@@ -37,6 +37,7 @@ import { candidateDrivers, type ContainmentLevel } from "../containment/containm
 import type { ContainmentConfig } from "../config/types.js";
 import type { ContainerRuntimeDriver, LimitedStart, RuntimeName } from "../containment/runtime.js";
 import { currentPriceTable } from "../ledger/prices.js";
+import { noBashMessage, resolveHostBash } from "../process/host-bash.js";
 
 import { defaultLedgerPath, openLedgerSync, type Ledger } from "../ledger/use.js";
 
@@ -353,6 +354,16 @@ export function checkGit(version: string | undefined): Check {
  * defaults are what a session runs with and what this reports; a hand edit to
  * that file is still reported, and still never repaired here.
  */
+/** T247: the bash every delegated host shell runs in, the one Pi resolves; none is a failure, with the fix. */
+export function checkHostBash(shellPath: string | undefined, resolve: typeof resolveHostBash = resolveHostBash): Check {
+  const resolution = resolve(shellPath);
+  if (resolution.ok) {
+    const source = shellPath !== undefined && shellPath.trim() !== "" ? "delegation.shell_path" : "Pi's search order";
+    return { status: "ok", label: `shell: ${resolution.resolved.shell} (${source}); delegated commands and harness checks run in it` };
+  }
+  return { status: "fail", label: `shell: ${noBashMessage(resolution).replace(/\n/g, "; ")}` };
+}
+
 export function checkRetryPolicy(env: NodeJS.ProcessEnv): Check {
   // P10.9 (ticket 21, D7): one resolver, shared with the host install path.
   // Two answers to "which directory does a declaration resolve against" is two
@@ -1061,6 +1072,7 @@ export function runDoctor(cwd: string, opts: RunDoctorOptions = {}): number {
     // declaration reconciled against that same directory.
     ...checkPiHost(process.env),
     checkGit(gitVersion()),
+    checkHostBash(resolved.delegation.shell_path),
     ...reconcileHostExtensions(resolveExtensions(resolved.extensions), piHostDir(process.env), existsSync),
     // T147 (D25): and the Lykos extension list, against the same directory.
     ...reconcileHostLykosExtensions(

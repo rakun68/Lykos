@@ -15,6 +15,8 @@ import { DEFAULT_DELEGATED_MODE } from "../delegate/session-protocol.js";
 import { stderrWrite, stdoutWrite } from "../tui/io-mode.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
+import { loadConfig } from "../config/load.js";
+import { noBashMessage, resolveHostBash } from "../process/host-bash.js";
 
 export interface RunCliOptions {
   model?: string;
@@ -141,6 +143,13 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
   if (opts.interactive) {
     // T37: interactive is the standalone conversation.
     return runInteractive(cwd, opts, trust.source);
+  }
+
+  // T247: every delegated host shell is the resolved bash; without one the run never starts.
+  const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
+  if (!bash.ok) {
+    process.stderr.write(`lykos run: refused — ${noBashMessage(bash)}\n`);
+    return 1;
   }
 
   // T184: a delegated session runs in an explicit interaction mode, which decides whether it writes and so where its

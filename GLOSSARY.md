@@ -253,6 +253,11 @@ Whether a recorded process still runs: `alive`, `dead`, or `unknown` when the OS
 A small process recorded in the ledger before it starts the command it holds. It runs nothing until the
 record is written and kills the command's tree when its parent lets go or dies.
 
+**Resolved bash**:
+The one shell every host shell Lykos runs for delegation uses: the bash Pi resolves (`delegation.shell_path`,
+else Git Bash, else bash on PATH). Verification, red checks and hooks run their lines in it, never cmd.exe.
+_Avoid_: system shell, default shell
+
 **Demonstration fixture**:
 The small repository in `fixtures/demo/` the P18 demonstration runs on, with a planted bug its sealed
 tests miss and its spec forbids. Its answer key, `fixtures/demo.KEY.md`, stays outside the copy an

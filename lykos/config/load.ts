@@ -525,7 +525,7 @@ function validateMcpConfig(layer: ConfigLayer): void {
   }
 }
 
-const VALID_DELEGATION_KEYS = new Set(["test_command"]);
+const VALID_DELEGATION_KEYS = new Set(["test_command", "shell_path", "powershell", "max_sessions"]);
 
 function validateDelegationConfig(layer: ConfigLayer): void {
   const val = layer.value as Record<string, unknown>;
@@ -546,6 +546,15 @@ function validateDelegationConfig(layer: ConfigLayer): void {
   const d = delegation as DelegationConfig;
   if (d.test_command !== undefined && typeof d.test_command !== "string") {
     throw new Error(`lykos config: delegation.test_command must be a string${where}`);
+  }
+  if (d.shell_path !== undefined && typeof d.shell_path !== "string") {
+    throw new Error(`lykos config: delegation.shell_path must be a string${where}`);
+  }
+  if (d.powershell !== undefined && typeof d.powershell !== "boolean") {
+    throw new Error(`lykos config: delegation.powershell must be true or false${where}`);
+  }
+  if (d.max_sessions !== undefined && (typeof d.max_sessions !== "number" || !Number.isInteger(d.max_sessions) || d.max_sessions < 1)) {
+    throw new Error(`lykos config: delegation.max_sessions must be a positive integer${where}`);
   }
 }
 

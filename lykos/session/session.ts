@@ -94,7 +94,8 @@ import {
 } from "../config/providers.js";
 import { assertHostProviderUsable, assertSpecialistProviderUsable } from "../config/specialist-credentials.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
-import { defaultLedgerPath, openLedger } from "../ledger/use.js";
+import { defaultLedgerPath, openLedger, openLedgerSync } from "../ledger/use.js";
+import { createGuardedExecutor } from "../process/shell.js";
 import { gitStatus, resolveProject } from "./identity.js";
 import { guardToolCall, recordBudgetTrip, type BudgetVerdict } from "../ledger/budget.js";
 import {
@@ -1219,7 +1220,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   resolveProject(cwd);
   const specialist = input.specialist ?? DEFAULT_SPECIALIST;
   const budgetOverride = input.budgetPerRunUsd !== undefined ? Number(input.budgetPerRunUsd) : undefined;
-  let config;
+  let config: ResolvedConfig;
   let layers;
   try {
     ({ resolved: config, layers } = loadConfig({
@@ -1463,6 +1464,26 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
     gate = wrapApprovalGateWithSealAllowance(gate, allowance);
   }
 
+  // T247: a delegated session that runs on this machine starts every process behind a recorded guard, and its
+  // shell lines in the resolved bash. A contained session's commands run in its container; a child runs on its
+  // parent's executor.
+  const guardedSession: { id?: string } = {};
+  // T247: one shell. A delegated session has no `powershell` tool unless `delegation.powershell` turns it on.
+  const withheldTools = input.delegated === true && config.delegation.powershell !== true ? ["powershell"] : [];
+  const hostExecutor =
+    input.delegated === true && (containment === undefined || containment.record.used === "off") && input.executor === undefined
+      ? createGuardedExecutor({
+          shellPath: config.delegation.shell_path,
+          record: (guardPid, command) => {
+            const ledger = openLedgerSync(ledgerPath);
+            try {
+              ledger.recordProcess({ kind: "guard", sessionId: guardedSession.id ?? null, pid: guardPid, command: command.slice(0, 2000) });
+            } finally {
+              ledger.close();
+            }
+          },
+        })
+      : undefined;
   let booted: BootedStandaloneSession;
   try {
     booted = await boot({
@@ -1505,20 +1526,24 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
     ...(input.specialistContext !== undefined ? { specialistContext: input.specialistContext } : {}),
     ...(readOnly ? { readOnly: true } : {}),
     ...(containment !== undefined
-      ? { executor: containment.executor, containment: containment.record }
+      ? { executor: hostExecutor ?? containment.executor, containment: containment.record }
       : input.executor !== undefined
         ? { executor: input.executor, ...(input.containmentRecord !== undefined ? { containment: input.containmentRecord } : {}) }
-        : {}),
+        : hostExecutor !== undefined
+          ? { executor: hostExecutor }
+          : {}),
     ...(input.containmentDrivers !== undefined ? { containmentDrivers: input.containmentDrivers } : {}),
     ...(input.coordinator !== undefined ? { coordinator: input.coordinator } : {}),
     ...(skippedExtensions.length > 0 ? { withheld: skippedExtensions } : {}),
     ...(input.delegated !== undefined ? { delegated: input.delegated } : {}),
+    ...(withheldTools.length > 0 ? { withheldTools } : {}),
   }, input.bootDeps);
   } catch (err) {
     await containment?.dispose();
     throw err;
   }
   const { session } = booted;
+  guardedSession.id = session.sessionId;
   // T182: the family's handle carries what a child needs to boot the way this session did.
   if (booted.spawnContext !== undefined && input.nativeProviders !== undefined) booted.spawnContext.nativeProviders = input.nativeProviders;
   // T194: a child answers to the same trust as its parent, so an untrusted delegated parent cannot hand a child back

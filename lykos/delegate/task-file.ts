@@ -126,7 +126,7 @@ export interface ResolvedTestCommand {
  * `delegation.test_command` filled with the task's test files (its sealed files and the test files among
  * `files`). Neither: undefined. A command is never derived from file names or the project's layout.
  */
-export function resolveTestCommand(task: Pick<TaskFile, "test" | "sealed" | "files">, config: { delegation: Required<DelegationConfig> }): ResolvedTestCommand | undefined {
+export function resolveTestCommand(task: Pick<TaskFile, "test" | "sealed" | "files">, config: { delegation: Pick<Required<DelegationConfig>, "test_command"> }): ResolvedTestCommand | undefined {
   if (task.test !== undefined) return { command: task.test, source: "task" };
   const template = config.delegation.test_command.trim();
   if (template === "") return undefined;

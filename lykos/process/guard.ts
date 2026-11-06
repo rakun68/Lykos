@@ -50,7 +50,8 @@ process.on("message", (m) => {
   child.on("error", (e) => { process.send({ type: "error", message: String(e && e.message || e) }, () => process.exit(127)); });
   if (child.pid) process.send({ type: "started", pid: child.pid });
   child.on("exit", (code, signal) => {
-    process.send({ type: "exit", code: code, signal: signal }, () => process.exit(code === null ? 1 : code));
+    const n = signal ? require("node:os").constants.signals[signal] : undefined;
+    process.send({ type: "exit", code: code, signal: signal }, () => process.exit(code !== null ? code : 128 + (n || 0)));
   });
 });
 process.send({ type: "ready", pid: process.pid });
@@ -99,8 +100,18 @@ function isGuardMessage(value: unknown): value is GuardMessage {
   return typeof value === "object" && value !== null && typeof (value as { type?: unknown }).type === "string";
 }
 
-/** Starts `command` behind a guard, recording the guard before the command runs. */
-export async function spawnGuarded(command: string, args: readonly string[], opts: GuardedSpawnOptions): Promise<GuardedProcess> {
+/** A guard started, its handshake under way. The one implementation `spawnGuarded` and `guardedChild` share. */
+export interface StartedGuard {
+  guard: ChildProcess;
+  /** Resolves with both pids once the record is written and the command runs; rejects when it never runs. */
+  started: Promise<{ guardPid: number; commandPid: number }>;
+  exited: Promise<GuardedExit>;
+  /** Lets go of the guard: it kills its command's tree, or runs nothing when `go` was not sent yet. */
+  release(): void;
+}
+
+/** Starts a guard for `command` and runs the handshake: `ready`, the record, `go`, `started`. */
+export function startGuard(command: string, args: readonly string[], opts: GuardedSpawnOptions): StartedGuard {
   const output = opts.output ?? "pipe";
   const stdio: StdioOptions = [opts.stdin ?? "ignore", output, output, "ipc"];
   const guard = spawn(process.execPath, ["-e", GUARD_SOURCE], {
@@ -111,9 +122,11 @@ export async function spawnGuarded(command: string, args: readonly string[], opt
     detached: process.platform !== "win32",
     windowsHide: true,
   });
+  const release = (): void => {
+    if (guard.connected) guard.disconnect();
+  };
 
   let exitInfo: GuardedExit | undefined;
-  let commandError: string | undefined;
   const exited = new Promise<GuardedExit>((resolve) => {
     guard.on("message", (m: unknown) => {
       if (isGuardMessage(m) && m.type === "exit") exitInfo = { code: m.code, signal: m.signal };
@@ -121,56 +134,59 @@ export async function spawnGuarded(command: string, args: readonly string[], opt
     guard.on("exit", (code, signal) => resolve(exitInfo ?? { code, signal }));
   });
 
-  const nextMessage = <T extends GuardMessage["type"]>(type: T): Promise<Extract<GuardMessage, { type: T }>> =>
-    new Promise((resolve, reject) => {
-      const onMessage = (m: unknown): void => {
-        if (!isGuardMessage(m)) return;
-        if (m.type === "error") {
-          commandError = m.message;
-          cleanup();
-          reject(new Error(`guard: the command did not start: ${m.message}`));
-        } else if (m.type === type) {
-          cleanup();
-          resolve(m as Extract<GuardMessage, { type: T }>);
-        }
-      };
-      const onExit = (code: number | null): void => {
-        cleanup();
-        reject(new Error(commandError !== undefined ? `guard: the command did not start: ${commandError}` : `guard exited (${code}) before "${type}"`));
-      };
-      const onError = (err: Error): void => {
-        cleanup();
-        reject(err);
-      };
-      const cleanup = (): void => {
-        guard.off("message", onMessage);
-        guard.off("exit", onExit);
-        guard.off("error", onError);
-      };
-      guard.on("message", onMessage);
-      guard.on("exit", onExit);
-      guard.on("error", onError);
-    });
+  const started = new Promise<{ guardPid: number; commandPid: number }>((resolve, reject) => {
+    let guardPid: number | undefined;
+    let commandError: string | undefined;
+    let done = false;
+    const finish = (err?: Error, commandPid?: number): void => {
+      if (done) return;
+      done = true;
+      guard.off("message", onMessage);
+      guard.off("exit", onExit);
+      guard.off("error", onError);
+      if (err !== undefined) reject(err);
+      else resolve({ guardPid: guardPid!, commandPid: commandPid! });
+    };
+    const onMessage = (m: unknown): void => {
+      if (!isGuardMessage(m)) return;
+      if (m.type === "error") {
+        commandError = m.message;
+        finish(new Error(`guard: the command did not start: ${m.message}`));
+      } else if (m.type === "ready") {
+        guardPid = m.pid;
+        Promise.resolve()
+          .then(() => opts.record(m.pid))
+          .then(
+            () => {
+              if (!done && guard.connected) guard.send({ type: "go" });
+            },
+            (err: unknown) => {
+              release();
+              finish(err instanceof Error ? err : new Error(String(err)));
+            },
+          );
+      } else if (m.type === "started") {
+        finish(undefined, m.pid);
+      }
+    };
+    const onExit = (code: number | null): void => {
+      finish(new Error(commandError !== undefined ? `guard: the command did not start: ${commandError}` : `guard exited (${code}) before its command started`));
+    };
+    const onError = (err: Error): void => finish(err);
+    guard.on("message", onMessage);
+    guard.on("exit", onExit);
+    guard.on("error", onError);
+  });
+  // A caller that only reads `exited` must not see an unhandled rejection.
+  started.catch(() => {});
+  return { guard, started, exited, release };
+}
 
-  const ready = await nextMessage("ready");
-  try {
-    await opts.record(ready.pid);
-  } catch (err) {
-    if (guard.connected) guard.disconnect();
-    throw err;
-  }
-  const startedMessage = nextMessage("started");
-  guard.send({ type: "go" });
-  const started = await startedMessage;
-  return {
-    guardPid: ready.pid,
-    commandPid: started.pid,
-    guard,
-    exited,
-    release: () => {
-      if (guard.connected) guard.disconnect();
-    },
-  };
+/** Starts `command` behind a guard, recording the guard before the command runs. */
+export async function spawnGuarded(command: string, args: readonly string[], opts: GuardedSpawnOptions): Promise<GuardedProcess> {
+  const g = startGuard(command, args, opts);
+  const { guardPid, commandPid } = await g.started;
+  return { guardPid, commandPid, guard: g.guard, exited: g.exited, release: g.release };
 }
 
 /**

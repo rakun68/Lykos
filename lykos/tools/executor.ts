@@ -24,6 +24,7 @@ import {
   createLocalPowerShellOperations,
   type BashOperations,
 } from "@earendil-works/pi-coding-agent";
+import { bashCommandLine } from "../process/host-bash.js";
 
 /** What a shell reports for a command a signal ended: 128 plus the signal's number. 128 when the signal is not known, so it is still not 0. */
 export function exitCodeOfSignal(signal: NodeJS.Signals | null): number {
@@ -69,7 +70,14 @@ export interface ProjectExecutor {
 export const localExecutor: ProjectExecutor = {
   name: "local",
   spawn: (command, args, options) => {
-    const { containerPaths: _containerPaths, ...childOptions } = options;
+    const { containerPaths: _containerPaths, shell, ...childOptions } = options;
+    if (shell === true) {
+      // T247: a shell line runs in the bash Pi resolves, never cmd.exe. Node's shell only when no bash resolves,
+      // which `lykos run` refuses for delegation and `lykos doctor` reports.
+      const bash = bashCommandLine([command, ...args].join(" "));
+      if (bash !== undefined) return spawn(bash.command, bash.args, childOptions);
+      return spawn(command, [...args], { ...childOptions, shell: true });
+    }
     return spawn(command, [...args], childOptions);
   },
   shellOperations: (shell) => (shell === "bash" ? createLocalBashOperations() : createLocalPowerShellOperations()),
