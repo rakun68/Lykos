@@ -19,6 +19,7 @@ import { parseFlags } from "../cli/delegation.js";
 import { unknownRunFlag } from "../cli/args.js";
 import { createMcpServer, ledgerViews, runDelegated, waitForSessions } from "./mcp-server.js";
 import type { SessionRunner } from "./session-protocol.js";
+import { viewOf, type OwnerRow } from "./ownership.js";
 import { watchStepCap, type StepCappable } from "./step-cap.js";
 
 const saved: Record<string, string | undefined> = {};
@@ -331,5 +332,30 @@ describe("T243: the commands", () => {
     const result = await runDelegated(ws, { brief }, { trustSource: "flag", run });
     assert.ok(got >= brief.length);
     assert.notEqual(result.outcome, "blocked");
+  });
+});
+
+describe("T243: an owner that ends and exits while its liveness is read is not a crash", () => {
+  it("re-reads the row after a dead verdict", () => {
+    const running: OwnerRow = {
+      session_id: "s1",
+      request_id: null,
+      owner: "run",
+      owner_pid: 999_999,
+      owner_recorded_at_ms: 0,
+      specialist: "general",
+      write_in_place: 0,
+      state: "running",
+      started_at: "2026-11-07T00:00:00.000Z",
+      ended_at: null,
+      stop_requested: 0,
+      question: null,
+      result_json: null,
+    };
+    const done: OwnerRow = { ...running, state: "done", ended_at: "2026-11-07T00:00:01.000Z", result_json: JSON.stringify({ outcome: "ok", next: "review_or_accept" }) };
+    const dead = () => "dead" as const;
+    assert.equal(viewOf(running, dead, () => done).state, "done");
+    assert.equal(viewOf(running, dead, () => running).state, "crashed");
+    assert.equal(viewOf(running, dead).state, "crashed");
   });
 });

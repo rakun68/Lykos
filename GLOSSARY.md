@@ -258,6 +258,10 @@ The process that holds a delegated session's stdin, and so owns it: an MCP serve
 ledger's `owners` row by pid and record time. A session whose owner is `dead` is crashed and waits for `lykos
 recover`; nothing takes it over by itself.
 
+**Inbox**:
+The ledger table of steers for a delegated session sent from a process that does not own it. The owner polls it and
+delivers each message to the session in order.
+
 **Tree lock**:
 The ledger row that makes one write-in-place session the only writer on a tree, across MCP and the CLI.
 _Avoid_: write lock, workspace lock

@@ -913,6 +913,23 @@ function migrateOwners(db: Database.Database): void {
       session_id   TEXT NOT NULL,
       acquired_at  TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS inbox (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id    TEXT NOT NULL,
+      message       TEXT NOT NULL,
+      created_at    TEXT NOT NULL,
+      delivered_at  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_session ON inbox(session_id);
+    CREATE TABLE IF NOT EXISTS questions (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT NOT NULL,
+      question     TEXT NOT NULL,
+      asked_at     TEXT NOT NULL,
+      answered_at  TEXT,
+      answered_by  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_questions_session ON questions(session_id);
   `);
 }
 

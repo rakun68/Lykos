@@ -831,6 +831,22 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "steer",
+    help: ["  steer     `lykos steer <id> -m <message|->`: message a live delegated session from any process; it answers its open question (JSON)"],
+    run: async (rest, { cwd }) => {
+      const { runSteer } = await import("./delegation.js");
+      return runSteer(cwd, rest);
+    },
+  },
+  {
+    name: "continue",
+    help: ["  continue  `lykos continue <id> -m <message|->`: resume an ended delegated session on its branch; blocks, prints the result (JSON)"],
+    run: async (rest, { cwd }) => {
+      const { runContinue } = await import("./delegation.js");
+      return runContinue(cwd, rest);
+    },
+  },
+  {
     name: "login",
     help: [
       "  login     store a credential: `lykos login <provider>` (OAuth) or `lykos login <provider> --api-key` (stdin)",

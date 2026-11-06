@@ -191,11 +191,66 @@ export function finish(ledger: Ledger, sessionId: string, state: Exclude<OwnedSt
   }).immediate();
 }
 
-/** A question the session asked, visible at once; `null` when it was answered. */
-export function setQuestion(ledger: Ledger, sessionId: string, question: string | null): void {
-  ledger.db
-    .prepare(`UPDATE owners SET state = ?, question = ? WHERE session_id = ? AND state IN ('running', 'waiting')`)
-    .run(question === null ? "running" : "waiting", question, sessionId);
+// The inbox (T244): any process reaches any session through rows its owner polls. A steer is a row in `inbox`; a
+// question the session asks is a row in `questions`, and the owner row shows it at once (F1). A steer answers every
+// open question; a question the timeout answered is closed too, so `wait --questions` never returns on one already
+// answered (G8).
+
+/** The session asked a question: recorded, and shown on its owner row, before anything else happens. */
+export function askQuestion(ledger: Ledger, sessionId: string, question: string): void {
+  ledger.db.transaction(() => {
+    ledger.db.prepare("INSERT INTO questions (session_id, question, asked_at) VALUES (?, ?, ?)").run(sessionId, question, new Date().toISOString());
+    ledger.db.prepare(`UPDATE owners SET state = 'waiting', question = ? WHERE session_id = ? AND state IN ('running', 'waiting')`).run(question, sessionId);
+  }).immediate();
+}
+
+/** Closes the session's open questions: `steer` when a message answered them, `timeout` when it decided alone. */
+export function closeQuestions(ledger: Ledger, sessionId: string, by: "steer" | "timeout"): number {
+  return ledger.db.transaction(() => {
+    const res = ledger.db
+      .prepare("UPDATE questions SET answered_at = ?, answered_by = ? WHERE session_id = ? AND answered_at IS NULL")
+      .run(new Date().toISOString(), by, sessionId);
+    ledger.db.prepare(`UPDATE owners SET state = 'running', question = NULL WHERE session_id = ? AND state = 'waiting'`).run(sessionId);
+    return res.changes;
+  }).immediate();
+}
+
+export interface OpenQuestion {
+  session_id: string;
+  question: string;
+  asked_at: string;
+}
+
+/** The questions nobody has answered yet, oldest first. */
+export function openQuestions(ledger: Ledger, sessionIds: readonly string[]): OpenQuestion[] {
+  if (sessionIds.length === 0) return [];
+  const marks = sessionIds.map(() => "?").join(", ");
+  return ledger.db
+    .prepare(`SELECT session_id, question, asked_at FROM questions WHERE answered_at IS NULL AND session_id IN (${marks}) ORDER BY id ASC`)
+    .all(...sessionIds) as OpenQuestion[];
+}
+
+/** Posts a steering message for the session's owner. False when the session is not live. */
+export function postSteer(ledger: Ledger, sessionId: string, message: string): boolean {
+  return ledger.db.transaction(() => {
+    const row = ownerRow(ledger, sessionId);
+    if (row === undefined || !isLive(row.state)) return false;
+    ledger.db.prepare("INSERT INTO inbox (session_id, message, created_at) VALUES (?, ?, ?)").run(sessionId, message, new Date().toISOString());
+    return true;
+  }).immediate();
+}
+
+/** The owner takes the session's undelivered messages, oldest first, and marks them delivered. */
+export function takeInbox(ledger: Ledger, sessionId: string): string[] {
+  return ledger.db.transaction(() => {
+    const rows = ledger.db
+      .prepare("SELECT id, message FROM inbox WHERE session_id = ? AND delivered_at IS NULL ORDER BY id ASC")
+      .all(sessionId) as Array<{ id: number; message: string }>;
+    const mark = ledger.db.prepare("UPDATE inbox SET delivered_at = ? WHERE id = ?");
+    const now = new Date().toISOString();
+    for (const r of rows) mark.run(now, r.id);
+    return rows.map((r) => r.message);
+  }).immediate();
 }
 
 /** Asks the owner to stop the session. The owner polls the flag. False when no live row has that id. */
@@ -228,10 +283,15 @@ export interface SessionView {
 
 /**
  * What any process sees of a session. A live row whose owner is `dead` is `crashed`, with `next recover`; one whose
- * owner is `unknown` stays as recorded: uncertainty never ends a session.
+ * owner is `unknown` stays as recorded: uncertainty never ends a session. `reread` reads the row again after a `dead`
+ * verdict: an owner that ended the session and exited while its liveness was being read is not a crash.
  */
-export function viewOf(row: OwnerRow, livenessOf: LivenessOf = ownerLiveness): SessionView {
+export function viewOf(row: OwnerRow, livenessOf: LivenessOf = ownerLiveness, reread?: () => OwnerRow | undefined): SessionView {
   const ownerState = isLive(row.state) ? livenessOf(row) : undefined;
+  if (ownerState === "dead" && reread !== undefined) {
+    const fresh = reread();
+    if (fresh !== undefined && !isLive(fresh.state)) return viewOf(fresh, livenessOf);
+  }
   const crashed = ownerState === "dead";
   const result = row.result_json !== null ? (JSON.parse(row.result_json) as unknown) : undefined;
   const resultNext = typeof result === "object" && result !== null ? (result as { next?: unknown }).next : undefined;

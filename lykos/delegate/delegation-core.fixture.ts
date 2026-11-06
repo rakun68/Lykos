@@ -3,7 +3,7 @@
 // The stand-in session runs until <release-file> exists (or forever, if it never does), then returns ok. The
 // result is printed as one JSON line on stdout.
 
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { runDelegated } from "./mcp-server.js";
 import type { SessionRunner } from "./session-protocol.js";
@@ -14,7 +14,13 @@ if (workspace === undefined || releaseFile === undefined) {
   process.exit(2);
 }
 
-const run: SessionRunner = async ({ request, signal }) => {
+// T244: LYKOS_FIXTURE_STEER_LOG gets every steer the session receives, one per line; LYKOS_FIXTURE_QUESTION is
+// asked once the session starts.
+const steerLog = process.env.LYKOS_FIXTURE_STEER_LOG;
+const question = process.env.LYKOS_FIXTURE_QUESTION;
+const run: SessionRunner = async ({ request, signal, onSteerable, onQuestion }) => {
+  if (steerLog !== undefined) onSteerable?.((message) => appendFileSync(steerLog, `${message}\n`));
+  if (question !== undefined) onQuestion?.(question);
   while (!existsSync(releaseFile) && !signal.aborted) await sleep(50);
   return { outcome: "ok", sessionId: request.newSessionId ?? request.sessionId ?? "unknown", answer: "released", steps: 1 };
 };

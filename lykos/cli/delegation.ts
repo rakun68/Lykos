@@ -1,9 +1,14 @@
-// `lykos status`, `lykos wait`, `lykos stop` (T243): thin front ends over the delegation core. They read and write
+// `lykos status`, `lykos wait`, `lykos stop` (T243), `lykos steer`, `lykos continue` (T244): thin front ends over
+// the delegation core. They read and write
 // the project ledger, so they see every delegated session of the project, whichever process owns it (`lykos run`
 // or an MCP server). Every command prints JSON with `next`; no arguments prints its usage; an unknown flag is an
 // error (R19).
 
-import { ledgerViews, stopElsewhere, waitForSessions } from "../delegate/mcp-server.js";
+import { ledgerViews, runDelegated, steerElsewhere, stopElsewhere, waitForQuestions, waitForSessions } from "../delegate/mcp-server.js";
+import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
+import { loadConfig } from "../config/load.js";
+import { noBashMessage, resolveHostBash } from "../process/host-bash.js";
+import { readProcessStdin } from "./brief.js";
 import type { SessionView } from "../delegate/ownership.js";
 import { stdoutWrite } from "../tui/io-mode.js";
 
@@ -17,7 +22,8 @@ export function parseFlags(args: readonly string[], command: string, valued: rea
   const ids: string[] = [];
   const flags = new Map<string, string | true>();
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]!;
+    // `-m` is `--message`, the one short flag.
+    const arg = args[i] === "-m" ? "--message" : args[i]!;
     if (!arg.startsWith("--")) {
       ids.push(arg);
       continue;
@@ -51,7 +57,11 @@ export function nextOf(views: readonly SessionView[]): string {
 }
 
 export const STATUS_USAGE = "usage: lykos status <session-id>... | --all    the sessions' state, owner and result, from the project ledger";
-export const WAIT_USAGE = "usage: lykos wait <session-id>... [--any] [--timeout <seconds>]    block until the sessions end (or one, with --any)";
+export const WAIT_USAGE =
+  "usage: lykos wait <session-id>... [--any] [--questions] [--timeout <seconds>]    block until the sessions end (or one, with --any; or one asks a question nobody answered, with --questions)";
+export const STEER_USAGE = "usage: lykos steer <session-id> -m <message|->    send a live session a message; it answers the session's open question";
+export const CONTINUE_USAGE =
+  "usage: lykos continue <session-id> -m <message|-> [--max-steps n] [--request-id id] [--trust-workspace]    resume an ended session on its branch with a new message";
 export const STOP_USAGE = "usage: lykos stop <session-id>    ask the session's owner to stop it, and wait up to 10 s for it to end";
 
 function usage(line: string): number {
@@ -88,7 +98,7 @@ export function runStatus(cwd: string, args: readonly string[]): number {
 
 export async function runWait(cwd: string, args: readonly string[]): Promise<number> {
   if (args.length === 0) return usage(WAIT_USAGE);
-  const parsed = parseFlags(args, "wait", ["timeout"], ["any"]);
+  const parsed = parseFlags(args, "wait", ["timeout"], ["any", "questions"]);
   if ("error" in parsed) {
     process.stderr.write(`${parsed.error}\n`);
     return 1;
@@ -109,9 +119,97 @@ export async function runWait(cwd: string, args: readonly string[]): Promise<num
     print({ outcome: "error", message: `unknown session id: ${unknown.join(", ")}`, next: "fix_environment" });
     return 1;
   }
+  if (parsed.flags.has("questions")) {
+    // T244 (G8): only a question nobody answered wakes it.
+    const { questions, sessions } = await waitForQuestions(cwd, parsed.ids, timeoutMs);
+    print({ questions, sessions, next: questions.length > 0 ? "answer_question" : nextOf(sessions) });
+    return 0;
+  }
   const views = await waitForSessions(cwd, parsed.ids, parsed.flags.has("any"), timeoutMs);
   print({ sessions: views, next: nextOf(views) });
   return 0;
+}
+
+/** `-m <text>`, or `-m -` for stdin. */
+async function messageOf(parsed: ParsedFlags, command: string): Promise<string | { error: string }> {
+  const raw = parsed.flags.get("message");
+  if (typeof raw !== "string") return { error: `lykos ${command}: -m <message> is required` };
+  const text = raw === "-" ? await readProcessStdin() : raw;
+  if (text.trim() === "") return { error: `lykos ${command}: the message is empty` };
+  return text;
+}
+
+export async function runSteer(cwd: string, args: readonly string[]): Promise<number> {
+  if (args.length === 0) return usage(STEER_USAGE);
+  const parsed = parseFlags(args, "steer", ["message"], []);
+  if ("error" in parsed) {
+    process.stderr.write(`${parsed.error}\n`);
+    return 1;
+  }
+  if (parsed.ids.length !== 1) return usage(STEER_USAGE);
+  const message = await messageOf(parsed, "steer");
+  if (typeof message !== "string") {
+    process.stderr.write(`${message.error}\n`);
+    return 1;
+  }
+  const id = parsed.ids[0]!;
+  const steered = steerElsewhere(cwd, id, message);
+  if (steered === undefined) {
+    print({ outcome: "error", message: `unknown session id: ${id}`, next: "fix_environment" });
+    return 1;
+  }
+  if (!steered.steered) {
+    print({ ...steered, outcome: "error", message: `session ${id} is ${steered.state}; continue it instead`, next: steered.state === "crashed" ? "recover" : "resume" });
+    return 1;
+  }
+  print({ ...steered, next: "wait" });
+  return 0;
+}
+
+export async function runContinue(cwd: string, args: readonly string[]): Promise<number> {
+  if (args.length === 0) return usage(CONTINUE_USAGE);
+  const parsed = parseFlags(args, "continue", ["message", "max-steps", "request-id"], ["trust-workspace"]);
+  if ("error" in parsed) {
+    process.stderr.write(`${parsed.error}\n`);
+    return 1;
+  }
+  if (parsed.ids.length !== 1) return usage(CONTINUE_USAGE);
+  const message = await messageOf(parsed, "continue");
+  if (typeof message !== "string") {
+    process.stderr.write(`${message.error}\n`);
+    return 1;
+  }
+  const stepsRaw = parsed.flags.get("max-steps");
+  const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
+  if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
+    process.stderr.write(`lykos continue: --max-steps must be a positive integer, got "${String(stepsRaw)}"\n`);
+    return 1;
+  }
+  let trust;
+  try {
+    trust = await ensureWorkspaceTrust({ workspace: cwd, interactive: false, ...(parsed.flags.has("trust-workspace") ? { trustWorkspace: true } : {}) });
+  } catch (err) {
+    process.stderr.write(`lykos continue: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
+    return 1;
+  }
+  const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
+  if (!bash.ok) {
+    process.stderr.write(`lykos continue: refused — ${noBashMessage(bash)}\n`);
+    return 1;
+  }
+  const requestId = parsed.flags.get("request-id");
+  const result = await runDelegated(
+    cwd,
+    {
+      brief: message,
+      session_id: parsed.ids[0]!,
+      ...(maxSteps !== undefined ? { max_steps: maxSteps } : {}),
+      ...(typeof requestId === "string" ? { request_id: requestId } : {}),
+    },
+    { trustSource: trust.source, onProgress: (line) => process.stderr.write(`lykos continue: ${line}\n`) },
+  );
+  print(result);
+  return result.outcome === "ok" || result.outcome === "needs_answer" ? 0 : 1;
 }
 
 export async function runStop(cwd: string, args: readonly string[]): Promise<number> {

@@ -36,6 +36,8 @@ describe("Ledger", () => {
         "extension_counters",
         // flaky_tests joined on T167: a test that failed in the gate and passed on rerun.
         "flaky_tests",
+        // inbox joined on T244: steers for a delegated session, from any process, delivered by its owner.
+        "inbox",
         "memory_eligibility",
         // owners joined on T243: who owns each delegated session, by pid and record time.
         "owners",
@@ -45,6 +47,8 @@ describe("Ledger", () => {
         "projects",
         // prunes joined on T188: each superseded-read / useless-result prune pass.
         "prunes",
+        // questions joined on T244: each question a delegated session asked, and how it was closed.
+        "questions",
         "rediscovery_annotations",
         // seal_events joined on T195: sealed TDD events.
         "seal_events",

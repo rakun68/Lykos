@@ -27,7 +27,7 @@ import {
   specialistToolName,
   type SpecialistLocation,
 } from "../config/specialists.js";
-import { defaultLedgerPath, openLedgerSync, withLedgerSync, type SealEventRow } from "../ledger/use.js";
+import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
 import { readTranscript, transcriptFilePath, type TranscriptEventInput, type TranscriptEventRecord } from "../session/transcript.js";
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
@@ -37,7 +37,25 @@ import { addedLines, changeFlags, parseNameStatus, type ChangedPath } from "./re
 import { verifySeals } from "../seal/verify.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
-import { admit, finish, ownerRow, ownerRows, requestStop, settled, stopRequested, viewOf, type OwnerKind, type SessionView } from "./ownership.js";
+import {
+  admit,
+  askQuestion,
+  closeQuestions,
+  finish,
+  openQuestions,
+  ownerRow,
+  ownerRows,
+  postSteer,
+  requestStop,
+  settled,
+  stopRequested,
+  takeInbox,
+  viewOf,
+  type OpenQuestion,
+  ownerLiveness,
+  type OwnerKind,
+  type SessionView,
+} from "./ownership.js";
 import { stderrWrite } from "../tui/io-mode.js";
 import { createProcessRunner, createWarmPool, type WarmPool } from "./session-process.js";
 import { rootSessionOf } from "./work-target.js";
@@ -212,15 +230,18 @@ interface TrackedSession {
   onSteer?: ((message: string) => void | Promise<void>) | undefined;
   queuedSteers: string[];
   listeners: Array<() => void>;
-  /** T243: polls the ledger for a stop asked by another process. */
+  /** T243/T244: polls the ledger for a stop or a steer another process asked for. */
   stopPoll?: NodeJS.Timeout | undefined;
+  /** T243: the id its owner row is keyed by, and who owns it. */
+  ownedId: string;
+  ownerKind: OwnerKind;
   isBlocking: boolean;
   pendingQuestion?: string | undefined;
   unansweredQuestions: string[];
   askTimeoutTimer?: NodeJS.Timeout | undefined;
 }
 
-/** How often an owner reads the ledger for a stop another process asked for (T243). */
+/** How often an owner reads the ledger for a stop or a steer another process asked for (T243, T244). */
 const STOP_POLL_MS = 500;
 
 type TaskInput = {
@@ -1191,15 +1212,19 @@ async function startTrackedSession(
     listeners: [],
     isBlocking,
     unansweredQuestions: [],
+    ownedId: targetSessionId,
+    ownerKind: owner.kind,
   };
   registry.set(targetSessionId, sessionEntry);
-  // T243: a stop another process asks for reaches this owner through the ledger.
+  // T243/T244: a stop or a steer another process asks for reaches this owner through the ledger.
   sessionEntry.stopPoll = setInterval(() => {
     if (sessionEntry.stoppedReason !== undefined) return;
     let asked = false;
+    let messages: string[] = [];
     try {
-      asked = withLedgerSync(ledgerPath, (ledger) => stopRequested(ledger, targetSessionId));
+      [asked, messages] = withLedgerSync(ledgerPath, (ledger) => [stopRequested(ledger, targetSessionId), takeInbox(ledger, targetSessionId)] as const);
     } catch {}
+    for (const message of messages) deliverSteer(sessionEntry, message);
     if (!asked) return;
     if (sessionEntry.askTimeoutTimer !== undefined) {
       clearTimeout(sessionEntry.askTimeoutTimer);
@@ -1322,7 +1347,68 @@ async function startTrackedSession(
 
 /** The id a session's owner row is keyed by: the one it was admitted under. */
 function ownedIdOf(s: TrackedSession): string {
-  return s.request.sessionId ?? s.request.newSessionId ?? s.sessionId;
+  return s.ownedId;
+}
+
+/** Runs `fn` on the session's ledger; a ledger that cannot be written is reported, never fatal to the session. */
+function onLedger(s: TrackedSession, what: string, fn: (ledger: Ledger) => void): void {
+  try {
+    withLedgerSync(defaultLedgerPath(s.workspace), fn);
+  } catch (err) {
+    stderrWrite(`lykos: could not record ${what} for session ${s.ownedId}: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
+}
+
+/** T244: a steering message for a live session. A session waiting on a question takes it as the answer. */
+function deliverSteer(s: TrackedSession, message: string): void {
+  if (s.state === "waiting") {
+    if (s.askTimeoutTimer !== undefined) {
+      clearTimeout(s.askTimeoutTimer);
+      s.askTimeoutTimer = undefined;
+    }
+    s.state = "running";
+    s.pendingQuestion = undefined;
+  }
+  onLedger(s, "the answer", (ledger) => void closeQuestions(ledger, s.ownedId, "steer"));
+  if (s.onSteer) {
+    void s.onSteer(message);
+  } else {
+    s.queuedSteers.push(message);
+  }
+}
+
+/** T244: the open questions of these sessions, from the ledger. */
+export function ledgerQuestions(workspace: string, ids: readonly string[]): OpenQuestion[] {
+  const ledgerPath = defaultLedgerPath(workspace);
+  if (!existsSync(ledgerPath)) return [];
+  return withLedgerSync(ledgerPath, (ledger) => openQuestions(ledger, ids));
+}
+
+/**
+ * T244: waits until one of these sessions has a question nobody answered (never one already answered, G8), or all
+ * of them have settled. Returns the open questions, empty when they settled or the timeout passed.
+ */
+export async function waitForQuestions(workspace: string, ids: readonly string[], timeoutMs?: number): Promise<{ questions: OpenQuestion[]; sessions: SessionView[] }> {
+  const until = timeoutMs !== undefined ? Date.now() + timeoutMs : undefined;
+  for (;;) {
+    const questions = ledgerQuestions(workspace, ids);
+    const sessions = ledgerViews(workspace, ids);
+    if (questions.length > 0 || sessions.every(settled)) return { questions, sessions };
+    if (until !== undefined && Date.now() >= until) return { questions, sessions };
+    await new Promise((r) => setTimeout(r, LEDGER_POLL_MS));
+  }
+}
+
+/** T244: posts a steer for a session another process owns. Undefined when the ledger has no such session. */
+export function steerElsewhere(workspace: string, sessionId: string, message: string): { session_id: string; steered: boolean; state: string } | undefined {
+  const ledgerPath = defaultLedgerPath(workspace);
+  if (!existsSync(ledgerPath)) return undefined;
+  return withLedgerSync(ledgerPath, (ledger) => {
+    const row = ownerRow(ledger, sessionId);
+    if (row === undefined) return undefined;
+    const steered = postSteer(ledger, sessionId, message);
+    return { session_id: sessionId, steered, state: viewOf(row, ownerLiveness, () => ownerRow(ledger, sessionId)).state };
+  });
 }
 
 /**
@@ -1350,7 +1436,7 @@ const LEDGER_POLL_MS = 250;
 export function ledgerViews(workspace: string, ids?: readonly string[]): SessionView[] {
   const ledgerPath = defaultLedgerPath(workspace);
   if (!existsSync(ledgerPath)) return [];
-  return withLedgerSync(ledgerPath, (ledger) => ownerRows(ledger, ids).map((row) => viewOf(row)));
+  return withLedgerSync(ledgerPath, (ledger) => ownerRows(ledger, ids).map((row) => viewOf(row, ownerLiveness, () => ownerRow(ledger, row.session_id))));
 }
 
 /**
@@ -1385,7 +1471,12 @@ async function duplicateRequest(workspace: string, sessionId: string, registry: 
 }
 
 function handleSessionQuestion(sessionEntry: TrackedSession, question: string, workspace: string): void {
-  if (sessionEntry.isBlocking) {
+  // T244 (F1): the question is in the ledger, and so in every process's `status`, before anything else happens.
+  onLedger(sessionEntry, "the question", (ledger) => askQuestion(ledger, sessionEntry.ownedId, question));
+  // A blocking MCP call has a caller that cannot answer mid-call: it decides alone at once. `lykos run` blocks too,
+  // but another process can answer through the inbox, so it waits like a started session.
+  if (sessionEntry.isBlocking && sessionEntry.ownerKind === "mcp") {
+    onLedger(sessionEntry, "the decide-alone answer", (ledger) => void closeQuestions(ledger, sessionEntry.ownedId, "timeout"));
     sessionEntry.unansweredQuestions.push(question);
     if (sessionEntry.onSteer) {
       void sessionEntry.onSteer(ASK_TIMEOUT_NOTICE);
@@ -1418,6 +1509,7 @@ function handleSessionQuestion(sessionEntry: TrackedSession, question: string, w
     if (sessionEntry.state === "waiting") {
       sessionEntry.state = "running";
       sessionEntry.pendingQuestion = undefined;
+      onLedger(sessionEntry, "the decide-alone answer", (ledger) => void closeQuestions(ledger, sessionEntry.ownedId, "timeout"));
       sessionEntry.unansweredQuestions.push(question);
       if (sessionEntry.onSteer) {
         void sessionEntry.onSteer(ASK_TIMEOUT_NOTICE);
@@ -1542,9 +1634,17 @@ async function handleStatus(
   };
 }
 
-function handleSteer(args: { session_id: string; message: string }, registry: Map<string, TrackedSession>): ToolResult {
+function handleSteer(workspace: string, args: { session_id: string; message: string }, registry: Map<string, TrackedSession>): ToolResult {
   const s = registry.get(args.session_id);
   if (!s) {
+    // T244: a session another process owns takes the steer through the ledger inbox.
+    const elsewhere = steerElsewhere(workspace, args.session_id, args.message);
+    if (elsewhere !== undefined) {
+      if (!elsewhere.steered) {
+        return toResult({ outcome: "error", message: `session ${args.session_id} is ${elsewhere.state}; cannot steer it. Continue it with session_id.` });
+      }
+      return { content: [{ type: "text", text: JSON.stringify(elsewhere, null, 2) }] };
+    }
     return toResult({
       outcome: "error",
       message: `unknown session id: ${args.session_id}. Pass session_id on lykos_start (or a specialist tool) to resume an earlier session.`,
@@ -1556,19 +1656,7 @@ function handleSteer(args: { session_id: string; message: string }, registry: Ma
       message: `session ${args.session_id} has ended with state "${s.state}"; cannot steer a finished session. Pass session_id on lykos_start (or a specialist tool) to resume it.`,
     });
   }
-  if (s.state === "waiting") {
-    if (s.askTimeoutTimer !== undefined) {
-      clearTimeout(s.askTimeoutTimer);
-      s.askTimeoutTimer = undefined;
-    }
-    s.state = "running";
-    s.pendingQuestion = undefined;
-  }
-  if (s.onSteer) {
-    void s.onSteer(args.message);
-  } else {
-    s.queuedSteers.push(args.message);
-  }
+  deliverSteer(s, args.message);
   return {
     content: [{
       type: "text",
@@ -1809,7 +1897,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
       annotations: STEER_HINTS,
     },
     async (args) => {
-      return handleSteer(args, registry);
+      return handleSteer(opts.workspace, args, registry);
     },
   );
 
