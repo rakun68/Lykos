@@ -1022,7 +1022,7 @@ async function startTrackedSession(
   deps: McpServerDeps,
   registry: Map<string, TrackedSession>,
   isBlocking: boolean,
-  owner: { kind: OwnerKind; trustSource?: TrustSource } = { kind: "mcp" },
+  owner: { kind: OwnerKind; trustSource?: TrustSource; adopt?: boolean } = { kind: "mcp" },
 ): Promise<ToolResult> {
   let trust: { source: TrustSource };
   if (owner.trustSource !== undefined) {
@@ -1132,6 +1132,7 @@ async function startTrackedSession(
         ...(!isEffectiveReadOnly && args.write_in_place === true ? { writeInPlaceTree: workspace } : {}),
         projectCap,
         continuation: args.session_id !== undefined,
+        ...(owner.adopt === true ? { adopt: true } : {}),
       }),
     );
   } catch (err) {
@@ -1752,7 +1753,7 @@ export type DelegatedRunInput = TaskInput;
 export async function runDelegated(
   workspace: string,
   args: DelegatedRunInput,
-  opts: { trustSource: TrustSource; signal?: AbortSignal; onProgress?: (message: string) => void; run?: SessionRunner },
+  opts: { trustSource: TrustSource; signal?: AbortSignal; onProgress?: (message: string) => void; run?: SessionRunner; adopt?: boolean },
 ): Promise<Record<string, unknown>> {
   const specialist = args.specialist ?? DEFAULT_SPECIALIST;
   const def: ToolDef = { name: "lykos_start", description: "lykos run", specialist };
@@ -1765,7 +1766,7 @@ export async function runDelegated(
     },
   };
   const deps: McpServerDeps = { run: opts.run ?? defaultRunner() };
-  const result = await startTrackedSession(workspace, def, { ...args, specialist }, extra, deps, registry, true, { kind: "run", trustSource: opts.trustSource });
+  const result = await startTrackedSession(workspace, def, { ...args, specialist }, extra, deps, registry, true, { kind: "run", trustSource: opts.trustSource, ...(opts.adopt === true ? { adopt: true } : {}) });
   const text = result.content[0]?.type === "text" ? result.content[0].text : "{}";
   return JSON.parse(text) as Record<string, unknown>;
 }

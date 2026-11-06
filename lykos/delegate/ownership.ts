@@ -32,6 +32,8 @@ export interface OwnerRow {
   stop_requested: number;
   question: string | null;
   result_json: string | null;
+  /** T246: how many times `lykos recover` took the session over from a dead owner. */
+  crashes: number;
 }
 
 /** This process, recorded while it lives. */
@@ -55,7 +57,7 @@ export const ownerLiveness: LivenessOf = (row) =>
   row.owner_pid === process.pid ? "alive" : liveness({ pid: row.owner_pid, recordedAt: row.owner_recorded_at_ms });
 
 const COLUMNS =
-  "session_id, request_id, owner, owner_pid, owner_recorded_at_ms, specialist, write_in_place, state, started_at, ended_at, stop_requested, question, result_json";
+  "session_id, request_id, owner, owner_pid, owner_recorded_at_ms, specialist, write_in_place, state, started_at, ended_at, stop_requested, question, result_json, crashes";
 
 export function ownerRow(ledger: Ledger, sessionId: string): OwnerRow | undefined {
   return ledger.db.prepare(`SELECT ${COLUMNS} FROM owners WHERE session_id = ?`).get(sessionId) as OwnerRow | undefined;
@@ -81,6 +83,8 @@ export interface AdmitInput {
   projectCap: number;
   /** A continuation of an earlier session: its row is reused. */
   continuation?: boolean;
+  /** T246: this process took the live row over with `takeOver` (`lykos recover`); it runs it. */
+  adopt?: boolean;
   /** Tests pass a stand-in. */
   livenessOf?: LivenessOf;
 }
@@ -109,7 +113,8 @@ export function admit(ledger: Ledger, input: AdmitInput): Admission {
       if (existing !== undefined) return { ok: false, kind: "duplicate", sessionId: existing.session_id, row: existing };
     }
     const current = ownerRow(ledger, input.sessionId);
-    if (current !== undefined && isLive(current.state)) {
+    const adopted = input.adopt === true && current !== undefined && isLive(current.state) && current.owner_pid === me.pid;
+    if (current !== undefined && isLive(current.state) && !adopted) {
       const state = previousLiveness ?? "unknown";
       return {
         ok: false,
@@ -124,7 +129,7 @@ export function admit(ledger: Ledger, input: AdmitInput): Admission {
     }
     const holders = (ledger.db.prepare(`SELECT session_id FROM owners WHERE state IN ('running', 'waiting')`).all() as Array<{ session_id: string }>)
       .map((r) => r.session_id)
-      .filter((id) => !dead.has(id));
+      .filter((id) => !dead.has(id) && !(adopted && id === input.sessionId));
     if (holders.length >= input.projectCap) {
       return {
         ok: false,
@@ -177,6 +182,55 @@ export function admit(ledger: Ledger, input: AdmitInput): Admission {
         .run(values);
     }
     return { ok: true };
+  });
+  return run.immediate();
+}
+
+/** T246: the most crashes a session is recovered from; the next one stops it. */
+export const MAX_CRASHES = 5;
+
+export type TakeOver =
+  | { ok: true; crashes: number }
+  | { ok: false; kind: "lost"; reason: string }
+  | { ok: false; kind: "stopped"; reason: string };
+
+/**
+ * T246: `lykos recover` takes a crashed session over. One transaction: a conditional update of the owner row, from
+ * the dead owner the caller read to this process, with the tree lock kept for the session. A second recover that
+ * read the same row loses: the row no longer names that owner. The sixth crash stops the session instead.
+ */
+export function takeOver(ledger: Ledger, expected: Pick<OwnerRow, "session_id" | "owner_pid" | "owner_recorded_at_ms">): TakeOver {
+  const me = selfIdentity();
+  const run = ledger.db.transaction((): TakeOver => {
+    const current = ownerRow(ledger, expected.session_id);
+    if (current === undefined || !isLive(current.state) || current.owner_pid !== expected.owner_pid || current.owner_recorded_at_ms !== expected.owner_recorded_at_ms) {
+      return {
+        ok: false,
+        kind: "lost",
+        reason:
+          current === undefined
+            ? `session ${expected.session_id} is gone from the ledger`
+            : isLive(current.state)
+              ? `another recover took session ${expected.session_id} over first (owner pid ${current.owner_pid})`
+              : `session ${expected.session_id} is ${current.state} now`,
+      };
+    }
+    if (current.crashes >= MAX_CRASHES) {
+      const reason = `session ${expected.session_id} crashed ${current.crashes + 1} times; it is stopped (at most ${MAX_CRASHES} are recovered)`;
+      ledger.db
+        .prepare("UPDATE owners SET state = 'error', ended_at = ?, question = NULL, result_json = ? WHERE session_id = ?")
+        .run(new Date().toISOString(), JSON.stringify({ outcome: "error", message: reason, sessionId: expected.session_id, next: "fix_environment" }), expected.session_id);
+      ledger.db.prepare("DELETE FROM tree_locks WHERE session_id = ?").run(expected.session_id);
+      return { ok: false, kind: "stopped", reason };
+    }
+    const changed = ledger.db
+      .prepare(
+        `UPDATE owners SET owner = 'run', owner_pid = ?, owner_recorded_at_ms = ?, stop_requested = 0, crashes = crashes + 1
+         WHERE session_id = ? AND owner_pid = ? AND owner_recorded_at_ms = ? AND state IN ('running', 'waiting')`,
+      )
+      .run(me.pid, me.recordedAt, expected.session_id, expected.owner_pid, expected.owner_recorded_at_ms).changes;
+    // The tree lock is keyed by the session, so it moves with the row: it stays this session's, now this process's.
+    return changed === 1 ? { ok: true, crashes: current.crashes + 1 } : { ok: false, kind: "lost", reason: `another recover took session ${expected.session_id} over first` };
   });
   return run.immediate();
 }

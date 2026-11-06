@@ -264,6 +264,12 @@ child, every guard and the tree its command started, and every container, which 
 `unknown` never counts as gone. `lykos recover` asks for it first.
 _Avoid_: stopped, cleaned up (without the proof)
 
+**Recover**:
+Continuing, by hand, a delegated session whose owner is `dead`: `lykos recover` confirms quiescence, takes the
+`owners` row over with one conditional update, and continues with the standard interrupted turn. Never automatic,
+never a kill.
+_Avoid_: takeover (for anything automatic), resume (that continues an ended session)
+
 **Red outcome**:
 What the red check found at the writer commit: `failing`, `failing-exit-only` (the weaker guarantee), `passing`
 (WEAK-SPEC: the spec asks for nothing) or `error`.

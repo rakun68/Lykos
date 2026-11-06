@@ -351,6 +351,7 @@ describe("T243: an owner that ends and exits while its liveness is read is not a
       stop_requested: 0,
       question: null,
       result_json: null,
+      crashes: 0,
     };
     const done: OwnerRow = { ...running, state: "done", ended_at: "2026-11-07T00:00:01.000Z", result_json: JSON.stringify({ outcome: "ok", next: "review_or_accept" }) };
     const dead = () => "dead" as const;

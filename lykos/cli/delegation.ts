@@ -62,6 +62,8 @@ export const WAIT_USAGE =
 export const STEER_USAGE = "usage: lykos steer <session-id> -m <message|->    send a live session a message; it answers the session's open question";
 export const CONTINUE_USAGE =
   "usage: lykos continue <session-id> -m <message|-> [--max-steps n] [--request-id id] [--reseal <commit>] [--trust-workspace]    resume an ended session on its branch with a new message; --reseal seals its branch again at the commit that corrects a sealed test";
+export const RECOVER_USAGE =
+  "usage: lykos recover <session-id> [-m <message|->] [--trust-workspace]    continue a crashed session (its owner is dead) after confirming everything it started is stopped; never kills anything";
 export const STOP_USAGE = "usage: lykos stop <session-id>    ask the session's owner to stop it, and wait up to 10 s for it to end";
 
 function usage(line: string): number {
@@ -210,6 +212,45 @@ export async function runContinue(cwd: string, args: readonly string[]): Promise
     },
     { trustSource: trust.source, onProgress: (line) => process.stderr.write(`lykos continue: ${line}\n`) },
   );
+  print(result);
+  return result.outcome === "ok" || result.outcome === "needs_answer" ? 0 : 1;
+}
+
+export async function runRecover(cwd: string, args: readonly string[]): Promise<number> {
+  if (args.length === 0) return usage(RECOVER_USAGE);
+  const parsed = parseFlags(args, "recover", ["message"], ["trust-workspace"]);
+  if ("error" in parsed) {
+    process.stderr.write(`${parsed.error}\n`);
+    return 1;
+  }
+  if (parsed.ids.length !== 1) return usage(RECOVER_USAGE);
+  let message: string | undefined;
+  if (parsed.flags.has("message")) {
+    const read = await messageOf(parsed, "recover");
+    if (typeof read !== "string") {
+      process.stderr.write(`${read.error}\n`);
+      return 1;
+    }
+    message = read;
+  }
+  let trust;
+  try {
+    trust = await ensureWorkspaceTrust({ workspace: cwd, interactive: false, ...(parsed.flags.has("trust-workspace") ? { trustWorkspace: true } : {}) });
+  } catch (err) {
+    process.stderr.write(`lykos recover: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
+    return 1;
+  }
+  const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
+  if (!bash.ok) {
+    process.stderr.write(`lykos recover: refused — ${noBashMessage(bash)}\n`);
+    return 1;
+  }
+  const { recoverSession } = await import("../delegate/recover.js");
+  const result = await recoverSession(cwd, parsed.ids[0]!, {
+    trustSource: trust.source,
+    ...(message !== undefined ? { message } : {}),
+    onProgress: (line) => process.stderr.write(`lykos recover: ${line}\n`),
+  });
   print(result);
   return result.outcome === "ok" || result.outcome === "needs_answer" ? 0 : 1;
 }

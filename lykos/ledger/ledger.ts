@@ -713,6 +713,20 @@ function optionalRedact(value: string | undefined): string | null {
  * ledger can open after T4.1 without a rebuild.
  */
 function applySchema(db: Database.Database): void {
+  // Two processes opening one new ledger at once both see a column missing and both add it; the second fails with
+  // "duplicate column name". Every step checks before it changes anything, so running them again once the other
+  // process is done is safe.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      applySchemaOnce(db);
+      return;
+    } catch (err) {
+      if (attempt >= 3 || !/duplicate column name|already exists/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    }
+  }
+}
+
+function applySchemaOnce(db: Database.Database): void {
   const sql = readFileSync(join(findTelemetryDir(), "schema.sql"), "utf8");
   const marker = "-- Views";
   const idx = sql.indexOf(marker);
@@ -906,7 +920,8 @@ function migrateOwners(db: Database.Database): void {
       ended_at              TEXT,
       stop_requested        INTEGER NOT NULL DEFAULT 0,
       question              TEXT,
-      result_json           TEXT
+      result_json           TEXT,
+      crashes               INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS tree_locks (
       path         TEXT PRIMARY KEY,
@@ -931,6 +946,9 @@ function migrateOwners(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_questions_session ON questions(session_id);
   `);
+  // T246: the crashes `lykos recover` has taken the session over from, on a ledger whose `owners` predates it.
+  const cols = new Set((db.prepare(`PRAGMA table_info(owners)`).all() as Array<{ name: string }>).map((c) => c.name));
+  if (!cols.has("crashes")) db.exec(`ALTER TABLE owners ADD COLUMN crashes INTEGER NOT NULL DEFAULT 0`);
 }
 
 /** T257: create `process_records` on a ledger that predates it. */
@@ -1454,7 +1472,17 @@ export class Ledger {
     // multi-process contention (a live HUD read overlapping an ingest
     // write) without masking a genuinely stuck lock.
     db.pragma("busy_timeout = 5000");
-    db.pragma("journal_mode = WAL");
+    // Switching a new file to WAL takes an exclusive lock and fails at once with SQLITE_BUSY, without the busy
+    // timeout, when another process is doing the same: wait and try again, for up to the same 5 s.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        db.pragma("journal_mode = WAL");
+        break;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "SQLITE_BUSY" || attempt >= 250) throw err;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+      }
+    }
     db.pragma("foreign_keys = ON");
     applySchema(db);
 

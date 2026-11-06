@@ -834,6 +834,14 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "recover",
+    help: ["  recover   `lykos recover <id> [-m <message|->]`: continue a crashed delegated session once everything it started is stopped (JSON)"],
+    run: async (rest, { cwd }) => {
+      const { runRecover } = await import("./delegation.js");
+      return runRecover(cwd, rest);
+    },
+  },
+  {
     name: "steer",
     help: ["  steer     `lykos steer <id> -m <message|->`: message a live delegated session from any process; it answers its open question (JSON)"],
     run: async (rest, { cwd }) => {

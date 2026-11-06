@@ -1587,3 +1587,34 @@ describe("Ledger: closing, reopening and naming a session (2026-09-07 UI feedbac
     ledger.close();
   });
 });
+
+describe("Ledger: concurrent first opens", () => {
+  it("processes opening one new ledger at once all succeed (no duplicate column from racing migrations)", async () => {
+    const { spawn } = await import("node:child_process");
+    const path = join(mkdtempSync(join(tmpdir(), "lykos-ledger-race-")), "ledger.db");
+    const here = dirname(fileURLToPath(import.meta.url));
+    const { pathToFileURL } = await import("node:url");
+    const { existsSync: exists, writeFileSync: writeFile } = await import("node:fs");
+    // Every child loads first, says so, and opens only when all are told to go, so the opens coincide.
+    const go = `${path}.go`;
+    const script =
+      `import { existsSync, writeFileSync } from "node:fs"; import { Ledger } from ${JSON.stringify(pathToFileURL(join(here, "ledger.ts")).href)};` +
+      `writeFileSync(process.argv[1] + ".ready." + process.pid, ""); while (!existsSync(${JSON.stringify(go)})) await new Promise((r) => setTimeout(r, 1));` +
+      `Ledger.open(process.argv[1]).close();`;
+    const count = 8;
+    const pids: number[] = [];
+    const runs = Array.from({ length: count }, () =>
+      new Promise<{ code: number | null; err: string }>((done) => {
+        const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script, path], { windowsHide: true });
+        pids.push(child.pid!);
+        let err = "";
+        child.stderr.on("data", (d: Buffer) => (err += d.toString()));
+        child.on("exit", (code) => done({ code, err }));
+      }),
+    );
+    const until = Date.now() + 60_000;
+    while (!pids.every((pid) => exists(`${path}.ready.${pid}`)) && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    writeFile(go, "");
+    for (const r of await Promise.all(runs)) assert.equal(r.code, 0, r.err);
+  });
+});
