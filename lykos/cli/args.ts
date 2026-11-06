@@ -2,7 +2,44 @@
  * Flags on `lykos run` that consume the argument after them. Kept beside the
  * parser so a new `--flag value` cannot silently start eating the prompt.
  */
-export const RUN_VALUED_FLAGS = ["model", "tools", "budget", "shape", "task", "specialist", "containment", "network", "mode", "output-style"] as const;
+export const RUN_VALUED_FLAGS = [
+  "model",
+  "tools",
+  "budget",
+  "shape",
+  "task",
+  "specialist",
+  "containment",
+  "network",
+  "mode",
+  "output-style",
+  "max-steps",
+  "request-id",
+  "base",
+] as const;
+
+/** Flags on `lykos run` that take no value. Any other flag is an error (R19). */
+export const RUN_BOOLEAN_FLAGS = ["yes", "trust-workspace", "interactive", "subagents", "ask-outcome", "in-place"] as const;
+
+/** The first argument that is a flag `lykos run` does not know, before any `--`. */
+export function unknownRunFlag(args: readonly string[]): string | undefined {
+  const valued = new Set<string>(RUN_VALUED_FLAGS);
+  const booleans = new Set<string>(RUN_BOOLEAN_FLAGS);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") return undefined;
+    if (!arg.startsWith("--")) continue;
+    const eq = arg.indexOf("=");
+    const name = arg.slice(2, eq === -1 ? undefined : eq);
+    if (valued.has(name)) {
+      if (eq === -1) i += 1;
+      continue;
+    }
+    if (booleans.has(name) && eq === -1) continue;
+    return arg;
+  }
+  return undefined;
+}
 
 /**
  * T90: the first argument that is neither a flag nor a flag's value.

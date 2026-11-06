@@ -11,7 +11,7 @@
 // writes can reach the MCP transport's stdout.
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -27,7 +27,7 @@ import {
   specialistToolName,
   type SpecialistLocation,
 } from "../config/specialists.js";
-import { defaultLedgerPath, openLedgerSync, type SealEventRow } from "../ledger/use.js";
+import { defaultLedgerPath, openLedgerSync, withLedgerSync, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
 import { readTranscript, transcriptFilePath, type TranscriptEventInput, type TranscriptEventRecord } from "../session/transcript.js";
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
@@ -35,7 +35,9 @@ import { sealCreate } from "../seal/create.js";
 import { createTemporaryWorktree, getBranchOrNull, gitExec, resolveRef } from "../seal/git.js";
 import { addedLines, changeFlags, parseNameStatus, type ChangedPath } from "./result-flags.js";
 import { verifySeals } from "../seal/verify.js";
-import { ensureWorkspaceTrust } from "../gate/trust.js";
+import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
+import type { InteractionMode } from "../gate/modes.js";
+import { admit, finish, ownerRow, ownerRows, requestStop, settled, stopRequested, viewOf, type OwnerKind, type SessionView } from "./ownership.js";
 import { stderrWrite } from "../tui/io-mode.js";
 import { createProcessRunner, createWarmPool, type WarmPool } from "./session-process.js";
 import { rootSessionOf } from "./work-target.js";
@@ -115,6 +117,7 @@ const TaskInputShape = {
   model: z.string().optional().describe('Model override, e.g. "deepseek/deepseek-v4-pro". Defaults to the configured model.'),
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
   max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
+  request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the session it started instead of starting another."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -138,6 +141,7 @@ const StartInputShape = {
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
   max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
+  request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the session it started instead of starting another."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -175,6 +179,7 @@ const SpecialistInputShape = {
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
   budget: z.number().positive().optional().describe("Per-run USD cap override for this call only."),
   max_steps: z.number().int().positive().optional().describe("Stop the session after this many model turns. Default: no cap."),
+  request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the session it started instead of starting another."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -207,23 +212,16 @@ interface TrackedSession {
   onSteer?: ((message: string) => void | Promise<void>) | undefined;
   queuedSteers: string[];
   listeners: Array<() => void>;
-  writeInPlaceKey?: string | undefined;
+  /** T243: polls the ledger for a stop asked by another process. */
+  stopPoll?: NodeJS.Timeout | undefined;
   isBlocking: boolean;
   pendingQuestion?: string | undefined;
   unansweredQuestions: string[];
   askTimeoutTimer?: NodeJS.Timeout | undefined;
 }
 
-/** Process-wide write_in_place locks keyed by canonical workspace path. */
-const writeInPlaceLocks = new Map<string, string>();
-
-function canonicalWorkspace(ws: string): string {
-  try {
-    return realpathSync.native(ws);
-  } catch {
-    return ws;
-  }
-}
+/** How often an owner reads the ledger for a stop another process asked for (T243). */
+const STOP_POLL_MS = 500;
 
 type TaskInput = {
   brief: string;
@@ -237,6 +235,10 @@ type TaskInput = {
   specialist?: string | undefined;
   base?: string | undefined;
   scope?: string[] | undefined;
+  request_id?: string | undefined;
+  /** T243, `lykos run` only: the interaction mode, and the session fields the CLI carries. */
+  mode?: InteractionMode | undefined;
+  cli?: SessionRequest["cli"] | undefined;
 };
 
 function buildSpecialistDescription(loc: SpecialistLocation, toolName?: string): string {
@@ -998,16 +1000,21 @@ async function startTrackedSession(
   deps: McpServerDeps,
   registry: Map<string, TrackedSession>,
   isBlocking: boolean,
+  owner: { kind: OwnerKind; trustSource?: TrustSource } = { kind: "mcp" },
 ): Promise<ToolResult> {
-  let trust;
-  try {
-    trust = await ensureWorkspaceTrust({
-      workspace,
-      interactive: false,
-      ...(deps.trustPath !== undefined ? { trustPath: deps.trustPath } : {}),
-    });
-  } catch (err) {
-    return toResult({ outcome: "blocked", reason: String(err), next: "fix_environment" });
+  let trust: { source: TrustSource };
+  if (owner.trustSource !== undefined) {
+    trust = { source: owner.trustSource };
+  } else {
+    try {
+      trust = await ensureWorkspaceTrust({
+        workspace,
+        interactive: false,
+        ...(deps.trustPath !== undefined ? { trustPath: deps.trustPath } : {}),
+      });
+    } catch (err) {
+      return toResult({ outcome: "blocked", reason: String(err), next: "fix_environment" });
+    }
   }
 
   let specialistName: string;
@@ -1066,15 +1073,19 @@ async function startTrackedSession(
     }
   }
 
+  // T243: `mcp.max_sessions` caps this server; `delegation.max_sessions` caps the project, from the ledger. The
+  // smallest wins, and a refusal names the holders.
   let maxSessions = 4;
+  let projectCap = 4;
   try {
     const { resolved: config } = loadConfig({ cwd: workspace });
     if (config.mcp?.max_sessions !== undefined) {
       maxSessions = config.mcp.max_sessions;
     }
+    projectCap = config.delegation.max_sessions;
   } catch {}
   const runningSessions = [...registry.values()].filter((s) => s.state === "running" || s.state === "waiting");
-  if (runningSessions.length >= maxSessions) {
+  if (owner.kind === "mcp" && runningSessions.length >= maxSessions) {
     const runningIds = runningSessions.map((s) => s.sessionId);
     return toResult({
       outcome: "blocked",
@@ -1085,25 +1096,39 @@ async function startTrackedSession(
   }
 
   const isEffectiveReadOnly = def.name === "lykos_review" || def.readOnly === true || specialistReadOnly;
-  let lockKey: string | undefined;
-  if (!isEffectiveReadOnly && args.write_in_place === true) {
-    const treeKey = canonicalWorkspace(workspace);
-    const holderId = writeInPlaceLocks.get(treeKey);
-    if (holderId !== undefined) {
-      return toResult({
-        outcome: "blocked",
-        reason: `cannot start write_in_place session: another write_in_place session (${holderId}) is already running on this tree`,
-        next: "fix_environment",
-      });
-    }
-    lockKey = treeKey;
-  }
-
   const newSessionId = args.session_id === undefined ? randomUUID() : undefined;
   const targetSessionId = args.session_id ?? newSessionId!;
-
-  if (lockKey !== undefined) {
-    writeInPlaceLocks.set(lockKey, targetSessionId);
+  const ledgerPath = defaultLedgerPath(workspace);
+  let admission;
+  try {
+    admission = withLedgerSync(ledgerPath, (ledger) =>
+      admit(ledger, {
+        sessionId: targetSessionId,
+        requestId: args.request_id,
+        owner: owner.kind,
+        specialist: specialistName,
+        ...(!isEffectiveReadOnly && args.write_in_place === true ? { writeInPlaceTree: workspace } : {}),
+        projectCap,
+        continuation: args.session_id !== undefined,
+      }),
+    );
+  } catch (err) {
+    return toResult({ outcome: "blocked", reason: `the ledger refused the session: ${err instanceof Error ? err.message : String(err)}`, next: "fix_environment" });
+  }
+  if (!admission.ok) {
+    if (admission.kind === "duplicate") return duplicateRequest(workspace, admission.sessionId, registry, isBlocking);
+    if (admission.kind === "cap") {
+      return toResult({ outcome: "blocked", reason: admission.reason, next: "fix_environment", running: admission.holders });
+    }
+    if (admission.kind === "tree") {
+      return toResult({
+        outcome: "blocked",
+        reason: `cannot start write_in_place session: ${admission.reason}`,
+        next: "fix_environment",
+        holder: admission.holder,
+      });
+    }
+    return toResult({ outcome: "blocked", reason: admission.reason, next: admission.liveness === "dead" ? "recover" : "fix_environment" });
   }
 
   let headAtStart: string | undefined;
@@ -1118,9 +1143,9 @@ async function startTrackedSession(
 
   const toolName = def.name === "lykos_start" ? specialistToolName(specialistName) : def.name;
   const label = def.name === "lykos_start" ? specialistToolName(specialistName) : def.name;
-  const mode = def.name === "lykos_start"
+  const mode = args.mode ?? (def.name === "lykos_start"
     ? "auto"
-    : modeOfTool(def.name);
+    : modeOfTool(def.name));
 
   const request: SessionRequest = {
     version: PROTOCOL_VERSION,
@@ -1137,6 +1162,8 @@ async function startTrackedSession(
     ...(args.containment !== undefined ? { containment: args.containment } : {}),
     ...(args.session_id !== undefined ? { sessionId: args.session_id } : (newSessionId !== undefined ? { newSessionId } : {})),
     ...(args.write_in_place !== undefined ? { writeInPlace: args.write_in_place } : {}),
+    ...(args.request_id !== undefined ? { requestId: args.request_id } : {}),
+    ...(args.cli !== undefined ? { cli: args.cli } : {}),
   };
 
   const branchTipsBefore = snapshotBranchTips(workspace);
@@ -1162,11 +1189,26 @@ async function startTrackedSession(
     runnerPromise: Promise.resolve(),
     queuedSteers: [],
     listeners: [],
-    writeInPlaceKey: lockKey,
     isBlocking,
     unansweredQuestions: [],
   };
   registry.set(targetSessionId, sessionEntry);
+  // T243: a stop another process asks for reaches this owner through the ledger.
+  sessionEntry.stopPoll = setInterval(() => {
+    if (sessionEntry.stoppedReason !== undefined) return;
+    let asked = false;
+    try {
+      asked = withLedgerSync(ledgerPath, (ledger) => stopRequested(ledger, targetSessionId));
+    } catch {}
+    if (!asked) return;
+    if (sessionEntry.askTimeoutTimer !== undefined) {
+      clearTimeout(sessionEntry.askTimeoutTimer);
+      sessionEntry.askTimeoutTimer = undefined;
+    }
+    sessionEntry.stoppedReason = "stopped: lykos_stop";
+    sessionEntry.abortController.abort();
+  }, STOP_POLL_MS);
+  sessionEntry.stopPoll.unref();
 
   sessionEntry.runnerPromise = (async () => {
     const token = extra._meta?.progressToken;
@@ -1234,6 +1276,10 @@ async function startTrackedSession(
       };
     }
 
+    // T243 (R13): the steps the session took, from the count its cap is enforced from.
+    if (outcome?.steps !== undefined) builtResult.steps = outcome.steps;
+    if (request.maxSteps !== undefined) builtResult.max_steps = request.maxSteps;
+
     if (sessionEntry.askTimeoutTimer !== undefined) {
       clearTimeout(sessionEntry.askTimeoutTimer);
       sessionEntry.askTimeoutTimer = undefined;
@@ -1248,11 +1294,7 @@ async function startTrackedSession(
       sessionEntry.state = "done";
     }
     sessionEntry.builtResult = builtResult;
-
-    if (sessionEntry.writeInPlaceKey !== undefined) {
-      writeInPlaceLocks.delete(sessionEntry.writeInPlaceKey);
-      sessionEntry.writeInPlaceKey = undefined;
-    }
+    endOwnership(sessionEntry, targetSessionId);
 
     const notifyList = sessionEntry.listeners;
     sessionEntry.listeners = [];
@@ -1276,6 +1318,70 @@ async function startTrackedSession(
       }],
     };
   }
+}
+
+/** The id a session's owner row is keyed by: the one it was admitted under. */
+function ownedIdOf(s: TrackedSession): string {
+  return s.request.sessionId ?? s.request.newSessionId ?? s.sessionId;
+}
+
+/**
+ * T243: the session's owner row ends with its state and result, and its tree lock goes. A forced stop ends it with
+ * a stop result; the runner that ends later writes its built result over it.
+ */
+function endOwnership(s: TrackedSession, ownedId: string): void {
+  if (s.stopPoll !== undefined) {
+    clearInterval(s.stopPoll);
+    s.stopPoll = undefined;
+  }
+  const state = s.state === "running" || s.state === "waiting" ? "stopped" : s.state;
+  const result = s.builtResult ?? { outcome: "stopped", sessionId: s.sessionId, reason: s.stoppedReason ?? "stopped" };
+  try {
+    withLedgerSync(defaultLedgerPath(s.workspace), (ledger) => finish(ledger, ownedId, state, result));
+  } catch (err) {
+    stderrWrite(`lykos: could not record the end of session ${ownedId} in the ledger: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
+}
+
+/** How often a process waiting on another process's session reads the ledger. */
+const LEDGER_POLL_MS = 250;
+
+/** What the ledger says of these sessions now. */
+export function ledgerViews(workspace: string, ids?: readonly string[]): SessionView[] {
+  const ledgerPath = defaultLedgerPath(workspace);
+  if (!existsSync(ledgerPath)) return [];
+  return withLedgerSync(ledgerPath, (ledger) => ownerRows(ledger, ids).map((row) => viewOf(row)));
+}
+
+/**
+ * Waits, through the ledger, until every session (or, with `any`, one) has settled: ended, or crashed with its owner
+ * gone. A session that ends without a result still wakes it (R4). `timeoutMs` undefined waits as long as it takes.
+ */
+export async function waitForSessions(workspace: string, ids: readonly string[], any: boolean, timeoutMs?: number): Promise<SessionView[]> {
+  const until = timeoutMs !== undefined ? Date.now() + timeoutMs : undefined;
+  for (;;) {
+    const views = ledgerViews(workspace, ids);
+    const done = views.filter(settled);
+    if (any ? done.length > 0 : done.length === ids.length) return views;
+    if (until !== undefined && Date.now() >= until) return views;
+    await new Promise((r) => setTimeout(r, LEDGER_POLL_MS));
+  }
+}
+
+/** A retried request: its session, never a second one. */
+async function duplicateRequest(workspace: string, sessionId: string, registry: Map<string, TrackedSession>, isBlocking: boolean): Promise<ToolResult> {
+  const local = registry.get(sessionId);
+  if (local !== undefined) {
+    if (isBlocking) {
+      await local.runnerPromise;
+      return toResult({ ...local.builtResult!, duplicate: true });
+    }
+    return { content: [{ type: "text", text: JSON.stringify({ session_id: sessionId, state: local.state, specialist: local.specialist, duplicate: true }, null, 2) }] };
+  }
+  const [view] = isBlocking ? await waitForSessions(workspace, [sessionId], false) : ledgerViews(workspace, [sessionId]);
+  if (view === undefined) return toResult({ outcome: "error", message: `the request's session ${sessionId} is not in the ledger` });
+  if (isBlocking && view.result !== undefined) return toResult({ ...(view.result as Record<string, unknown>), duplicate: true });
+  return { content: [{ type: "text", text: JSON.stringify({ ...view, duplicate: true }, null, 2) }] };
 }
 
 function handleSessionQuestion(sessionEntry: TrackedSession, question: string, workspace: string): void {
@@ -1345,7 +1451,17 @@ async function handleStatus(
   }
   const ids = args.session_id !== undefined ? [args.session_id] : args.session_ids!;
 
-  const unknownIds = ids.filter((id) => !registry.has(id));
+  // T243: a session another process owns (`lykos run`, another server) is read from the ledger.
+  const elsewhere = ids.filter((id) => !registry.has(id));
+  if (elsewhere.length > 0 && elsewhere.length === ids.length) {
+    const views = ledgerViews(workspace, ids);
+    if (views.length === ids.length) {
+      const waitSeconds = Math.min(Math.max(args.wait_seconds ?? 0, 0), 300);
+      const settledViews = waitSeconds > 0 ? await waitForSessions(workspace, ids, args.any === true, waitSeconds * 1000) : views;
+      return { content: [{ type: "text", text: JSON.stringify({ sessions: settledViews }, null, 2) }] };
+    }
+  }
+  const unknownIds = elsewhere;
   if (unknownIds.length > 0) {
     return toResult({
       outcome: "error",
@@ -1464,9 +1580,11 @@ function handleSteer(args: { session_id: string; message: string }, registry: Ma
   };
 }
 
-async function handleStop(args: { session_id: string }, registry: Map<string, TrackedSession>): Promise<ToolResult> {
+async function handleStop(workspace: string, args: { session_id: string }, registry: Map<string, TrackedSession>): Promise<ToolResult> {
   const s = registry.get(args.session_id);
   if (!s) {
+    const stopped = await stopElsewhere(workspace, args.session_id);
+    if (stopped !== undefined) return { content: [{ type: "text", text: JSON.stringify(stopped, null, 2) }] };
     return toResult({
       outcome: "error",
       message: `unknown session id: ${args.session_id} (to continue an ended session, resume it with session_id)`,
@@ -1498,10 +1616,7 @@ async function handleStop(args: { session_id: string }, registry: Map<string, Tr
 
   if (s.state === "running" || s.state === "waiting") {
     s.state = "stopped";
-    if (s.writeInPlaceKey) {
-      writeInPlaceLocks.delete(s.writeInPlaceKey);
-      s.writeInPlaceKey = undefined;
-    }
+    endOwnership(s, ownedIdOf(s));
     const notifyList = s.listeners;
     s.listeners = [];
     for (const fn of notifyList) {
@@ -1518,6 +1633,49 @@ async function handleStop(args: { session_id: string }, registry: Map<string, Tr
       }, null, 2),
     }],
   };
+}
+
+/**
+ * T243: stops a session another process owns: the stop is asked in the ledger, which its owner polls. Waits up to
+ * 10 s for it to end. Undefined when the ledger has no such session.
+ */
+export async function stopElsewhere(workspace: string, sessionId: string): Promise<{ session_id: string; state: string; next?: string } | undefined> {
+  const ledgerPath = defaultLedgerPath(workspace);
+  if (!existsSync(ledgerPath)) return undefined;
+  const asked = withLedgerSync(ledgerPath, (ledger) => (ownerRow(ledger, sessionId) === undefined ? undefined : requestStop(ledger, sessionId)));
+  if (asked === undefined) return undefined;
+  const [view] = asked ? await waitForSessions(workspace, [sessionId], false, 10_000) : ledgerViews(workspace, [sessionId]);
+  if (view === undefined) return undefined;
+  return { session_id: sessionId, state: view.state, ...(view.next !== undefined ? { next: view.next } : {}) };
+}
+
+/** What `lykos run` asks of the delegation core: an MCP start's input, plus the CLI's own fields. */
+export type DelegatedRunInput = TaskInput;
+
+/**
+ * T243: `lykos run`'s path into the delegation core. The same admission, session child, result and ownership as an
+ * MCP call, with this process as the owner; it blocks until the result. MCP never calls the CLI, and the CLI never
+ * calls MCP: both are front ends over this.
+ */
+export async function runDelegated(
+  workspace: string,
+  args: DelegatedRunInput,
+  opts: { trustSource: TrustSource; signal?: AbortSignal; onProgress?: (message: string) => void; run?: SessionRunner },
+): Promise<Record<string, unknown>> {
+  const specialist = args.specialist ?? DEFAULT_SPECIALIST;
+  const def: ToolDef = { name: "lykos_start", description: "lykos run", specialist };
+  const registry = new Map<string, TrackedSession>();
+  const extra: Extra = {
+    signal: opts.signal ?? new AbortController().signal,
+    _meta: { progressToken: 0 },
+    sendNotification: async (n) => {
+      if (n.params.message !== undefined) opts.onProgress?.(n.params.message);
+    },
+  };
+  const deps: McpServerDeps = { run: opts.run ?? defaultRunner() };
+  const result = await startTrackedSession(workspace, def, { ...args, specialist }, extra, deps, registry, true, { kind: "run", trustSource: opts.trustSource });
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "{}";
+  return JSON.parse(text) as Record<string, unknown>;
 }
 
 let processRunner: SessionRunner | undefined;
@@ -1583,10 +1741,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
       s.state = "stopped";
       s.abortController.abort();
       recordSessionStoppedInLedger(s.workspace, s.sessionId, s.specialist, s.startTime, s.stoppedReason);
-      if (s.writeInPlaceKey) {
-        writeInPlaceLocks.delete(s.writeInPlaceKey);
-        s.writeInPlaceKey = undefined;
-      }
+      endOwnership(s, ownedIdOf(s));
       for (const fn of s.listeners) {
         try { fn(); } catch {}
       }
@@ -1666,7 +1821,7 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
       annotations: STOP_HINTS,
     },
     async (args) => {
-      return handleStop(args, registry);
+      return handleStop(opts.workspace, args, registry);
     },
   );
 

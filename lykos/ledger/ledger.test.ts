@@ -37,6 +37,8 @@ describe("Ledger", () => {
         // flaky_tests joined on T167: a test that failed in the gate and passed on rerun.
         "flaky_tests",
         "memory_eligibility",
+        // owners joined on T243: who owns each delegated session, by pid and record time.
+        "owners",
         "price_versions",
         // process_records joined on T257: each guard or process a session relies on, recorded before it runs.
         "process_records",
@@ -49,6 +51,8 @@ describe("Ledger", () => {
         "sessions",
         "sqlite_sequence",
         "tasks",
+        // tree_locks joined on T243: one write-in-place session per tree, across MCP and the CLI.
+        "tree_locks",
       ],
     );
     const priced = db.db.prepare(`SELECT version FROM price_versions`).get() as { version: string };

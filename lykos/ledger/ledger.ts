@@ -726,6 +726,7 @@ function applySchema(db: Database.Database): void {
   migrateCompactionsTable(db);
   migrateSealEvents(db);
   migrateProcessRecords(db);
+  migrateOwners(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -882,6 +883,36 @@ function migrateSealEvents(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_seal_events_branch ON seal_events(branch);
     CREATE INDEX IF NOT EXISTS idx_seal_events_session ON seal_events(session_id);
+  `);
+}
+
+/**
+ * T243: who owns each delegated session (ADR-0060 amended), and which session writes in place on which tree. One
+ * row per session in `owners`; `request_id` is unique, so a retried request finds its session. A tree lock is
+ * one row per canonical path, so a second writer on one tree fails its insert, across MCP and the CLI.
+ */
+function migrateOwners(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS owners (
+      session_id            TEXT PRIMARY KEY,
+      request_id            TEXT UNIQUE,
+      owner                 TEXT NOT NULL,
+      owner_pid             INTEGER NOT NULL,
+      owner_recorded_at_ms  INTEGER NOT NULL,
+      specialist            TEXT,
+      write_in_place        INTEGER NOT NULL DEFAULT 0,
+      state                 TEXT NOT NULL,
+      started_at            TEXT NOT NULL,
+      ended_at              TEXT,
+      stop_requested        INTEGER NOT NULL DEFAULT 0,
+      question              TEXT,
+      result_json           TEXT
+    );
+    CREATE TABLE IF NOT EXISTS tree_locks (
+      path         TEXT PRIMARY KEY,
+      session_id   TEXT NOT NULL,
+      acquired_at  TEXT NOT NULL
+    );
   `);
 }
 

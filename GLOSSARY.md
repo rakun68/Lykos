@@ -253,6 +253,15 @@ Whether a recorded process still runs: `alive`, `dead`, or `unknown` when the OS
 A small process recorded in the ledger before it starts the command it holds. It runs nothing until the
 record is written and kills the command's tree when its parent lets go or dies.
 
+**Owner**:
+The process that holds a delegated session's stdin, and so owns it: an MCP server or `lykos run`. Recorded in the
+ledger's `owners` row by pid and record time. A session whose owner is `dead` is crashed and waits for `lykos
+recover`; nothing takes it over by itself.
+
+**Tree lock**:
+The ledger row that makes one write-in-place session the only writer on a tree, across MCP and the CLI.
+_Avoid_: write lock, workspace lock
+
 **Resolved bash**:
 The one shell every host shell Lykos runs for delegation uses: the bash Pi resolves (`delegation.shell_path`,
 else Git Bash, else bash on PATH). Verification, red checks and hooks run their lines in it, never cmd.exe.

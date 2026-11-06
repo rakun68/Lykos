@@ -202,9 +202,11 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
   };
 
   let stepCapped = false;
+  const steps = { turns: 0 };
+  let counted = false;
   const onSessionCreated = (session: unknown): void => {
-    const cap = request?.maxSteps;
-    if (cap !== undefined) watchStepCap(session as StepCappable, cap, () => { stepCapped = true; });
+    counted = true;
+    watchStepCap(session as StepCappable, request?.maxSteps, () => { stepCapped = true; }, steps);
     steerChain = steerChain.then(async () => {
       activeAgentSession = session as { steer: (msg: string) => Promise<void> };
       while (pendingSteers.length > 0) {
@@ -265,7 +267,11 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
     );
     send({
       type: "result",
-      result: stepCapped && request.maxSteps !== undefined ? { ...result, note: joinNotes(result.note, stepCapNote(request.maxSteps))! } : result,
+      result: {
+        ...(stepCapped && request.maxSteps !== undefined ? { ...result, note: joinNotes(result.note, stepCapNote(request.maxSteps))! } : result),
+        // Only a session that ran has a count; none is unmeasured, never 0.
+        ...(counted ? { steps: steps.turns } : {}),
+      },
     });
   } catch (err) {
     send({ type: "result", result: { outcome: "error", message: err instanceof Error ? err.message : String(err) } });
@@ -352,6 +358,13 @@ async function runRequest(
             ...(request.containment !== undefined ? { containment: request.containment } : {}),
             ...(specialistName !== undefined ? { specialist: specialistName } : {}),
             mode,
+            ...(request.cli?.tools !== undefined ? { tools: request.cli.tools } : {}),
+            ...(request.cli?.network !== undefined ? { network: request.cli.network } : {}),
+            ...(request.cli?.outputStyle !== undefined ? { outputStyle: request.cli.outputStyle } : {}),
+            ...(request.cli?.taskId !== undefined ? { taskId: request.cli.taskId } : {}),
+            ...(request.cli?.projectId !== undefined ? { projectId: request.cli.projectId } : {}),
+            ...(request.cli?.autoApprove === true ? { autoApprove: true } : {}),
+            ...(request.cli?.subagents === true ? { subagents: true } : {}),
           },
           trustSource,
         ),

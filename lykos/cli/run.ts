@@ -6,16 +6,17 @@
 
 import { defaultLedgerPath, openLedger } from "../ledger/use.js";
 import { formatSessionSummary, loadSessionSummary } from "../ledger/summary.js";
-import { formatContainmentResult } from "../containment/request.js";
-import { runStandaloneTask, type RunStandaloneTaskInput } from "../session/session.js";
-import { randomUUID } from "node:crypto";
-import { describeWork, recordWork, withWorkTarget } from "../delegate/work-target.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { DEFAULT_DELEGATED_MODE } from "../delegate/session-protocol.js";
 import { stderrWrite, stdoutWrite } from "../tui/io-mode.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { loadConfig } from "../config/load.js";
+import type { RunStandaloneTaskInput } from "../session/session.js";
+import { readFileSync } from "node:fs";
+import { runDelegated } from "../delegate/mcp-server.js";
+import { parseTaskFile, resolveTestCommand, testCommandBrief, type TaskFile } from "../delegate/task-file.js";
+import { taskBrief } from "../delegate/issue-fetch.js";
 import { noBashMessage, resolveHostBash } from "../process/host-bash.js";
 
 export interface RunCliOptions {
@@ -68,6 +69,14 @@ export interface RunCliOptions {
    * T217: `--output-style <name>`.
    */
   outputStyle?: string;
+  /** T243: `lykos run <task.md>`: the task file the brief comes from. */
+  taskFile?: string;
+  /** T243: `--max-steps <n>`, the step cap. A task file's `steps:` when absent. */
+  maxSteps?: number;
+  /** T243: `--request-id <id>`: a retry with the same id finds the session it started. */
+  requestId?: string;
+  /** T243: `--base <ref>`, the branch a new worktree starts from. */
+  base?: string;
 }
 
 /** The env half of `--ask-outcome`. Any value but `0`/`false`/empty counts as on. */
@@ -146,70 +155,78 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
   }
 
   // T247: every delegated host shell is the resolved bash; without one the run never starts.
-  const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
+  let config;
+  try {
+    config = loadConfig({ cwd }).resolved;
+  } catch (err) {
+    process.stderr.write(`lykos run: refused — ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+  const bash = resolveHostBash(config.delegation.shell_path);
   if (!bash.ok) {
     process.stderr.write(`lykos run: refused — ${noBashMessage(bash)}\n`);
     return 1;
   }
 
-  // T184: a delegated session runs in an explicit interaction mode, which decides whether it writes and so where its
-  // work lands (the same code an MCP call goes through).
+  // T231/T243: a task file is Boxie's format: its body, the issues it names, and the verification command it may run.
+  let brief = prompt ?? "";
+  let taskScope: string[] | undefined;
+  let taskSteps: number | undefined;
+  if (opts.taskFile !== undefined) {
+    let task: TaskFile;
+    try {
+      task = parseTaskFile(readFileSync(opts.taskFile, "utf8"));
+      for (const warning of task.warnings) stderrWrite(`lykos run: ${warning}\n`);
+      brief = taskBrief(task, { cwd });
+    } catch (err) {
+      process.stderr.write(`lykos run: ${err instanceof Error ? err.message : String(err)}\n`);
+      return 1;
+    }
+    brief = `${brief.trim()}\n\n${testCommandBrief(resolveTestCommand(task, config))}`;
+    if (task.scope.length > 0 || task.files.length > 0) taskScope = [...task.files, ...task.scope];
+    taskSteps = task.steps;
+  }
+
+  // T243: one delegation core. This process owns the session (it holds the session child's stdin); the result is the
+  // MCP result contract, printed as JSON with `next`.
   const mode: InteractionMode = opts.mode ?? DEFAULT_DELEGATED_MODE;
-  const sessionId = randomUUID();
-  const input = sessionInput(cwd, prompt ?? "", { ...opts, mode }, trust.source);
-  const worked = await withWorkTarget(
-    { workspace: cwd, interactionMode: mode, sessionId, ...(opts.inPlace === true ? { writeInPlace: true } : {}) },
-    (target) => runStandaloneTask({ ...input, sessionId, ...(target.workTree !== undefined ? { workTree: target.workTree } : {}) }),
-  );
-  const ledgerPath = defaultLedgerPath(cwd);
-  const report = (line: string): void => stderrWrite(`lykos run: ${line}\n`);
-  if (!worked.ok) {
-    report(worked.message);
-    if (worked.work !== undefined) {
-      const work = await recordWork(ledgerPath, sessionId, worked.work, report);
-      stderrWrite(describeWork(work));
-    }
-    return 1;
-  }
-  const result = worked.value;
-  const work = await recordWork(
-    ledgerPath,
-    (result.status === "ok" || result.status === "error" ? result.sessionId : undefined) ?? sessionId,
-    worked.work,
-    report,
-  );
-
-  if (result.status === "blocked" || result.status === "error") {
-    report(result.status === "blocked" ? `blocked — ${result.reason}` : result.message);
-    if (result.status === "error" && result.denied && result.denied.length > 0) {
-      stderrWrite(`\ndenied actions (${result.denied.length}):\n${result.denied.map((d) => `  - ${d.summary} (${d.rule})`).join("\n")}\n`);
-    }
-    if (result.skippedExtensions && result.skippedExtensions.length > 0) {
-      stderrWrite(`\nwithheld (${result.skippedExtensions.length}):\n${result.skippedExtensions.map((s) => `  - ${s}`).join("\n")}\n`);
-    }
-    stderrWrite(describeWork(work));
-    return 1;
-  }
-
-  stdoutWrite(`${result.text ?? "(no answer)"}\n`);
-  if (result.denied && result.denied.length > 0) {
-    stdoutWrite(`\ndenied actions (${result.denied.length}):\n${result.denied.map((d) => `  - ${d.summary} (${d.rule})`).join("\n")}\n`);
-  }
-  if (result.skippedExtensions && result.skippedExtensions.length > 0) {
-    stdoutWrite(`\nwithheld (${result.skippedExtensions.length}):\n${result.skippedExtensions.map((s) => `  - ${s}`).join("\n")}\n`);
-  }
-  // T180: the level used and the runtime, where an orchestrator reading this output will see them.
-  if (result.containment !== undefined) stdoutWrite(`\n${formatContainmentResult(result.containment)}\n`);
-  stdoutWrite(describeWork(work));
-
-  const ledger = await openLedger(ledgerPath);
+  const maxSteps = opts.maxSteps ?? taskSteps;
+  const abort = new AbortController();
+  const onSigint = (): void => abort.abort();
+  process.once("SIGINT", onSigint);
+  let result: Record<string, unknown>;
   try {
-    const summary = loadSessionSummary(ledger, result.sessionId);
-    if (summary) stdoutWrite(`\n${formatSessionSummary(summary)}\n`);
+    result = await runDelegated(
+      cwd,
+      {
+        brief,
+        mode,
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.budgetPerRunUsd !== undefined ? { budget: Number(opts.budgetPerRunUsd) } : {}),
+        ...(maxSteps !== undefined ? { max_steps: maxSteps } : {}),
+        ...(opts.containment !== undefined ? { containment: opts.containment } : {}),
+        ...(opts.inPlace === true ? { write_in_place: true } : {}),
+        ...(opts.specialist !== undefined ? { specialist: opts.specialist } : {}),
+        ...(opts.base !== undefined ? { base: opts.base } : {}),
+        ...(opts.requestId !== undefined ? { request_id: opts.requestId } : {}),
+        ...(taskScope !== undefined ? { scope: taskScope } : {}),
+        cli: {
+          ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
+          ...(opts.network !== undefined ? { network: opts.network } : {}),
+          ...(opts.outputStyle !== undefined ? { outputStyle: opts.outputStyle } : {}),
+          ...(opts.taskId !== undefined ? { taskId: opts.taskId } : {}),
+          ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
+          ...(opts.autoApprove === true ? { autoApprove: true } : {}),
+          ...(opts.subagents === true ? { subagents: true } : {}),
+        },
+      },
+      { trustSource: trust.source, signal: abort.signal, onProgress: (message) => stderrWrite(`lykos run: ${message}\n`) },
+    );
   } finally {
-    ledger.close();
+    process.off("SIGINT", onSigint);
   }
-  return 0;
+  stdoutWrite(`${JSON.stringify(result, null, 2)}\n`);
+  return result.outcome === "ok" || result.outcome === "needs_answer" ? 0 : 1;
 }
 
 /**

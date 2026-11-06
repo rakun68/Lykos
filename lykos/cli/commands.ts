@@ -1,4 +1,4 @@
-import { firstPositional, positionals, RUN_VALUED_FLAGS } from "./args.js";
+import { firstPositional, positionals, RUN_BOOLEAN_FLAGS, RUN_VALUED_FLAGS, unknownRunFlag } from "./args.js";
 import { parseInteractionMode, type InteractionMode } from "../gate/modes.js";
 import { claimProtocolStream, stdoutWrite } from "../tui/io-mode.js";
 import type { ColorFlag } from "../tui/theme/resolve.js";
@@ -681,13 +681,42 @@ export const COMMANDS: readonly Command[] = [
       "            On Windows give a multi-line task as @task.md: a .cmd launcher (npm run, npx, lykos.cmd)",
       "            cuts an argument at its first newline, and PowerShell 5.1 reads a file without a BOM as ANSI",
       "            `lykos run --interactive` (or `lykos` with no args) starts the standalone terminal UI",
+      "            `lykos run task.md`: a task file (frontmatter files/sealed/test/scope/red/steps/issue, then the brief)",
+      "            [--max-steps n] the step cap; [--request-id id] a retry with the same id finds its session; [--base ref]",
+      "            A delegated run blocks until the result and prints it as JSON with `next` (T243)",
     ],
     run: async (rest, { cwd }) => {
       const { runRun } = await import("./run.js");
+      // G12: no arguments and nothing piped prints the usage.
+      if (rest.length === 0 && process.stdin.isTTY === true) {
+        stdoutWrite(`${(findCommand("run")?.help ?? []).join("\n")}\n`);
+        return 2;
+      }
+      // R19: an unknown flag is an error, never part of the brief or silently ignored.
+      const unknown = unknownRunFlag(rest);
+      if (unknown !== undefined) {
+        process.stderr.write(
+          `lykos run: unknown flag ${unknown} (known: ${[...RUN_VALUED_FLAGS.map((f) => `--${f} <value>`), ...RUN_BOOLEAN_FLAGS.map((f) => `--${f}`)].join(", ")})\n`,
+        );
+        return 1;
+      }
       let prompt: string | undefined;
+      let taskFile: string | undefined;
       if (rest.includes("--interactive")) {
         prompt = firstPositional(rest, RUN_VALUED_FLAGS);
       } else {
+        const { existsSync } = await import("node:fs");
+        const { resolve } = await import("node:path");
+        const { parseRunBriefArgs: parseBriefArgs } = await import("./brief.js");
+        const briefArgs = parseBriefArgs(rest);
+        // T243: `lykos run task.md` reads a task file; `@task.md` stays a brief read verbatim.
+        if (briefArgs.message !== undefined && briefArgs.files.length === 0 && !briefArgs.stdin && /\.md$/i.test(briefArgs.message) && existsSync(resolve(cwd, briefArgs.message))) {
+          taskFile = resolve(cwd, briefArgs.message);
+        }
+      }
+      if (taskFile !== undefined) {
+        prompt = "(task file)";
+      } else if (!rest.includes("--interactive")) {
         const { parseRunBriefArgs, readProcessStdin, resolveRunBrief } = await import("./brief.js");
         const resolved = await resolveRunBrief(parseRunBriefArgs(rest), {
           cwd,
@@ -742,7 +771,22 @@ export const COMMANDS: readonly Command[] = [
         }
         mode = parsed.mode;
       }
+      const maxStepsRaw = flagValue(rest, "max-steps");
+      let maxSteps: number | undefined;
+      if (maxStepsRaw !== undefined) {
+        maxSteps = Number(maxStepsRaw);
+        if (!Number.isInteger(maxSteps) || maxSteps < 1) {
+          process.stderr.write(`lykos run: --max-steps must be a positive integer, got "${maxStepsRaw}"\n`);
+          return 1;
+        }
+      }
+      const requestId = flagValue(rest, "request-id");
+      const base = flagValue(rest, "base");
       return runRun(cwd, prompt, {
+        ...(taskFile !== undefined ? { taskFile } : {}),
+        ...(maxSteps !== undefined ? { maxSteps } : {}),
+        ...(requestId !== undefined ? { requestId } : {}),
+        ...(base !== undefined ? { base } : {}),
         ...(mode !== undefined ? { mode } : {}),
         ...(rest.includes("--in-place") ? { inPlace: true } : {}),
         ...(containmentRaw !== undefined ? { containment: containmentRaw } : {}),
@@ -760,6 +804,30 @@ export const COMMANDS: readonly Command[] = [
         ...(specialist !== undefined ? { specialist } : {}),
         ...(outputStyle !== undefined ? { outputStyle } : {}),
       });
+    },
+  },
+  {
+    name: "status",
+    help: ["  status    `lykos status <id>... | --all`: delegated sessions' state, owner and result, from the project ledger (JSON with `next`)"],
+    run: async (rest, { cwd }) => {
+      const { runStatus } = await import("./delegation.js");
+      return runStatus(cwd, rest);
+    },
+  },
+  {
+    name: "wait",
+    help: ["  wait      `lykos wait <id>... [--any] [--timeout s]`: block until delegated sessions end, from any process (JSON with `next`)"],
+    run: async (rest, { cwd }) => {
+      const { runWait } = await import("./delegation.js");
+      return runWait(cwd, rest);
+    },
+  },
+  {
+    name: "stop",
+    help: ["  stop      `lykos stop <id>`: ask a delegated session's owner to stop it (JSON with `next`)"],
+    run: async (rest, { cwd }) => {
+      const { runStop } = await import("./delegation.js");
+      return runStop(cwd, rest);
     },
   },
   {

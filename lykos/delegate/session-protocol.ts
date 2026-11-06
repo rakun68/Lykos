@@ -77,6 +77,16 @@ export interface SessionRequest {
    * never run twice.
    */
   requestId?: string;
+  /** T243: what `lykos run` carries that an MCP call does not. */
+  cli?: {
+    tools?: string[];
+    network?: "open" | "none";
+    outputStyle?: string;
+    taskId?: string;
+    projectId?: string;
+    autoApprove?: boolean;
+    subagents?: boolean;
+  };
 }
 
 export type { CommitSummary } from "../git/worktree.js";
@@ -173,6 +183,8 @@ export type SessionOutcome =
       write_in_place?: true;
       /** What the caller should know about where the work is: what writing in place gave up, or work that was saved. */
       note?: string;
+      /** T243: model turns the session took, the count its step cap enforces. */
+      steps?: number;
       /** Project-local extensions that were not loaded because the project is not trusted. */
       skipped_extensions?: string[];
       /** Actions denied by the gate (T213, ADR-0041). Omitted when empty. */
@@ -196,6 +208,8 @@ export type SessionOutcome =
       commits?: CommitSummary[];
       write_in_place?: true;
       note?: string;
+      /** T243: model turns the session took, the count its step cap enforces. */
+      steps?: number;
       skipped_extensions?: string[];
       denied?: DeniedAction[];
       seal?: SessionSealReport;
@@ -217,6 +231,8 @@ export type SessionOutcome =
       commits?: CommitSummary[];
       write_in_place?: true;
       note?: string;
+      /** T243: model turns the session took, the count its step cap enforces. */
+      steps?: number;
       skipped_extensions?: string[];
       denied?: DeniedAction[];
       seal?: SessionSealReport;
@@ -233,6 +249,8 @@ export type SessionOutcome =
       commits?: CommitSummary[];
       write_in_place?: true;
       note?: string;
+      /** T243: model turns the session took, the count its step cap enforces. */
+      steps?: number;
       skipped_extensions?: string[];
       seal?: SessionSealReport;
       disputes?: SessionDispute[];
@@ -253,6 +271,8 @@ export type SessionOutcome =
       commits?: CommitSummary[];
       write_in_place?: true;
       note?: string;
+      /** T243: model turns the session took, the count its step cap enforces. */
+      steps?: number;
       skipped_extensions?: string[];
       denied?: DeniedAction[];
       seal?: SessionSealReport;
@@ -271,6 +291,8 @@ export interface NeedsAnswerOutcome {
   commits?: CommitSummary[];
   write_in_place?: true;
   note?: string;
+  /** T243: model turns the session took. */
+  steps?: number;
   skipped_extensions?: string[];
   denied?: DeniedAction[];
   disputes?: SessionDispute[];
@@ -385,5 +407,6 @@ export function parseRequest(line: string): SessionRequest | undefined {
   if (typeof v.workspace !== "string" || typeof v.prompt !== "string" || typeof v.tool !== "string" || typeof v.label !== "string") return undefined;
   if (v.maxSteps !== undefined && !(typeof v.maxSteps === "number" && Number.isInteger(v.maxSteps) && v.maxSteps > 0)) return undefined;
   if (v.requestId !== undefined && (typeof v.requestId !== "string" || v.requestId === "")) return undefined;
+  if (v.cli !== undefined && (typeof v.cli !== "object" || v.cli === null || Array.isArray(v.cli))) return undefined;
   return v as SessionRequest;
 }
