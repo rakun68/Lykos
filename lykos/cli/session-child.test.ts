@@ -209,6 +209,39 @@ describe("the child's protocol (T181, stories 70-72)", () => {
     await new Promise((r) => setImmediate(r));
     assert.ok(result.gone() >= 1);
   });
+
+  it("T256: losing its parent aborts the session and waits for its teardown before returning", async () => {
+    const workspace = repo();
+    const input = new PassThrough();
+    input.write(encodeFrame(request(workspace)));
+    let aborted!: () => void;
+    const abortCalled = new Promise<void>((r) => (aborted = r));
+    let tornDown = false;
+    let gone = 0;
+    const session = { abort: async () => aborted(), steer: async () => {}, subscribe: () => () => {} };
+    const runTask = async (task: RunStandaloneTaskInput): Promise<RunStandaloneTaskResult> => {
+      await task.bootDeps!.createSession!({} as never);
+      await abortCalled;
+      tornDown = true;
+      return { status: "blocked", reason: "aborted" };
+    };
+    const done = runSessionChild({
+      input,
+      write: () => {},
+      env: { LYKOS_TRUST_SOURCE: "flag", LYKOS_TRUST_WORKSPACE: "1" },
+      trustPath: emptyStore(),
+      worktreesRoot: mkdtempSync(join(tmpdir(), "lykos-child-wt-")),
+      runTask,
+      sessionExtras: { bootDeps: { createSession: (async () => ({ session })) as never } },
+      onParentGone: () => void gone++,
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    input.end();
+    const code = await done;
+    assert.equal(gone, 1);
+    assert.equal(tornDown, true, "the session's teardown ran before the child returned");
+    assert.equal(code, 1, "a child whose parent left exits non-zero");
+  });
 });
 
 describe("a review cannot change the tree (T181, story 41)", () => {

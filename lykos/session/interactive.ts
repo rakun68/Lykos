@@ -1758,7 +1758,9 @@ export async function finishInteractiveSession(opts: {
   // P10.5 (ticket 16, D6): and so do its background jobs, in the same place
   // and for the same reason. A job that outlives its session is an orphan
   // nobody will ever stop.
-  await booted.jobs.stopAll();
+  const jobs = await booted.jobs.stopAll();
+  // T256: a job that did not stop is said, never dropped.
+  for (const job of jobs.notStopped) stderrWrite(`lykos: background job ${job.id} (pid ${String(job.pid)}) did not stop: ${job.command}\n`);
   // P10.6 (ticket 19, D5): and so do its evaluation runtimes. A retained cell
   // runtime is a Node process holding the session's variables; nothing ever
   // printed its pid, so if it is not killed here it is not killed at all.

@@ -22,6 +22,9 @@ function parseColorFlag(value: string | undefined): ColorFlag | undefined {
   return allowed.includes(value as ColorFlag) ? (value as ColorFlag) : undefined;
 }
 
+/** T256: how long a session child whose parent is gone waits for its teardown before it exits anyway. */
+const PARENT_GONE_TEARDOWN_MS = 30_000;
+
 const VALUE_FLAGS_SEARCH = [
   "task",
   "outcome",
@@ -922,7 +925,15 @@ export const COMMANDS: readonly Command[] = [
     run: async () => {
       const { runSessionChild } = await import("./session-child.js");
       const stdout = claimProtocolStream();
-      const code = await runSessionChild({ write: stdout.write, onParentGone: () => process.exit(1) });
+      // T256: the parent's loss aborts the session and its teardown runs; the deadline only covers a teardown
+      // that hangs. Writes to the closed pipe are dropped.
+      const code = await runSessionChild({
+        write: stdout.write,
+        onParentGone: () => {
+          process.stdout.on("error", () => {});
+          setTimeout(() => process.exit(1), PARENT_GONE_TEARDOWN_MS).unref();
+        },
+      });
       await stdout.flush();
       return code;
     },

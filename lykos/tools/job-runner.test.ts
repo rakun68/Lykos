@@ -146,7 +146,8 @@ describe("P10.5 D4: stop kills the tree, and the operating system is what says s
       const grandPid = await waitFor(tree.grandchildPid);
       assert.equal(await osProcessAlive(grandPid), true, "grandchild is alive before teardown");
 
-      const stopped = await registry.stopAll();
+      const { stopped, notStopped } = await registry.stopAll();
+      assert.deepEqual(notStopped, []);
       assert.equal(stopped.length, 1);
       assert.equal(stopped[0]?.status, "stopped");
       assert.equal(stopped[0]?.reason, "the session ended");

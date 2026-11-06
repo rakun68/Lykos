@@ -258,6 +258,12 @@ The process that holds a delegated session's stdin, and so owns it: an MCP serve
 ledger's `owners` row by pid and record time. A session whose owner is `dead` is crashed and waits for `lykos
 recover`; nothing takes it over by itself.
 
+**Confirmed quiescence**:
+The proof that everything a delegated session started is gone: its owner (while the session is live), its session
+child, every guard and the tree its command started, and every container, which counts until it is removed by name.
+`unknown` never counts as gone. `lykos recover` asks for it first.
+_Avoid_: stopped, cleaned up (without the proof)
+
 **Inbox**:
 The ledger table of steers for a delegated session sent from a process that does not own it. The owner polls it and
 delivers each message to the session in order.

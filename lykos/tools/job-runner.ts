@@ -239,6 +239,12 @@ export interface JobRegistryOpts {
   executor?: ProjectExecutor;
 }
 
+/** T256: what `stopAll` stopped, and what it could not prove stopped. */
+export interface JobStopReport {
+  stopped: JobRecord[];
+  notStopped: JobRecord[];
+}
+
 export interface StartJobOpts {
   command: string;
   /** Where the command runs. Defaults to the registry's cwd, the project root. */
@@ -492,16 +498,26 @@ export class JobRegistry {
    * two halves of the defect this ticket exists to fix.
    */
   async stop(id: string, reason?: string): Promise<JobRecord | undefined> {
+    return (await this.stopEntry(id, reason))?.record;
+  }
+
+  /** T256: `stop`, and whether the shell was seen to exit within the grace. */
+  private async stopEntry(id: string, reason?: string): Promise<{ record: JobRecord; exited: boolean } | undefined> {
     const entry = this.jobs.get(id);
     if (entry === undefined) return undefined;
-    if (entry.status !== "running" && entry.status !== "capped") return publicRecord(entry);
+    if (entry.status !== "running" && entry.status !== "capped") return { record: publicRecord(entry), exited: true };
     if (entry.status === "running") {
       entry.status = "stopped";
       if (reason !== undefined) entry.reason = reason;
     }
-    await (entry.child !== undefined ? killExecChild(entry.child) : killProcessTree(entry.pid));
-    await settleWithin(entry.done, JOB_STOP_GRACE_MS);
-    return publicRecord(entry);
+    let killed = true;
+    try {
+      await (entry.child !== undefined ? killExecChild(entry.child) : killProcessTree(entry.pid));
+    } catch {
+      killed = false;
+    }
+    const exited = (await settleWithin(entry.done, JOB_STOP_GRACE_MS)) && killed;
+    return { record: publicRecord(entry), exited };
   }
 
   /**
@@ -513,18 +529,18 @@ export class JobRegistry {
    * interrupt. So this hangs off the session lifecycle that already exists
    * rather than a new one, exactly as `LspServerPool.shutdownAll()` does.
    */
-  async stopAll(): Promise<JobRecord[]> {
+  async stopAll(): Promise<JobStopReport> {
     const ids = [...this.jobs.keys()];
-    const stopped: JobRecord[] = [];
+    const report: JobStopReport = { stopped: [], notStopped: [] };
     for (const id of ids) {
-      try {
-        const record = await this.stop(id, "the session ended");
-        if (record !== undefined) stopped.push(record);
-      } catch {
-        // One job that will not die must not stop the others being killed.
-      }
+      // One job that will not die must not stop the others being killed; it is reported, never dropped (T256).
+      const result = await this.stopEntry(id, "the session ended").catch(() => undefined);
+      const entry = this.jobs.get(id);
+      if (result === undefined) {
+        if (entry !== undefined) report.notStopped.push(publicRecord(entry));
+      } else (result.exited ? report.stopped : report.notStopped).push(result.record);
     }
-    return stopped;
+    return report;
   }
 
   /** Every started job's pid, for a test that has to prove they are gone. */

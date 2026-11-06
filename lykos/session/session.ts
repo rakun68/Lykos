@@ -96,6 +96,7 @@ import { assertHostProviderUsable, assertSpecialistProviderUsable } from "../con
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { defaultLedgerPath, openLedger, openLedgerSync } from "../ledger/use.js";
 import { createGuardedExecutor } from "../process/shell.js";
+import { containerRecordCommand } from "../process/quiescence.js";
 import { gitStatus, resolveProject } from "./identity.js";
 import { guardToolCall, recordBudgetTrip, type BudgetVerdict } from "../ledger/budget.js";
 import {
@@ -1544,6 +1545,20 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   }
   const { session } = booted;
   guardedSession.id = session.sessionId;
+  // T256: a delegated session records its own process and its container, so quiescence can be confirmed from any
+  // process. The container is found again by its session label; the record names its runtime.
+  if (input.delegated === true) {
+    const ledger = openLedgerSync(ledgerPath);
+    try {
+      ledger.recordProcess({ kind: "child", sessionId: session.sessionId, pid: process.pid, command: "session-child" });
+      const runtime = containment?.record.runtime;
+      if (runtime !== undefined && containment?.record.used !== "off") {
+        ledger.recordProcess({ kind: "container", sessionId: session.sessionId, pid: 0, command: containerRecordCommand(runtime) });
+      }
+    } finally {
+      ledger.close();
+    }
+  }
   // T182: the family's handle carries what a child needs to boot the way this session did.
   if (booted.spawnContext !== undefined && input.nativeProviders !== undefined) booted.spawnContext.nativeProviders = input.nativeProviders;
   // T194: a child answers to the same trust as its parent, so an untrusted delegated parent cannot hand a child back
@@ -1745,7 +1760,9 @@ ${decision.note}
   // P10.5 (ticket 16, D6): and so do its background jobs, in the same place
   // and for the same reason. A job that outlives its session is an orphan
   // nobody will ever stop.
-  await booted.jobs.stopAll();
+  const jobs = await booted.jobs.stopAll();
+  // T256: a job that did not stop is said, never dropped.
+  for (const job of jobs.notStopped) stderrWrite(`lykos: background job ${job.id} (pid ${String(job.pid)}) did not stop: ${job.command}\n`);
   // P10.6 (ticket 19, D5): and so do its evaluation runtimes. A retained cell
   // runtime is a Node process holding the session's variables; nothing ever
   // printed its pid, so if it is not killed here it is not killed at all.

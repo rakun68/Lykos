@@ -84,7 +84,7 @@ export interface ContainerRuntimeDriver {
   isRunning(id: string): Promise<boolean>;
   /** Removes by id or name; removing what is already gone is not an error. */
   removeContainer(idOrName: string): Promise<void>;
-  /** Containers carrying the label key, running or not. */
+  /** Containers carrying the label key, running or not. Throws when the runtime will not list them (T256). */
   listContainers(labelKey: string): Promise<ListedContainer[]>;
   /**
    * Writes a file in `/work` from inside the container and checks the host
@@ -293,7 +293,7 @@ export function cliRuntime(name: RuntimeName): ContainerRuntimeDriver {
 
     async listContainers(labelKey) {
       const r = await run(bin, ["ps", "-a", "--filter", `label=${labelKey}`, "--format", `{{.ID}}\t{{.Label "${labelKey}"}}`]);
-      if (r.code !== 0) return [];
+      if (r.code !== 0) throw new Error(`${bin} ps exited ${String(r.code)}: ${r.stderr.trim()}`);
       return r.stdout
         .split("\n")
         .map((line) => line.trim())

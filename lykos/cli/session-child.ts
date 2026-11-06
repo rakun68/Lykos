@@ -146,7 +146,10 @@ export interface SessionChildDeps {
   sessionExtras?: Partial<RunStandaloneTaskInput>;
   /** Tests only: where worktrees are made. */
   worktreesRoot?: string;
-  /** Called when stdin closes after the request was read: the parent went away. */
+  /**
+   * Called when stdin closes after the request was read: the parent went away. The session is aborted and its
+   * teardown runs (T256); this is for a deadline after which the process gives up waiting for it.
+   */
   onParentGone?: () => void;
 }
 
@@ -161,7 +164,16 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
   let steerChain: Promise<void> = Promise.resolve();
   let pendingAskResolver: ((message: string) => void) | undefined;
 
+  // T256: losing the parent aborts the session, so its teardown (jobs, guards, container) runs before the process
+  // exits, instead of the process exiting under it.
+  let parentGone = false;
+  let createdSession: { abort?: () => Promise<void> } | undefined;
+  const abortSession = (): void => {
+    if (typeof createdSession?.abort === "function") void createdSession.abort().catch(() => {});
+  };
   const onParentGone = (): void => {
+    parentGone = true;
+    abortSession();
     if (pendingAskResolver !== undefined) {
       const resolve = pendingAskResolver;
       pendingAskResolver = undefined;
@@ -206,6 +218,8 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
   let counted = false;
   const onSessionCreated = (session: unknown): void => {
     counted = true;
+    createdSession = session as { abort?: () => Promise<void> };
+    if (parentGone) abortSession();
     watchStepCap(session as StepCappable, request?.maxSteps, () => { stepCapped = true; }, steps);
     steerChain = steerChain.then(async () => {
       activeAgentSession = session as { steer: (msg: string) => Promise<void> };
@@ -278,7 +292,7 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
   } finally {
     clearInterval(interval);
   }
-  return 0;
+  return parentGone ? 1 : 0;
 }
 
 function progressIntervalFromEnv(env: NodeJS.ProcessEnv): number {

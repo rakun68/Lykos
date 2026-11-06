@@ -226,7 +226,9 @@ function isAlive(pid: number): boolean {
 
 /** Removes the containers earlier runs left behind: those whose owning process is gone. */
 async function removeOrphans(driver: ContainerRuntimeDriver): Promise<void> {
-  for (const c of await driver.listContainers(OWNER_LABEL)) {
+  // A runtime that will not list its containers has no orphans to remove now; the next start looks again.
+  const listed = await driver.listContainers(OWNER_LABEL).catch(() => []);
+  for (const c of listed) {
     const pid = Number(c.labels[OWNER_LABEL]);
     if (!Number.isInteger(pid) || !isAlive(pid)) await driver.removeContainer(c.id);
   }
