@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { runResume } from "./resume.js";
 import { sessionInput } from "./run.js";
-import { defaultLedgerPath, openLedger } from "../ledger/use.js";
+import { defaultLedgerPath, openLedger, withLedger } from "../ledger/use.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { stderrWrite } from "../tui/io-mode.js";
@@ -35,6 +35,7 @@ import { resolveSpecialist, DEFAULT_SPECIALIST } from "../config/specialists.js"
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
 import { getBranchOrNull, resolveRef } from "../seal/git.js";
 import { resealAt, sealFromSpec } from "../seal/spec.js";
+import { buildContextPack, recordContextPack } from "../delegate/context-pack.js";
 import { findSealedPathMatch } from "../extensions/defaults/lykos-seal.js";
 import { commandPathAccesses } from "../gate/bash-paths.js";
 import type { BootDeps } from "../session/boot.js";
@@ -344,6 +345,39 @@ async function sealBeforeModel(
   return { outcome: "error", message: `${sealedNow.message ?? "seal creation refused"}${output}`, next: "fix_environment" };
 }
 
+/**
+ * T248: the context pack of a new session with a task: built from the base commit (the caller's HEAD, or `base`),
+ * rooted at the session's own tree so every path in it is one the session can use, and recorded in the ledger before
+ * the model runs. The brief with the pack after it; the brief alone when there is no task or no git to read from.
+ */
+async function withContextPack(
+  request: SessionRequest,
+  root: string,
+  ledgerPath: string,
+  sessionId: string,
+  progress: (message: string) => void,
+): Promise<string> {
+  if (request.sessionId !== undefined || request.context === undefined) return request.prompt;
+  const base = resolveRef(request.base ?? "HEAD", request.workspace);
+  if (base === null) {
+    progress("context pack: skipped, the project has no base commit to read from");
+    return request.prompt;
+  }
+  const pack = buildContextPack({
+    root,
+    repo: request.workspace,
+    base,
+    files: request.context.files,
+    task: request.prompt,
+    ...(request.context.test !== undefined ? { test: request.context.test } : {}),
+  });
+  await withLedger(ledgerPath, async (ledger) => recordContextPack(ledger, sessionId, pack));
+  progress(`context pack: ${pack.entries.length} entries from ${pack.base.slice(0, 12)}`);
+  return `${request.prompt}
+
+${pack.text}`;
+}
+
 function progressIntervalFromEnv(env: NodeJS.ProcessEnv): number {
   const raw = Number(env.LYKOS_SESSION_PROGRESS_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROGRESS_INTERVAL_MS;
@@ -400,6 +434,7 @@ async function runRequest(
       // T254: the seal from `sealed:`, and a reseal, come before any model runs.
       const sealed = await sealBeforeModel(request, target.workTree?.path, ledgerPath, sessionId, env, progress);
       if (sealed !== undefined) return { spec: sealed };
+      const prompt = await withContextPack(request, target.workTree?.path ?? request.workspace, ledgerPath, sessionId, progress);
       const existingCreateSession = deps.sessionExtras?.bootDeps?.createSession;
       const wrappedCreateSession: typeof createAgentSession = async (bootOpts) => {
         const create = existingCreateSession ?? createAgentSession;
@@ -417,7 +452,7 @@ async function runRequest(
       const base: RunStandaloneTaskInput = {
         ...sessionInput(
           request.workspace,
-          request.prompt,
+          prompt,
           {
             ...(request.model !== undefined ? { model: request.model } : {}),
             ...(request.budgetUsd !== undefined ? { budgetPerRunUsd: String(request.budgetUsd) } : {}),

@@ -175,6 +175,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
   let taskScope: string[] | undefined;
   let taskSteps: number | undefined;
   let taskSealed: { sealed: string[]; red: boolean } | undefined;
+  let taskContext: { files: string[]; test?: string } | undefined;
   if (opts.taskFile !== undefined) {
     let task: TaskFile;
     try {
@@ -185,7 +186,12 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
       stderrWrite(`lykos run: ${err instanceof Error ? err.message : String(err)}\n`);
       return 1;
     }
-    brief = `${brief.trim()}\n\n${testCommandBrief(resolveTestCommand(task, config))}`;
+    const resolvedTest = resolveTestCommand(task, config);
+    brief = `${brief.trim()}\n\n${testCommandBrief(resolvedTest)}`;
+    // T248: the context pack is built from the task's files, in the session's own tree at the base commit.
+    if (task.files.length > 0 || resolvedTest !== undefined) {
+      taskContext = { files: task.files, ...(resolvedTest !== undefined ? { test: resolvedTest.command } : {}) };
+    }
     if (task.scope.length > 0 || task.files.length > 0) taskScope = [...task.files, ...task.scope];
     taskSteps = task.steps;
     // T254: the sealed tests are sealed before the model runs.
@@ -215,6 +221,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
         ...(opts.base !== undefined ? { base: opts.base } : {}),
         ...(opts.requestId !== undefined ? { request_id: opts.requestId } : {}),
         ...(taskScope !== undefined ? { scope: taskScope } : {}),
+        ...(taskContext !== undefined ? { files: taskContext.files, ...(taskContext.test !== undefined ? { test: taskContext.test } : {}) } : {}),
         ...(taskSealed !== undefined ? { sealed: taskSealed.sealed, ...(taskSealed.red ? {} : { red: false }) } : {}),
         cli: {
           ...(opts.tools !== undefined ? { tools: opts.tools } : {}),

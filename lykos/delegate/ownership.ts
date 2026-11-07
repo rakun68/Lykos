@@ -13,6 +13,7 @@
 
 import { realpathSync } from "node:fs";
 import type { Ledger } from "../ledger/use.js";
+import type { ContextPackSummary } from "./context-pack.js";
 import { liveness, type Liveness } from "../process/identity.js";
 
 export type OwnerKind = "run" | "mcp";
@@ -338,6 +339,8 @@ export interface SessionView {
   question: string | null;
   result?: unknown;
   next?: string;
+  /** T248: the context pack the session was given: its base commit, root and entries. Absent when it had none. */
+  context_pack?: ContextPackSummary;
 }
 
 /**

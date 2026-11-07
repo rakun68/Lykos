@@ -225,6 +225,13 @@ An implementer's claim that a sealed test is wrong, filed with `dispute_test` in
 decided by the test writer, the orchestrator or a human. An upheld dispute leads to a reseal.
 _Avoid_: test change request, objection, override
 
+**Context pack**:
+What a delegated session is told about its task before its first turn, built from the task file's
+`files` and read from the base commit, never the working tree: the project's rules and traps, the
+glossary terms the task uses, the docs that name the files, their recent history and related tests, and
+the verification command. Every path in it is absolute. It is recorded in the ledger with the session.
+_Avoid_: briefing, preamble, context file (a file in the tree)
+
 **Task file**:
 The Markdown file a coordinator hands Lykos for one task, in Boxie's format: frontmatter naming its
 files, sealed tests, verification command, scope and issue, and a body that is the brief.

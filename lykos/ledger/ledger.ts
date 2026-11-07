@@ -741,6 +741,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateSealEvents(db);
   migrateProcessRecords(db);
   migrateOwners(db);
+  migrateContextPacks(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -953,6 +954,24 @@ function migrateOwners(db: Database.Database): void {
   // T246: the crashes `lykos recover` has taken the session over from, on a ledger whose `owners` predates it.
   const cols = new Set((db.prepare(`PRAGMA table_info(owners)`).all() as Array<{ name: string }>).map((c) => c.name));
   if (!cols.has("crashes")) db.exec(`ALTER TABLE owners ADD COLUMN crashes INTEGER NOT NULL DEFAULT 0`);
+}
+
+/**
+ * T248: the context pack each delegated session was given, as it was given: its base commit, the root its paths are
+ * under, every entry (`entries_json`) and the text the session read.
+ */
+function migrateContextPacks(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_packs (
+      session_id    TEXT PRIMARY KEY,
+      base_commit   TEXT NOT NULL,
+      root          TEXT NOT NULL,
+      recorded_at   TEXT NOT NULL,
+      bytes         INTEGER NOT NULL,
+      entries_json  TEXT NOT NULL,
+      text          TEXT NOT NULL
+    );
+  `);
 }
 
 /** T257: create `process_records` on a ledger that predates it. */

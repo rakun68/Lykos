@@ -32,6 +32,8 @@ describe("Ledger", () => {
         "commits",
         // compactions joined on T152: each self-compact compaction attempt.
         "compactions",
+        // context_packs joined on T248: the context pack each delegated session was given, as it was given.
+        "context_packs",
         // extension_counters joined on T149: a Lykos extension's own numbers.
         "extension_counters",
         // flaky_tests joined on T167: a test that failed in the gate and passed on rerun.

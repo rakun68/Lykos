@@ -86,6 +86,11 @@ export interface SessionRequest {
   red?: boolean;
   /** T254 (R9): on a continuation, the commit on the session's branch to seal again at before it continues. */
   reseal?: string;
+  /**
+   * T248: the task's files and verification command. A new session is given a context pack built from them, read at
+   * the base commit, with absolute paths, and recorded in the ledger. A continuation already has its pack.
+   */
+  context?: { files: string[]; test?: string };
   /** T243: what `lykos run` carries that an MCP call does not. */
   cli?: {
     tools?: string[];
@@ -422,5 +427,10 @@ export function parseRequest(line: string): SessionRequest | undefined {
   if (v.sealed !== undefined && !(Array.isArray(v.sealed) && v.sealed.every((p) => typeof p === "string" && p !== ""))) return undefined;
   if (v.red !== undefined && typeof v.red !== "boolean") return undefined;
   if (v.reseal !== undefined && (typeof v.reseal !== "string" || v.reseal === "")) return undefined;
+  if (v.context !== undefined) {
+    const c = v.context as Partial<NonNullable<SessionRequest["context"]>> | null;
+    if (typeof c !== "object" || c === null || !Array.isArray(c.files) || !c.files.every((f) => typeof f === "string" && f !== "")) return undefined;
+    if (c.test !== undefined && (typeof c.test !== "string" || c.test === "")) return undefined;
+  }
   return v as SessionRequest;
 }

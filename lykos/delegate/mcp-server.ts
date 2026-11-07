@@ -27,6 +27,7 @@ import {
   specialistToolName,
   type SpecialistLocation,
 } from "../config/specialists.js";
+import { contextPackSummary } from "./context-pack.js";
 import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
 import { readTranscript, transcriptFilePath, type TranscriptEventInput, type TranscriptEventRecord } from "../session/transcript.js";
@@ -140,6 +141,8 @@ const TaskInputShape = {
   sealed: z.array(z.string().min(1)).optional().describe("T254: test files, as they are in your tree, to seal before the model runs. They are committed over the base as the writer commit and must fail first: one that already passes ends the call with WEAK-SPEC and next answer_spec."),
   red: z.boolean().optional().describe("T254: false skips the check that the sealed tests fail; the seal records it. Default true."),
   reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
+  files: z.array(z.string().min(1)).optional().describe("T248: the files the task is about. A new session is given a context pack built from them: the project's rules and traps, the glossary terms the task uses, the docs naming them, their recent history and related tests, read at the base commit with absolute paths, and recorded in the ledger."),
+  test: z.string().min(1).optional().describe("T248: the exact verification command the session may run; it is in the context pack."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -167,6 +170,8 @@ const StartInputShape = {
   sealed: z.array(z.string().min(1)).optional().describe("T254: test files, as they are in your tree, to seal before the model runs. They are committed over the base as the writer commit and must fail first: one that already passes ends the call with WEAK-SPEC and next answer_spec."),
   red: z.boolean().optional().describe("T254: false skips the check that the sealed tests fail; the seal records it. Default true."),
   reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
+  files: z.array(z.string().min(1)).optional().describe("T248: the files the task is about. A new session is given a context pack built from them: the project's rules and traps, the glossary terms the task uses, the docs naming them, their recent history and related tests, read at the base commit with absolute paths, and recorded in the ledger."),
+  test: z.string().min(1).optional().describe("T248: the exact verification command the session may run; it is in the context pack."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -208,6 +213,8 @@ const SpecialistInputShape = {
   sealed: z.array(z.string().min(1)).optional().describe("T254: test files, as they are in your tree, to seal before the model runs. They are committed over the base as the writer commit and must fail first: one that already passes ends the call with WEAK-SPEC and next answer_spec."),
   red: z.boolean().optional().describe("T254: false skips the check that the sealed tests fail; the seal records it. Default true."),
   reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
+  files: z.array(z.string().min(1)).optional().describe("T248: the files the task is about. A new session is given a context pack built from them: the project's rules and traps, the glossary terms the task uses, the docs naming them, their recent history and related tests, read at the base commit with absolute paths, and recorded in the ledger."),
+  test: z.string().min(1).optional().describe("T248: the exact verification command the session may run; it is in the context pack."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -271,6 +278,9 @@ type TaskInput = {
   sealed?: string[] | undefined;
   red?: boolean | undefined;
   reseal?: string | undefined;
+  /** T248: the files the task is about and its verification command; the child builds the context pack from them. */
+  files?: string[] | undefined;
+  test?: string | undefined;
   /** T243, `lykos run` only: the interaction mode, and the session fields the CLI carries. */
   mode?: InteractionMode | undefined;
   cli?: SessionRequest["cli"] | undefined;
@@ -1189,6 +1199,9 @@ async function startTrackedSession(
     ...(args.request_id !== undefined ? { requestId: args.request_id } : {}),
     ...(args.sealed !== undefined && args.sealed.length > 0 && args.session_id === undefined ? { sealed: args.sealed } : {}),
     ...(args.red === false ? { red: false } : {}),
+    ...(args.session_id === undefined && ((args.files?.length ?? 0) > 0 || args.test !== undefined)
+      ? { context: { files: args.files ?? [], ...(args.test !== undefined ? { test: args.test } : {}) } }
+      : {}),
     ...(args.reseal !== undefined && args.session_id !== undefined ? { reseal: args.reseal } : {}),
     ...(args.cli !== undefined ? { cli: args.cli } : {}),
   };
@@ -1442,7 +1455,13 @@ const LEDGER_POLL_MS = 250;
 export function ledgerViews(workspace: string, ids?: readonly string[]): SessionView[] {
   const ledgerPath = defaultLedgerPath(workspace);
   if (!existsSync(ledgerPath)) return [];
-  return withLedgerSync(ledgerPath, (ledger) => ownerRows(ledger, ids).map((row) => viewOf(row, ownerLiveness, () => ownerRow(ledger, row.session_id))));
+  return withLedgerSync(ledgerPath, (ledger) =>
+    ownerRows(ledger, ids).map((row) => {
+      const view = viewOf(row, ownerLiveness, () => ownerRow(ledger, row.session_id));
+      const pack = contextPackSummary(ledger, row.session_id);
+      return pack === undefined ? view : { ...view, context_pack: pack };
+    }),
+  );
 }
 
 /**
