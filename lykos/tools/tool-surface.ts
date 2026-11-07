@@ -564,6 +564,13 @@ export const TOOL_REGISTRY: readonly ToolRegistryEntry[] = [
     rationale: "Yield and request coordinator intervention in delegated sessions (T224).",
     risk: { tier: "read", idempotent: true, openWorld: false },
   },
+  {
+    name: "claim",
+    residency: "resident",
+    promptPresence: "full",
+    rationale: "Record a claim with a check the harness runs after the session ends (T234, ADR-0059).",
+    risk: { tier: "read", idempotent: false, openWorld: false },
+  },
 ];
 
 /**
@@ -659,6 +666,7 @@ export const LYKOS_TOOL_NAMES = [
   'tool_call',
   'ask_coordinator',
   'give_up',
+  'claim',
 ] as const;
 
 export const RUNTIME_AVAILABLE_TOOLS: ReadonlySet<string> = new Set([

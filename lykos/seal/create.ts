@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { stderrWrite } from "../tui/io-mode.js";
 import { useConfiguredShellPath } from "../process/host-bash.js";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { detectDefaultBase, loadConfig } from "../config/load.js";
 import { defaultLedgerPath, recordSealEvent } from "../ledger/use.js";
 import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
@@ -23,6 +23,7 @@ import {
   resolveHead,
   resolveRef,
 } from "./git.js";
+import { startWorktreeContainment } from "./contained-worktree.js";
 import { matchAnyGlob } from "./matcher.js";
 import { detectAdapter, runRedCheck, type RedOutcome } from "./runner.js";
 import type { SealAdapter, SealFile, SealRedTest } from "./types.js";
@@ -239,23 +240,11 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
       let executor: ProjectExecutor = localExecutor;
 
       if (containmentLevel !== "off") {
-        const { startContainment } = await import("../containment/containment.js");
-        let gitWorktree: { commonDir: string; gitDir: string } | undefined;
-        const gitFilePath = join(worktree.dir, ".git");
-        if (existsSync(gitFilePath) && statSync(gitFilePath).isFile()) {
-          const gitContent = readFileSync(gitFilePath, "utf8").trim();
-          const match = gitContent.match(/^gitdir:\s*(.+)$/);
-          if (match && match[1]) {
-            const commonOut = gitExec(["rev-parse", "--git-common-dir"], worktree.dir, env);
-            const commonDir = resolve(worktree.dir, commonOut);
-            gitWorktree = { commonDir, gitDir: resolve(worktree.dir, match[1]) };
-          }
-        }
-        containment = await startContainment({
-          config: config.containment.level === containmentLevel ? config.containment : { ...config.containment, level: containmentLevel },
-          workspace: worktree.dir,
-          ...(gitWorktree !== undefined ? { gitWorktree } : {}),
-          hostEnv: env,
+        containment = await startWorktreeContainment({
+          worktreeDir: worktree.dir,
+          level: containmentLevel,
+          config: config.containment,
+          env,
           log: (line) => stderrWrite(`${line}\n`),
         });
         if (containment.notice !== undefined) {

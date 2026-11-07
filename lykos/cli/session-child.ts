@@ -12,7 +12,8 @@
 import { randomUUID } from "node:crypto";
 import { runResume } from "./resume.js";
 import { sessionInput } from "./run.js";
-import { defaultLedgerPath, openLedger, withLedger } from "../ledger/use.js";
+import { defaultLedgerPath, openLedger, withLedger, withLedgerSync } from "../ledger/use.js";
+import { recordClaim } from "../delegate/claims.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { stderrWrite } from "../tui/io-mode.js";
@@ -233,8 +234,15 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
     });
   };
 
+  // T234: the id claims are filed under is known once the request is, so a claim made before then cannot happen.
+  const claimTarget: { ledgerPath?: string; sessionId?: string } = {};
   let givenUpQuestion: string | undefined;
   const coordinator: Coordinator = {
+    claim: (text, check): number => {
+      const { ledgerPath, sessionId } = claimTarget;
+      if (ledgerPath === undefined || sessionId === undefined) throw new Error("claim: the session has no id yet");
+      return withLedgerSync(ledgerPath, (ledger) => recordClaim(ledger, sessionId, text, check));
+    },
     ask: (question: string, signal?: AbortSignal): Promise<string> => {
       return new Promise<string>((resolve) => {
         let settled = false;
@@ -281,6 +289,10 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
       onSessionCreated,
       coordinator,
       () => givenUpQuestion,
+      (ledgerPath, sessionId) => {
+        claimTarget.ledgerPath = ledgerPath;
+        claimTarget.sessionId = sessionId;
+      },
     );
     send({
       type: "result",
@@ -422,6 +434,7 @@ async function runRequest(
   onSessionCreated?: (session: unknown) => void,
   coordinator?: Coordinator,
   getGivenUpQuestion?: () => string | undefined,
+  onSessionId?: (ledgerPath: string, sessionId: string) => void,
 ): Promise<SessionOutcome> {
   let trustSource: TrustSource;
   try {
@@ -450,6 +463,9 @@ async function runRequest(
   const ledgerPath = deps.sessionExtras?.ledgerPath ?? defaultLedgerPath(request.workspace);
   // A continuation reaches the branch of the session the call began, even through a context-limit successor's id.
   const sessionId = request.sessionId === undefined ? (request.newSessionId ?? randomUUID()) : await rootSessionOf(ledgerPath, request.sessionId);
+
+  // T234: claims are filed under the id the caller knows the session by.
+  onSessionId?.(ledgerPath, request.sessionId ?? sessionId);
 
   const worked = await withWorkTarget(
     {

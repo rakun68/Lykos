@@ -30,6 +30,8 @@ describe("Ledger", () => {
         // baselines joined on T249: the verification command's run on a base commit, keyed by base, command, lockfile and platform.
         "baselines",
         "calls",
+        // claims joined on T234: what a delegated session claimed with `claim`, and the harness's verdict on each check.
+        "claims",
         // commits joined on T179: each commit a session made through `commit`.
         "commits",
         // compactions joined on T152: each self-compact compaction attempt.

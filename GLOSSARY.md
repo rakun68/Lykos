@@ -294,10 +294,34 @@ _Avoid_: takeover (for anything automatic), resume (that continues an ended sess
 What the coordinator records about a delegated session's result: `accept`, `reject`, `merged` or `discard`, each with a
 reason, an actor and, optionally, a cause from Boxie's fixed list. Recorded in the ledger, never overwritten; a
 session's decisions are its history. `discard` is the only one a crashed session takes.
-_Avoid_: verdict, status (those are the session's own state)
+_Avoid_: status (that is the session's own state), verdict (that is a claim's, below)
 
 **Finding decision**:
 What the review cycle did with one finding: forwarded to the fixer, dropped, or retired.
+
+**Claim**:
+Something a delegated session says is true of its work, recorded with the `claim` tool together with a check the harness
+runs. Only the tool makes a claim: text in the session's answer, however it is formatted, is not one.
+_Avoid_: finding (a reviewer's claim that something is broken, checked the same way), assertion
+
+**Claim check**:
+What the harness runs to decide a claim: a line (a path, a line number and the text it holds), a search (a pattern and how
+many lines match), a command and the exit code it must give, or a reproduction. The harness runs it at the final head,
+never the session or a reviewer.
+
+**Reproduction**:
+A claim check that is a new test file and the names of the tests that must fail. It runs through `seal.test_command`, at
+the final head and at the base commit, so a test that fails on the branch and passes on the base proves a regression.
+_Avoid_: repro, proof test
+
+**Claim verdict**:
+What the harness found about a claim: `verified` (the check ran and the claim held), `failed` (it ran and the claim is
+false, which raises `MISREPORT`) or `unchecked` (it could not run, with the reason). Never from the session's words.
+_Avoid_: result, status
+
+**Uncontained**:
+The mark on a claim verdict whose check ran on this machine because containment was off, on a project the user's trust store
+holds. A project it does not hold is `unchecked` instead.
 
 **Red outcome**:
 What the red check found at the writer commit: `failing`, `failing-exit-only` (the weaker guarantee), `passing`
@@ -334,7 +358,7 @@ _Avoid_: fingerprint, output hash (alone)
 **Result flag**:
 A named warning a delegated session's result carries about its change (`OUT-OF-SCOPE`, `SENSITIVE`,
 `STAND-IN`, `LEFTOVERS`, `MISREPORT` and others), computed by the harness from git, never by the model.
-Each names the session that caused it.
+Each names the session that caused it. `MISREPORT` also fires for a claim whose check failed.
 _Avoid_: warning, lint
 
 **Step cap**:

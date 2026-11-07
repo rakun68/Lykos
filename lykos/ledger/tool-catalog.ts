@@ -988,6 +988,35 @@ export const TOOL_CATALOG: Record<string, CatalogTool> = {
       "Give up on the current task and report to the coordinator that an answer is needed to proceed. Ends the session.",
     parameters: objectSchema({ question: str("The question that must be answered to proceed.") }, ["question"]),
   },
+  claim: {
+    name: "claim",
+    source: "lykos",
+    description:
+      "Record something you say is true of your work, with a check the harness runs itself after you finish, at the final commit. A claim whose check fails is reported to the coordinator as MISREPORT; a claim not made here is only your own word. Checks: a line (path, line, text it contains), a search (pattern, how many lines match), a command (and its exit code), or a reproduction (a new test file and the tests that must fail).",
+    parameters: objectSchema(
+      {
+        text: str("What you claim, in one sentence."),
+        check: objectSchema(
+          {
+            kind: str("line, search, command or reproduction.", { enum: ["line", "search", "command", "reproduction"] }),
+            path: str("line: the file, relative to the repository root."),
+            line: num("line: the 1-based line number."),
+            text: str("line: text the line contains."),
+            pattern: str("search: a regular expression, matched per line."),
+            matches: num("search: how many lines match."),
+            paths: strArray("search: restrict to these files or folders."),
+            command: str("command: the command to run."),
+            exit: num("command: the exit code it must give."),
+            file: str("reproduction: a new test file, relative to the repository root."),
+            content: str("reproduction: the test file's text."),
+            fails: strArray("reproduction: names of the tests that must fail."),
+          },
+          ["kind"],
+        ),
+      },
+      ["text", "check"],
+    ),
+  },
   yield: {
     name: "yield",
     source: "lykos",

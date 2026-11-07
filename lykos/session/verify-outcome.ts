@@ -88,10 +88,13 @@ function killedRun(cmd: string, signal: NodeJS.Signals, output: string, timedOut
   };
 }
 
+/** How long a verification command may run before it is killed. Claim checks (T234) use the same limit. */
+export const VERIFICATION_TIMEOUT_MS = 15 * 60_000;
+
 export function runVerificationCommand(
   cmd: string,
   cwd: string,
-  timeoutMs = 15 * 60_000,
+  timeoutMs = VERIFICATION_TIMEOUT_MS,
   /** T172: where the command runs. Absent means this machine. */
   executor: ProjectExecutor = localExecutor,
 ): Promise<VerificationRun> {

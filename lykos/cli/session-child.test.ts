@@ -279,7 +279,7 @@ describe("a review cannot change the tree (T181, story 41)", () => {
     const { result, wire } = await review("lykos_review");
     assert.equal(result.outcome, "ok", JSON.stringify(result));
     assert.ok(wire.includes("read"), wire.join(","));
-    assert.ok(wire.every((n) => ["read", "grep", "find", "ls", "ask_coordinator", "give_up"].includes(n)), `only the read-only surface, extension tools included: ${wire.join(",")}`);
+    assert.ok(wire.every((n) => ["read", "grep", "find", "ls", "ask_coordinator", "give_up", "claim"].includes(n)), `only the read-only surface, extension tools included: ${wire.join(",")}`);
     for (const forbidden of ["edit", "write", "bash", "powershell", "commit"]) assert.ok(!wire.includes(forbidden), forbidden);
   });
 

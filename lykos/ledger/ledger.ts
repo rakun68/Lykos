@@ -746,6 +746,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateContextPacks(db);
   migrateBaselines(db);
   migrateDecisions(db);
+  migrateClaims(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -987,6 +988,33 @@ function migrateDecisions(db: Database.Database): void {
       reason      TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_finding_decisions_session ON finding_decisions(session_id);
+  `);
+}
+
+/**
+ * T234: the claims a delegated session recorded with `claim`, and what the harness found when it ran each one's check
+ * (ADR-0059, ADR-0061). A claim is written the moment the tool is called; the verdict columns stay NULL until the
+ * harness has run the check, and are rewritten by the next run (the final head moves when a session continues).
+ */
+function migrateClaims(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS claims (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT NOT NULL,
+      ts           TEXT NOT NULL,
+      text         TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      check_json   TEXT NOT NULL,
+      verdict      TEXT,
+      reason       TEXT,
+      uncontained  INTEGER NOT NULL DEFAULT 0,
+      base_verdict TEXT,
+      base_reason  TEXT,
+      head_commit  TEXT,
+      base_commit  TEXT,
+      checked_at   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_claims_session ON claims(session_id);
   `);
 }
 

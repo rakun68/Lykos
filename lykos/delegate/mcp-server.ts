@@ -29,6 +29,8 @@ import {
 } from "../config/specialists.js";
 import { baselineSummary } from "./baseline.js";
 import { contextPackSummary } from "./context-pack.js";
+import { judgedClaimsOf } from "./claims.js";
+import { judgeSessionClaims } from "./session-claims.js";
 import { CAUSES, DECISIONS, decideAt, decisionsOf, findingDecisionsOf } from "./decisions.js";
 import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
@@ -576,6 +578,7 @@ async function buildSessionOutcomeResult(
   passedTargetSessionId?: string,
   stoppedReason?: string,
   unansweredQuestions?: string[],
+  trustSource?: TrustSource,
 ): Promise<Record<string, unknown>> {
   const targetSessionId = outcome?.sessionId ?? passedTargetSessionId;
 
@@ -910,6 +913,22 @@ async function buildSessionOutcomeResult(
     }
 
     const isRefused = finalOutcome === "error" && !hasEndedSession;
+    // T234: the harness runs the checks of the claims the session made with `claim`, at the final head.
+    const judged =
+      !isRefused && targetSessionId !== undefined
+        ? await judgeSessionClaims({
+            workspace,
+            ledgerPath,
+            sessionId: targetSessionId,
+            head: targetBranch,
+            ...(diffBase !== undefined ? { base: diffBase } : {}),
+            wroteInPlace: sessionWroteInPlace,
+            trust: trustSource,
+            containment: outcome?.containment ?? (outcome?.runtime !== undefined ? "auto" : (request.containment ?? config.containment.level ?? "off")),
+            testCommand: config.seal.test_command,
+            shellPath: config.delegation.shell_path,
+          })
+        : undefined;
     const flags: SessionFlag[] = [];
     if (!isRefused) {
       if (!isEffectiveReadOnly) {
@@ -939,7 +958,7 @@ async function buildSessionOutcomeResult(
         /(?<!\b(?:not|isn't|is not|never) )\bgreen\b/i,
         /\bverification (passed|passes|succeeded)\b/i,
       ];
-      const misreportReasons: string[] = [];
+      const misreportReasons: string[] = [...(judged?.misreports ?? [])];
       if (answer) {
         if (verification?.outcome === "failed") {
           if (GREEN_OVER_RED_PATTERNS.some((p) => p.test(answer!))) {
@@ -1020,6 +1039,7 @@ async function buildSessionOutcomeResult(
       ...(targetSessionId !== undefined ? { sessionId: targetSessionId } : {}),
       next: nextToken,
       ...(flags.length > 0 ? { flags } : {}),
+      ...(judged !== undefined ? { claims: judged.claims } : {}),
       ...(verification !== undefined ? { verification } : {}),
       ...(diffStat !== undefined ? { diff_stat: diffStat } : {}),
       ...(outcome && "containment" in outcome && outcome.containment ? { containment: outcome.containment } : {}),
@@ -1348,6 +1368,7 @@ async function startTrackedSession(
         targetSessionId,
         sessionEntry.stoppedReason,
         sessionEntry.unansweredQuestions,
+        trust.source,
       );
     } catch (err) {
       builtResult = {
@@ -1501,12 +1522,14 @@ export function ledgerViews(workspace: string, ids?: readonly string[]): Session
       const baseline = baselineSummary(ledger, row.session_id);
       const decisions = decisionsOf(ledger, row.session_id);
       const findings = findingDecisionsOf(ledger, row.session_id);
+      const claims = judgedClaimsOf(ledger, row.session_id);
       return {
         ...view,
         ...(pack !== undefined ? { context_pack: pack } : {}),
         ...(baseline !== undefined ? { baseline } : {}),
         ...(decisions.length > 0 ? { decisions } : {}),
         ...(findings.length > 0 ? { finding_decisions: findings } : {}),
+        ...(claims.length > 0 ? { claims } : {}),
       };
     }),
   );
