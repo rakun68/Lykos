@@ -748,6 +748,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateDecisions(db);
   migrateClaims(db);
   migrateSpecChecks(db);
+  migrateFindings(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -1016,6 +1017,43 @@ function migrateClaims(db: Database.Database): void {
       checked_at   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_claims_session ON claims(session_id);
+  `);
+}
+
+/**
+ * T235: the base commit each delegated session started from, written when it is admitted (R16: a review diffs against
+ * this, never against whatever the host's HEAD has become), and the findings a reviewer recorded with `finding`
+ * (ADR-0061). A finding is a claim: `check_json` is a claim check (NULL when the reviewer had none to give), and the
+ * columns after it are what the harness found and decided, NULL until it has.
+ */
+function migrateFindings(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_bases (
+      session_id   TEXT PRIMARY KEY,
+      base_commit  TEXT NOT NULL,
+      recorded_at  TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS findings (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id    TEXT NOT NULL,
+      ts            TEXT NOT NULL,
+      text          TEXT NOT NULL,
+      severity      TEXT NOT NULL,
+      basis         TEXT NOT NULL,
+      kind          TEXT,
+      check_json    TEXT,
+      verdict       TEXT,
+      reason        TEXT,
+      uncontained   INTEGER NOT NULL DEFAULT 0,
+      base_verdict  TEXT,
+      base_reason   TEXT,
+      head_commit   TEXT,
+      base_commit   TEXT,
+      disposition   TEXT,
+      why           TEXT,
+      checked_at    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_findings_session ON findings(session_id);
   `);
 }
 

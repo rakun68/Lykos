@@ -96,6 +96,11 @@ export interface SessionRequest {
    * cycle names the implementer it reviews.
    */
   rulingsFrom?: string[];
+  /**
+   * T235: the session reviews a change and records its defects with the `finding` tool, which no other session has.
+   * Set by `lykos review` and nothing else.
+   */
+  review?: true;
   /** T243: what `lykos run` carries that an MCP call does not. */
   cli?: {
     tools?: string[];
@@ -435,6 +440,7 @@ export function parseRequest(line: string): SessionRequest | undefined {
   if (v.sealed !== undefined && !(Array.isArray(v.sealed) && v.sealed.every((p) => typeof p === "string" && p !== ""))) return undefined;
   if (v.red !== undefined && typeof v.red !== "boolean") return undefined;
   if (v.rulingsFrom !== undefined && !(Array.isArray(v.rulingsFrom) && v.rulingsFrom.every((s) => typeof s === "string" && s !== ""))) return undefined;
+  if (v.review !== undefined && v.review !== true) return undefined;
   if (v.reseal !== undefined && (typeof v.reseal !== "string" || v.reseal === "")) return undefined;
   if (v.context !== undefined) {
     const c = v.context as Partial<NonNullable<SessionRequest["context"]>> | null;

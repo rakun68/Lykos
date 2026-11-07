@@ -878,6 +878,14 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "review",
+    help: ["  review    `lykos review <id|branch> [--task file] [-m note|-] [--base ref]`: one reviewer; its findings come back as claims the harness checked, with `next` (JSON)"],
+    run: async (rest, { cwd }) => {
+      const { runReview } = await import("./delegation.js");
+      return runReview(cwd, rest);
+    },
+  },
+  {
     name: "steer",
     help: ["  steer     `lykos steer <id> -m <message|->`: message a live delegated session from any process; it answers its open question (JSON)"],
     run: async (rest, { cwd }) => {

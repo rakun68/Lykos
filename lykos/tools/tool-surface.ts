@@ -572,6 +572,13 @@ export const TOOL_REGISTRY: readonly ToolRegistryEntry[] = [
     risk: { tier: "read", idempotent: false, openWorld: false },
   },
   {
+    name: "finding",
+    residency: "resident",
+    promptPresence: "full",
+    rationale: "Record a defect a reviewer found, with a severity, a basis and a check the harness runs (T235, ADR-0061).",
+    risk: { tier: "read", idempotent: false, openWorld: false },
+  },
+  {
     name: "spec_checked",
     residency: "resident",
     promptPresence: "full",

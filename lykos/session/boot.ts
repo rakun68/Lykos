@@ -70,6 +70,7 @@ import type { InteractionMode } from "../gate/modes.js";
 import {
   type Coordinator,
   CLAIM_TOOL_NAME,
+  FINDING_TOOL_NAME,
   SPEC_CHECKED_TOOL_NAME,
   COORDINATOR_ASK_TOOL_NAME,
   COORDINATOR_GIVE_UP_TOOL_NAME,
@@ -1231,7 +1232,7 @@ ${note}
       }
     }
     if (opts.coordinator !== undefined) {
-      for (const name of [COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME, SPEC_CHECKED_TOOL_NAME]) {
+      for (const name of [COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME, FINDING_TOOL_NAME, SPEC_CHECKED_TOOL_NAME]) {
         if (defined.has(name) && !names.includes(name)) {
           names.push(name);
         }

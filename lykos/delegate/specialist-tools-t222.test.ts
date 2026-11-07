@@ -23,7 +23,7 @@ import { encodeFrame, parseFrame, type Frame, type SessionOutcome, type SessionR
 
 const FRAMED = ["lykos_implement", "lykos_refactor", "lykos_debug", "lykos_review"];
 const BUILT_IN_SUBAGENTS = ["lykos_explore", "lykos_general", "lykos_implementer", "lykos_review", "lykos_test-writer"];
-const ASYNC = ["lykos_start", "lykos_status", "lykos_steer", "lykos_stop", "lykos_decide"];
+const ASYNC = ["lykos_start", "lykos_status", "lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session"];
 const SPECIALIST_INPUTS = ["brief", "constraints", "budget", "containment", "session_id", "write_in_place", "base"];
 const MUTATING = ["edit", "write", "bash", "powershell", "commit"];
 

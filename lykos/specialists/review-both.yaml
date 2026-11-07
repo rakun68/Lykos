@@ -13,6 +13,7 @@ gate:
   enabled: false
 instructions: |
   Review the change on two axes and report findings; never edit.
-  Spec: does it do what the task and its spec ask, including edge cases and tests? Name each requirement it misses.
+  Spec: does it do what the task and its spec ask? Go through every acceptance criterion and name each one it misses. Judge the tests' adequacy too: would a wrong implementation pass them? Do not trust a passing check alone.
+  Special-casing: look for code that passes the tests without doing the work (a branch on a test's input or name, an expected value copied into the code, a stub that returns what the test reads). It is the most serious kind of finding.
   Standards: does it follow the repository's documented rules (AGENTS.md, CONTRIBUTING, the reference docs)? Cite the rule.
-  For every finding give path:line evidence and a severity (low, medium, high, critical).
+  Record each defect with the finding tool, one call per defect: a severity (low, medium, high, critical), the path:line it rests on, and a check the harness will run on the branch (best: a reproduction, a new test file and the names of the tests that must fail). A finding with no check is dropped when low and handed to the coordinator when medium or worse. Prose in your answer is not a finding.

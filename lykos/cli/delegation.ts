@@ -4,6 +4,7 @@
 // or an MCP server). Every command prints JSON with `next`; no arguments prints its usage; an unknown flag is an
 // error (R19).
 
+import { resolve } from "node:path";
 import { stderrWrite } from "../tui/io-mode.js";
 import { ledgerViews, runDelegated, steerElsewhere, stopElsewhere, waitForQuestions, waitForSessions } from "../delegate/mcp-server.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from "../gate/trust.js";
@@ -72,6 +73,8 @@ export const CONTINUE_USAGE =
   "usage: lykos continue <session-id> -m <message|-> [--max-steps n] [--request-id id] [--reseal <commit>] [--trust-workspace]    resume an ended session on its branch with a new message; --reseal seals its branch again at the commit that corrects a sealed test";
 export const RECOVER_USAGE =
   "usage: lykos recover <session-id> [-m <message|->] [--trust-workspace]    continue a crashed session (its owner is dead) after confirming everything it started is stopped; never kills anything";
+export const REVIEW_USAGE =
+  "usage: lykos review <session-id|branch> [--task <file>] [-m <note|->] [--base <ref>] [--max-steps n] [--request-id id] [--trust-workspace]    one reviewer reads the change against the base the session started from; each finding comes back as a claim the harness has checked";
 export const STOP_USAGE = "usage: lykos stop <session-id>    ask the session's owner to stop it, and wait up to 10 s for it to end";
 
 function usage(line: string): number {
@@ -176,6 +179,23 @@ export async function runSteer(cwd: string, args: readonly string[]): Promise<nu
   return 0;
 }
 
+/** What every command that starts a session needs first: the project's trust, decided without a prompt, and the one bash. */
+async function trustAndShell(cwd: string, command: string, trustWorkspace: boolean): Promise<TrustDecision | undefined> {
+  let trust: TrustDecision;
+  try {
+    trust = await ensureWorkspaceTrust({ workspace: cwd, interactive: false, ...(trustWorkspace ? { trustWorkspace: true } : {}) });
+  } catch (err) {
+    stderrWrite(`lykos ${command}: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
+    return undefined;
+  }
+  const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
+  if (!bash.ok) {
+    stderrWrite(`lykos ${command}: refused — ${noBashMessage(bash)}\n`);
+    return undefined;
+  }
+  return trust;
+}
+
 export async function runContinue(cwd: string, args: readonly string[]): Promise<number> {
   if (args.length === 0) return usage(CONTINUE_USAGE);
   const parsed = parseFlags(args, "continue", ["message", "max-steps", "request-id", "reseal"], ["trust-workspace"]);
@@ -195,18 +215,8 @@ export async function runContinue(cwd: string, args: readonly string[]): Promise
     stderrWrite(`lykos continue: --max-steps must be a positive integer, got "${String(stepsRaw)}"\n`);
     return 1;
   }
-  let trust: TrustDecision;
-  try {
-    trust = await ensureWorkspaceTrust({ workspace: cwd, interactive: false, ...(parsed.flags.has("trust-workspace") ? { trustWorkspace: true } : {}) });
-  } catch (err) {
-    stderrWrite(`lykos continue: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
-    return 1;
-  }
-  const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
-  if (!bash.ok) {
-    stderrWrite(`lykos continue: refused — ${noBashMessage(bash)}\n`);
-    return 1;
-  }
+  const trust = await trustAndShell(cwd, "continue", parsed.flags.has("trust-workspace"));
+  if (trust === undefined) return 1;
   const requestId = parsed.flags.get("request-id");
   const reseal = parsed.flags.get("reseal");
   const result = await runDelegated(
@@ -241,18 +251,8 @@ export async function runRecover(cwd: string, args: readonly string[]): Promise<
     }
     message = read;
   }
-  let trust: TrustDecision;
-  try {
-    trust = await ensureWorkspaceTrust({ workspace: cwd, interactive: false, ...(parsed.flags.has("trust-workspace") ? { trustWorkspace: true } : {}) });
-  } catch (err) {
-    stderrWrite(`lykos recover: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
-    return 1;
-  }
-  const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
-  if (!bash.ok) {
-    stderrWrite(`lykos recover: refused — ${noBashMessage(bash)}\n`);
-    return 1;
-  }
+  const trust = await trustAndShell(cwd, "recover", parsed.flags.has("trust-workspace"));
+  if (trust === undefined) return 1;
   const { recoverSession } = await import("../delegate/recover.js");
   const result = await recoverSession(cwd, parsed.ids[0]!, {
     trustSource: trust.source,
@@ -317,4 +317,47 @@ export async function runDecision(cwd: string, kind: DecisionKind, args: readonl
   }
   print(decided.body);
   return decided.kind === "recorded" ? 0 : 1;
+}
+
+export async function runReview(cwd: string, args: readonly string[]): Promise<number> {
+  if (args.length === 0) return usage(REVIEW_USAGE);
+  const parsed = parseFlags(args, "review", ["task", "message", "base", "max-steps", "request-id"], ["trust-workspace"]);
+  if ("error" in parsed) {
+    stderrWrite(`${parsed.error}\n`);
+    return 1;
+  }
+  if (parsed.ids.length !== 1) return usage(REVIEW_USAGE);
+  let note: string | undefined;
+  if (parsed.flags.has("message")) {
+    const read = await messageOf(parsed, "review");
+    if (typeof read !== "string") {
+      stderrWrite(`${read.error}\n`);
+      return 1;
+    }
+    note = read;
+  }
+  const stepsRaw = parsed.flags.get("max-steps");
+  const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
+  if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
+    stderrWrite(`lykos review: --max-steps must be a positive integer, got "${String(stepsRaw)}"\n`);
+    return 1;
+  }
+  const trust = await trustAndShell(cwd, "review", parsed.flags.has("trust-workspace"));
+  if (trust === undefined) return 1;
+  const task = parsed.flags.get("task");
+  const base = parsed.flags.get("base");
+  const requestId = parsed.flags.get("request-id");
+  const { runReview: review } = await import("../delegate/review.js");
+  const result = await review(cwd, parsed.ids[0]!, {
+    trustSource: trust.source,
+    ...(typeof task === "string" ? { taskFile: resolve(cwd, task) } : {}),
+    ...(note !== undefined ? { note } : {}),
+    ...(typeof base === "string" ? { base } : {}),
+    ...(maxSteps !== undefined ? { maxSteps } : {}),
+    ...(typeof requestId === "string" ? { requestId } : {}),
+    onProgress: (line) => stderrWrite(`lykos review: ${line}
+`),
+  });
+  print(result);
+  return delegatedExitCode(result);
 }

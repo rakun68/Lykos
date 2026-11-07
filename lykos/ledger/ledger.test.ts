@@ -44,6 +44,8 @@ describe("Ledger", () => {
         "extension_counters",
         // finding_decisions joined on T233: each finding the review cycle forwarded, dropped or retired.
         "finding_decisions",
+        // findings joined on T235: what a reviewer recorded with `finding`, and what the harness decided about each.
+        "findings",
         // flaky_tests joined on T167: a test that failed in the gate and passed on rerun.
         "flaky_tests",
         // inbox joined on T244: steers for a delegated session, from any process, delivered by its owner.
@@ -66,6 +68,8 @@ describe("Ledger", () => {
         "seal_events",
         // session_baselines joined on T249: the baseline each delegated session was given, and whether it was reused.
         "session_baselines",
+        // session_bases joined on T235: the commit each delegated session started from, for a review to diff against.
+        "session_bases",
         "sessions",
         // spec_checks joined on T259: the spec check a writable delegated session records before its first edit.
         "spec_checks",

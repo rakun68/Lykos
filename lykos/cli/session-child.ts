@@ -14,6 +14,7 @@ import { runResume } from "./resume.js";
 import { sessionInput } from "./run.js";
 import { defaultLedgerPath, openLedger, withLedger, withLedgerSync } from "../ledger/use.js";
 import { recordClaim } from "../delegate/claims.js";
+import { recordFinding } from "../delegate/findings.js";
 import { ledgerSpecCheck, renderRulings, rulingsOf } from "../delegate/spec-check.js";
 import { loadConfig } from "../config/load.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
@@ -245,6 +246,12 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
       if (ledgerPath === undefined || sessionId === undefined) throw new Error("claim: the session has no id yet");
       return withLedgerSync(ledgerPath, (ledger) => recordClaim(ledger, sessionId, text, check));
     },
+    // T235: only a review records findings; they are filed under the reviewer's own id.
+    finding: (finding): number => {
+      const { ledgerPath, sessionId } = claimTarget;
+      if (ledgerPath === undefined || sessionId === undefined) throw new Error("finding: the session has no id yet");
+      return withLedgerSync(ledgerPath, (ledger) => recordFinding(ledger, sessionId, finding));
+    },
     ask: (question: string, signal?: AbortSignal): Promise<string> => {
       return new Promise<string>((resolve) => {
         let settled = false;
@@ -275,6 +282,8 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
     send({ type: "result", result: { outcome: "error", message: "session-child: expected one JSON request line on stdin (protocol version 1)" } });
     return 2;
   }
+  // T235: the `finding` tool belongs to a review and nothing else.
+  if (request.review !== true) delete coordinator.finding;
 
   const startedAt = Date.now();
   send({ type: "progress", message: "session starting" });

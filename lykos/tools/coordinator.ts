@@ -5,18 +5,23 @@
 // `give_up` ends the session without another model turn, returning needs_answer outcome.
 // `claim` (T234, ADR-0059) records something the session says is true of its work, with a check the harness runs
 // after the session ends; the harness, not the session, decides the verdict.
+// `finding` (T235, ADR-0061) is a reviewer's claim that something is wrong with the change it reviews: a severity, a
+// basis and, when it has one, a check the harness runs. A reviewer has no `claim` tool of the harness-run kind for the
+// change; its defects are findings.
 // `spec_checked` (T259, ADR-0061) is a writable session's first step: it records the points it could not decide alone,
 // asks each of the coordinator, and keeps the answers as rulings. Until it has, the harness refuses every edit.
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CLAIM_CHECK_KINDS, CLAIM_CHECK_SHAPES, parseClaimCheck, type ClaimCheck } from "../delegate/claims.js";
+import { SEVERITIES, parseFinding, type FindingInput } from "../delegate/findings.js";
 import { ASK_TIMEOUT_NOTICE } from "../delegate/session-protocol.js";
 import { MAX_SPEC_POINT_CHARS, MAX_SPEC_POINTS, SPEC_CHECKED_TOOL_NAME, type SpecCheckGate, type SpecPoint } from "../delegate/spec-check.js";
 
 export const COORDINATOR_ASK_TOOL_NAME = "ask_coordinator";
 export const COORDINATOR_GIVE_UP_TOOL_NAME = "give_up";
 export const CLAIM_TOOL_NAME = "claim";
+export const FINDING_TOOL_NAME = "finding";
 export { SPEC_CHECKED_TOOL_NAME };
 
 export interface Coordinator {
@@ -24,6 +29,8 @@ export interface Coordinator {
   giveUp(question: string): void;
   /** T234: records a claim whose check is valid and returns its id. Absent: the session has no `claim` tool. */
   claim?(text: string, check: ClaimCheck): number;
+  /** T235: records a finding a reviewer made and returns its id. Absent: the session is not a review and has no `finding` tool. */
+  finding?(finding: FindingInput): number;
   /**
    * T259: the spec check of a writable session. Absent: the session has no `spec_checked` tool and nothing is refused
    * for want of one (a read-only session, or `delegation.spec_check: false`).
@@ -190,6 +197,66 @@ export function buildSpecCheckedTool(coordinator: Coordinator): ToolDefinition {
       return {
         content: [{ type: "text" as const, text }],
         details: { points: recorded } as unknown as Record<string, unknown>,
+      };
+    },
+  });
+}
+
+export function buildFindingTool(coordinator: Coordinator): ToolDefinition {
+  return defineTool({
+    name: FINDING_TOOL_NAME,
+    label: "Finding",
+    description:
+      "Record one defect you found in the change under review. Give a severity (low, medium, high, critical) and a basis (the path:line it rests on, or the requirement it breaks). " +
+      "Give a check whenever you can: the harness runs it itself, in a temporary worktree of the branch, and the finding blocks only if the check HOLDS there, so write it to pass when the defect is present. " +
+      "Best: a reproduction, a new test file and the names of the tests that must fail. A command and the exit code the defect gives is the next best. " +
+      "A finding with no check is dropped when low and goes to the coordinator when medium or worse. Never write a finding for something you did not read.",
+    promptSnippet: "Record a finding (severity, basis, check) against the change you review",
+    executionMode: "sequential",
+    parameters: Type.Object({
+      text: Type.String({ description: "What is wrong, in a sentence or two, and what would show it." }),
+      severity: Type.Union(
+        SEVERITIES.map((s) => Type.Literal(s)),
+        { description: "low, medium, high or critical." },
+      ),
+      basis: Type.String({ description: "The path:line it rests on, or the acceptance criterion it breaks." }),
+      check: Type.Optional(
+        Type.Object(
+          {
+            kind: Type.Union(
+              CLAIM_CHECK_KINDS.map((k) => Type.Literal(k)),
+              { description: "reproduction, command, line or search." },
+            ),
+            path: Type.Optional(Type.String({ description: "line: the file, relative to the repository root." })),
+            line: Type.Optional(Type.Integer({ description: "line: the 1-based line number." })),
+            text: Type.Optional(Type.String({ description: "line: text the line contains." })),
+            pattern: Type.Optional(Type.String({ description: "search: a regular expression, matched per line." })),
+            matches: Type.Optional(Type.Integer({ description: "search: how many lines match." })),
+            paths: Type.Optional(Type.Array(Type.String(), { description: "search: restrict to these files or folders." })),
+            command: Type.Optional(Type.String({ description: "command: the command to run." })),
+            exit: Type.Optional(Type.Integer({ description: "command: the exit code the defect makes it give." })),
+            file: Type.Optional(Type.String({ description: "reproduction: a new test file, relative to the repository root." })),
+            content: Type.Optional(Type.String({ description: "reproduction: the test file's text." })),
+            fails: Type.Optional(Type.Array(Type.String(), { description: "reproduction: names of the tests that must fail on the branch." })),
+          },
+          { description: "The check, by kind. It must hold on the branch when the defect is present." },
+        ),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const refuse = (message: string) => ({
+        content: [{ type: "text" as const, text: `lykos finding: ${message}\nNothing was recorded. A check is one of:\n${CLAIM_CHECK_SHAPES}` }],
+        isError: true,
+        details: { error: "invalid_finding" } as Record<string, unknown>,
+      });
+      if (coordinator.finding === undefined) return refuse("this session is not a review and cannot record findings.");
+      const parsed = parseFinding(params);
+      if (!parsed.ok) return refuse(parsed.message);
+      const id = coordinator.finding(parsed.finding);
+      const checked = parsed.finding.check !== undefined ? `The harness runs its ${parsed.finding.check.kind} check when you finish.` : "It has no check, so it will be dropped if low and sent to the coordinator if not.";
+      return {
+        content: [{ type: "text" as const, text: `Recorded finding ${id} (${parsed.finding.severity}). ${checked}` }],
+        details: { id, severity: parsed.finding.severity } as Record<string, unknown>,
       };
     },
   });

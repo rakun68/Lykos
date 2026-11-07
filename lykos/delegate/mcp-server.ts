@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -31,6 +31,7 @@ import { baselineSummary } from "./baseline.js";
 import { contextPackSummary } from "./context-pack.js";
 import { judgedClaimsOf } from "./claims.js";
 import { judgeSessionClaims } from "./session-claims.js";
+import { commitOf, recordSessionBase, sessionBaseOf } from "./session-base.js";
 import { specCheckOf } from "./spec-check.js";
 import { CAUSES, DECISIONS, decideAt, decisionsOf, findingDecisionsOf } from "./decisions.js";
 import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
@@ -219,6 +220,15 @@ const DecideInputShape = {
   actor: z.string().optional().describe("Who decided. Default: coordinator."),
 };
 
+const ReviewInputShape = {
+  target: z.string().min(1).describe("The session id whose branch to review, or a branch or commit of this project."),
+  task: z.string().min(1).optional().describe("A task file (path, relative to the project) whose body is what the change is judged against, and whose files and scope the review uses. Default: the brief the session was given."),
+  note: z.string().optional().describe("A note to the reviewer: what to pay attention to."),
+  base: z.string().min(1).optional().describe("The commit the work started from. Default: the base stored with the session; for a branch no session made, its merge base with HEAD."),
+  max_steps: z.number().int().positive().optional().describe("Stop the reviewer after this many model turns. Default: no cap."),
+  request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the reviewer it started instead of starting another."),
+};
+
 const SpecialistInputShape = {
   brief: z.string().min(1).describe("The task to delegate: a specific, self-contained brief."),
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
@@ -299,6 +309,8 @@ type TaskInput = {
   test?: string | undefined;
   /** T259: sessions whose spec-check rulings bind this one; a new session is handed them after its brief. */
   rulings_from?: string[] | undefined;
+  /** T235, `lykos review` only: the session records findings. */
+  review?: true | undefined;
   /** T243, `lykos run` only: the interaction mode, and the session fields the CLI carries. */
   mode?: InteractionMode | undefined;
   cli?: SessionRequest["cli"] | undefined;
@@ -364,6 +376,9 @@ const STOP_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: fals
 
 /** A decision is a row appended to the ledger: it changes no session's work, and a second call records a second decision. */
 const DECIDE_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+
+/** A review starts a read-only session and has the harness run its findings' checks, which run project code in temporary worktrees. */
+const REVIEW_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
 
 function taskHints(readOnly: boolean | undefined): ToolAnnotations {
   return readOnly === true ? READER_HINTS : WRITER_HINTS;
@@ -1246,7 +1261,19 @@ async function startTrackedSession(
   try {
     headAtStart = resolveRef("HEAD", workspace) ?? undefined;
   } catch {}
-  const diffBase = args.base ?? headAtStart;
+  let diffBase = args.base ?? headAtStart;
+  // T235 (R16): the commit a session started from is stored with it, and every later diff of its work is against that,
+  // never against whatever the host's HEAD has become. A continuation reads the stored one.
+  try {
+    diffBase = withLedgerSync(ledgerPath, (ledger) => {
+      if (args.session_id !== undefined) return sessionBaseOf(ledger, args.session_id) ?? diffBase;
+      const sha = diffBase !== undefined ? commitOf(workspace, diffBase) : undefined;
+      if (sha !== undefined) recordSessionBase(ledger, targetSessionId, sha);
+      return diffBase;
+    });
+  } catch {
+    // The base is a convenience for the diff; a ledger that cannot take it fails the session elsewhere.
+  }
 
   const prompt = def.framing
     ? buildPrompt(def.framing, args.brief, args.constraints)
@@ -1282,6 +1309,7 @@ async function startTrackedSession(
       : {}),
     ...(args.reseal !== undefined && args.session_id !== undefined ? { reseal: args.reseal } : {}),
     ...(args.rulings_from !== undefined && args.rulings_from.length > 0 && args.session_id === undefined ? { rulingsFrom: args.rulings_from } : {}),
+    ...(args.review === true && owner.kind === "run" ? { review: true as const } : {}),
     ...(args.cli !== undefined ? { cli: args.cli } : {}),
   };
 
@@ -2045,6 +2073,37 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
     async (args) => {
       const decided = await decideAt(defaultLedgerPath(opts.workspace), args.decision, args.session_id, args, "reason");
       return toResult(decided.kind === "invalid" ? { outcome: "error", message: decided.message } : decided.body);
+    },
+  );
+
+  server.registerTool(
+    "lykos_review_session",
+    {
+      description:
+        "Review a session's change (or a branch) with one reviewer of another model family and block until done. Each finding it makes is a claim with a check the harness runs on the branch; the result lists every finding as blocks, triage or dropped, with `next`. Same as lykos review.",
+      inputSchema: ReviewInputShape,
+      annotations: REVIEW_HINTS,
+    },
+    async (args, extra) => {
+      let trust: { source: TrustSource };
+      try {
+        trust = await ensureWorkspaceTrust({ workspace: opts.workspace, interactive: false, ...(deps.trustPath !== undefined ? { trustPath: deps.trustPath } : {}) });
+      } catch (err) {
+        return toResult({ outcome: "blocked", reason: String(err), next: "fix_environment" });
+      }
+      const { runReview } = await import("./review.js");
+      return toResult(
+        await runReview(opts.workspace, args.target, {
+          trustSource: trust.source,
+          ...(args.task !== undefined ? { taskFile: resolve(opts.workspace, args.task) } : {}),
+          ...(args.note !== undefined ? { note: args.note } : {}),
+          ...(args.base !== undefined ? { base: args.base } : {}),
+          ...(args.max_steps !== undefined ? { maxSteps: args.max_steps } : {}),
+          ...(args.request_id !== undefined ? { requestId: args.request_id } : {}),
+          signal: (extra as unknown as Extra).signal,
+          ...(deps.run !== undefined ? { run: deps.run } : {}),
+        }),
+      );
     },
   );
 

@@ -102,8 +102,8 @@ export function findingDecisionsOf(ledger: Ledger, sessionId: string): FindingDe
 }
 
 /**
- * The cycle's decision on one finding: forwarded to the fixer, dropped, or retired. Nothing calls this yet: the review
- * cycle (T235, T236) does not exist, so `finding_decisions` stays empty until it does.
+ * The review's decision on one finding: forwarded (it blocks), dropped, or retired. `lykos review` (T235, `review.ts`)
+ * records `forwarded` and `dropped`; `retired` and the cycle id are the review cycle's (T236).
  */
 export function recordFindingDecision(
   ledger: Ledger,

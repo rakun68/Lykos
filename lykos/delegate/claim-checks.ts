@@ -456,7 +456,7 @@ function titleOf(t: SealedTestResult): string {
 }
 
 /** A name matches a test when it is the whole path, or the path's tail from a ` > ` boundary. */
-function nameMatches(name: string, full: string): boolean {
+export function nameMatches(name: string, full: string): boolean {
   const n = name.replace(/\\/g, "/").trim();
   const f = full.replace(/\\/g, "/");
   return f === n || f.endsWith(` > ${n}`);

@@ -1017,6 +1017,37 @@ export const TOOL_CATALOG: Record<string, CatalogTool> = {
       ["text", "check"],
     ),
   },
+  finding: {
+    name: "finding",
+    source: "lykos",
+    description:
+      "Record one defect you found in the change under review. Give a severity (low, medium, high, critical) and a basis (the path:line it rests on, or the requirement it breaks). Give a check whenever you can: the harness runs it itself, in a temporary worktree of the branch, and the finding blocks only if the check HOLDS there, so write it to pass when the defect is present. Best: a reproduction, a new test file and the names of the tests that must fail. A command and the exit code the defect gives is the next best. A finding with no check is dropped when low and goes to the coordinator when medium or worse. Never write a finding for something you did not read.",
+    parameters: objectSchema(
+      {
+        text: str("What is wrong, in a sentence or two, and what would show it."),
+        severity: str("low, medium, high or critical.", { enum: ["low", "medium", "high", "critical"] }),
+        basis: str("The path:line it rests on, or the acceptance criterion it breaks."),
+        check: objectSchema(
+          {
+            kind: str("reproduction, command, line or search.", { enum: ["line", "search", "command", "reproduction"] }),
+            path: str("line: the file, relative to the repository root."),
+            line: num("line: the 1-based line number."),
+            text: str("line: text the line contains."),
+            pattern: str("search: a regular expression, matched per line."),
+            matches: num("search: how many lines match."),
+            paths: strArray("search: restrict to these files or folders."),
+            command: str("command: the command to run."),
+            exit: num("command: the exit code the defect makes it give."),
+            file: str("reproduction: a new test file, relative to the repository root."),
+            content: str("reproduction: the test file's text."),
+            fails: strArray("reproduction: names of the tests that must fail on the branch."),
+          },
+          ["kind"],
+        ),
+      },
+      ["text", "severity", "basis"],
+    ),
+  },
   spec_checked: {
     name: "spec_checked",
     source: "lykos",

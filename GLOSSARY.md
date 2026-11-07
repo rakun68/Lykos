@@ -296,13 +296,44 @@ reason, an actor and, optionally, a cause from Boxie's fixed list. Recorded in t
 session's decisions are its history. `discard` is the only one a crashed session takes.
 _Avoid_: status (that is the session's own state), verdict (that is a claim's, below)
 
+**Finding**:
+A reviewer's claim that something is wrong with the change it reviews, recorded with the `finding` tool: a severity (low,
+medium, high or critical), a basis (the `path:line` it rests on or the criterion it breaks) and, when the reviewer has one,
+a check. The check is a claim check written to hold on the branch while the defect is there. The harness runs it, never the
+reviewer, and the finding then blocks, goes to triage or is dropped. Prose in a review's answer is not a finding.
+_Avoid_: issue, comment, remark
+
+**Block** (of a finding):
+A finding whose check held on the branch and does not hold on the base or in the baseline: the defect is this change's. A
+low finding blocks only with a reproduction; a command check counts as one.
+_Avoid_: reject, fail
+
+**Triage**:
+What a finding with no reproduction, or whose check could not run, goes to when it is medium or worse: the review ends with
+`next triage` and the coordinator decides. A low finding in the same case is dropped. A finding is never dropped without a
+record.
+_Avoid_: backlog
+
 **Finding decision**:
-What the review cycle did with one finding: forwarded to the fixer, dropped, or retired.
+What the review did with one finding: forwarded (it blocks), dropped, or retired. A finding left to triage has none until
+the coordinator decides.
+
+**Review**:
+`lykos review`: one reviewer (the `review-both` role, swapped for its alternate when it is the implementer's model family)
+reads a session's change, judges the acceptance criteria and the tests, and records its findings. The harness checks them
+and the review ends with `next` `approve`, `resume`, `triage` or `inspect_flags`. A reviewer that cannot run stops the
+review with its own error; an empty list of findings never stands for a reviewer that did not review.
+_Avoid_: audit, second opinion
+
+**Stored base**:
+The commit a delegated session started from, written when the session is admitted and never changed. Every diff of the
+session's work, a review's included, is against it, however far the project's HEAD has moved since.
+_Avoid_: merge base (what a branch no session made falls back to, and the result says so), HEAD
 
 **Claim**:
 Something a delegated session says is true of its work, recorded with the `claim` tool together with a check the harness
 runs. Only the tool makes a claim: text in the session's answer, however it is formatted, is not one.
-_Avoid_: finding (a reviewer's claim that something is broken, checked the same way), assertion
+_Avoid_: assertion (a reviewer's claim that the change is broken is a finding, above)
 
 **Claim check**:
 What the harness runs to decide a claim: a line (a path, a line number and the text it holds), a search (a pattern and how
