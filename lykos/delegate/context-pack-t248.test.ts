@@ -16,7 +16,13 @@ import { runSessionChild } from "../cli/session-child.js";
 import { encodeFrame, PROTOCOL_VERSION, type SessionRequest } from "./session-protocol.js";
 import { admit } from "./ownership.js";
 import { ledgerViews } from "./mcp-server.js";
-import { buildContextPack, contextPackText, recordContextPack } from "./context-pack.js";
+import { buildContextPack, recordContextPack } from "./context-pack.js";
+import type { Ledger } from "../ledger/use.js";
+
+/** The pack text a session was given, as the ledger holds it. */
+function contextPackText(ledger: Ledger, sessionId: string): string | undefined {
+  return (ledger.db.prepare("SELECT text FROM context_packs WHERE session_id = ?").get(sessionId) as { text: string } | undefined)?.text;
+}
 
 const GIT_ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
 const saved: Record<string, string | undefined> = {};
@@ -190,5 +196,53 @@ describe("T248: a new session is given the pack, recorded before the model runs"
     const { repo } = project();
     const bare = await drive(repo, {});
     assert.equal(bare.seen[0]!.prompt, "Change the widget");
+  });
+});
+
+describe("T248 review: a project that does not use this repository's rule headings still gets its rules", () => {
+  function bare(files: Record<string, string>): { repo: string; base: string } {
+    const repo = mkdtempSync(join(tmpdir(), "lykos t248 rules "));
+    git(repo, "init", "-q", "-b", "main");
+    put(repo, "src/a.ts", "export const a = 1;\n");
+    for (const [rel, text] of Object.entries(files)) put(repo, rel, text);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "base");
+    return { repo, base: git(repo, "rev-parse", "HEAD") };
+  }
+
+  it("takes an AGENTS.md whose headings are its own whole, and a CLAUDE.md beside or instead of it", () => {
+    const { repo, base } = bare({
+      "AGENTS.md": "# Team\n\n## Style\n\nUse tabs. STYLE-RULE.\n",
+      "CLAUDE.md": "# Claude\n\n## Workflow\n\nRun lint first. CLAUDE-RULE.\n",
+    });
+    const pack = buildContextPack({ root: repo, repo, base, files: ["src/a.ts"] });
+    const rules = pack.entries.filter((e) => e.kind === "rules");
+    assert.deepEqual(rules.map((e) => e.path), [join(repo, "AGENTS.md"), join(repo, "CLAUDE.md")]);
+    assert.match(pack.text, /STYLE-RULE/);
+    assert.match(pack.text, /CLAUDE-RULE/);
+  });
+
+  it("quotes only the known sections of a file that has them, as before", () => {
+    const { repo, base } = bare({ "AGENTS.md": `${AGENTS}\n## Extra\n\nNOT-QUOTED-EXTRA.\n` });
+    const pack = buildContextPack({ root: repo, repo, base, files: ["src/a.ts"] });
+    assert.match(pack.text, /Read the base/);
+    assert.doesNotMatch(pack.text, /NOT-QUOTED-EXTRA/);
+  });
+
+  it("says so when the base has no rule file", () => {
+    const { repo, base } = bare({});
+    const pack = buildContextPack({ root: repo, repo, base, files: ["src/a.ts"] });
+    assert.match(pack.text, /## Project rules\nNo AGENTS\.md or CLAUDE\.md at the base commit/);
+  });
+});
+
+describe("T248 review (W8): a file outside the project is placed against the session's root, not the process's directory", () => {
+  it("resolves a relative outside path under the session's tree", () => {
+    const { repo, base } = project();
+    const worktree = join(mkdtempSync(join(tmpdir(), "lykos t248 wt2 ")), "tree");
+    const pack = buildContextPack({ root: worktree, repo, base, files: ["../notes/outside.md"] });
+    const entry = pack.entries.find((e) => e.kind === "file" && e.text === "outside the project");
+    assert.equal(entry?.path, join(worktree, "..", "notes", "outside.md"));
+    assert.notEqual(entry?.path, join(process.cwd(), "..", "notes", "outside.md"));
   });
 });

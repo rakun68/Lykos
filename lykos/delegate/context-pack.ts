@@ -60,6 +60,9 @@ export interface ContextPackSummary {
   entries: Array<{ kind: PackEntryKind; path?: string }>;
 }
 
+/** The files a project keeps its rules in, in the order they are quoted. */
+const RULE_FILES = ["AGENTS.md", "CLAUDE.md"] as const;
+
 const QUOTE_CAP = 3000;
 const PACK_CAP = 24000;
 const LIST_CAP = 8;
@@ -138,22 +141,33 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
   const at = (rel: string): string | undefined => atBase({ repo: input.repo, base }, rel);
   const entries: PackEntry[] = [];
 
-  // Rules and traps: AGENTS.md at the base.
-  const agents = at("AGENTS.md");
-  if (agents !== undefined) {
-    const sections = sectionsOf(agents);
+  // Rules and traps: the project's rule files at the base. The sections this project of Lykos titles "The rules",
+  // "Code quality" and "Traps" are quoted alone; a file with none of them is another project's convention and is taken
+  // whole, within the same cap. A project with no rule file is told so rather than left to look unruled.
+  let ruleFiles = 0;
+  for (const file of RULE_FILES) {
+    const text = at(file);
+    if (text === undefined || text.trim() === "") continue;
+    ruleFiles += 1;
+    const sections = sectionsOf(text);
+    let quoted = 0;
     for (const [kind, heading] of [["rules", "The rules"], ["rules", "Code quality"], ["traps", "Traps"]] as const) {
       const body = sections.get(heading);
-      if (body !== undefined && body.trim() !== "") entries.push({ kind, path: abs("AGENTS.md"), text: `## ${heading}\n${clip(body)}` });
+      if (body !== undefined && body.trim() !== "") {
+        entries.push({ kind, path: abs(file), text: `## ${heading}\n${clip(body)}` });
+        quoted += 1;
+      }
     }
+    if (quoted === 0) entries.push({ kind: "rules", path: abs(file), text: clip(text) });
   }
+  if (ruleFiles === 0) entries.push({ kind: "rules", text: `No ${RULE_FILES.join(" or ")} at the base commit: the project states no rules in a file Lykos reads.` });
 
   // The task's files, as the base has them.
   const rels: string[] = [];
   for (const file of input.files) {
     const rel = relativeTo(input.repo, file) ?? relativeTo(root, file);
     if (rel === undefined) {
-      entries.push({ kind: "file", path: resolve(file), text: "outside the project" });
+      entries.push({ kind: "file", path: abs(file), text: "outside the project" });
       continue;
     }
     if (!rels.includes(rel)) rels.push(rel);
@@ -227,7 +241,7 @@ function renderPack(base: string, root: string, entries: readonly PackEntry[]): 
     if (own.length === 0) return;
     lines.push("", `## ${title}`, ...own.map(line));
   };
-  section("Project rules", ["rules"], (e) => `Source ${e.path}\n${e.text}`);
+  section("Project rules", ["rules"], (e) => (e.path !== undefined ? `Source ${e.path}\n${e.text}` : e.text));
   section("Traps", ["traps"], (e) => `Source ${e.path}\n${e.text}`);
   section("Task files", ["file"], (e) => `- ${e.path}: ${e.text}`);
   section("Glossary", ["glossary"], (e) => e.text);
@@ -254,10 +268,4 @@ export function contextPackSummary(ledger: Ledger, sessionId: string): ContextPa
   if (row === undefined) return undefined;
   const entries = (JSON.parse(row.entries_json) as PackEntry[]).map((e) => ({ kind: e.kind, ...(e.path !== undefined ? { path: e.path } : {}) }));
   return { base: row.base_commit, root: row.root, bytes: row.bytes, recorded_at: row.recorded_at, entries };
-}
-
-/** The pack text a session was given, exactly as recorded. */
-export function contextPackText(ledger: Ledger, sessionId: string): string | undefined {
-  const row = ledger.db.prepare(`SELECT text FROM context_packs WHERE session_id = ?`).get(sessionId) as { text: string } | undefined;
-  return row?.text;
 }
