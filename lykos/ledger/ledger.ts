@@ -745,6 +745,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateOwners(db);
   migrateContextPacks(db);
   migrateBaselines(db);
+  migrateDecisions(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -957,6 +958,36 @@ function migrateOwners(db: Database.Database): void {
   // T246: the crashes `lykos recover` has taken the session over from, on a ledger whose `owners` predates it.
   const cols = new Set((db.prepare(`PRAGMA table_info(owners)`).all() as Array<{ name: string }>).map((c) => c.name));
   if (!cols.has("crashes")) db.exec(`ALTER TABLE owners ADD COLUMN crashes INTEGER NOT NULL DEFAULT 0`);
+}
+
+/**
+ * T233: the coordinator's decisions on delegated sessions (`accept`, `reject`, `merged`, `discard`, with cause, reason
+ * and actor) and the review cycle's decisions on findings (`forwarded`, `dropped`, `retired`). Append-only: a session's
+ * history is every row, oldest first.
+ */
+function migrateDecisions(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS decisions (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts          TEXT NOT NULL,
+      session_id  TEXT NOT NULL,
+      decision    TEXT NOT NULL,
+      cause       TEXT,
+      reason      TEXT NOT NULL,
+      actor       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_decisions_session ON decisions(session_id);
+    CREATE TABLE IF NOT EXISTS finding_decisions (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts          TEXT NOT NULL,
+      session_id  TEXT NOT NULL,
+      cycle_id    TEXT,
+      finding_id  TEXT NOT NULL,
+      action      TEXT NOT NULL,
+      reason      TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_finding_decisions_session ON finding_decisions(session_id);
+  `);
 }
 
 /**

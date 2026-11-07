@@ -29,6 +29,7 @@ import {
 } from "../config/specialists.js";
 import { baselineSummary } from "./baseline.js";
 import { contextPackSummary } from "./context-pack.js";
+import { decisionsOf, findingDecisionsOf } from "./decisions.js";
 import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
 import { readTranscript, transcriptFilePath, type TranscriptEventInput, type TranscriptEventRecord } from "../session/transcript.js";
@@ -1496,7 +1497,15 @@ export function ledgerViews(workspace: string, ids?: readonly string[]): Session
       const view = viewOf(row, ownerLiveness, () => ownerRow(ledger, row.session_id));
       const pack = contextPackSummary(ledger, row.session_id);
       const baseline = baselineSummary(ledger, row.session_id);
-      return { ...view, ...(pack !== undefined ? { context_pack: pack } : {}), ...(baseline !== undefined ? { baseline } : {}) };
+      const decisions = decisionsOf(ledger, row.session_id);
+      const findings = findingDecisionsOf(ledger, row.session_id);
+      return {
+        ...view,
+        ...(pack !== undefined ? { context_pack: pack } : {}),
+        ...(baseline !== undefined ? { baseline } : {}),
+        ...(decisions.length > 0 ? { decisions } : {}),
+        ...(findings.length > 0 ? { finding_decisions: findings } : {}),
+      };
     }),
   );
 }

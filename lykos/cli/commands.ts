@@ -835,6 +835,38 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "accept",
+    help: ["  accept    `lykos accept <id> --why <reason> [--cause <cause>]`: record that you accept a delegated session's result (JSON; no arguments lists the causes)"],
+    run: async (rest, { cwd }) => {
+      const { runDecision } = await import("./delegation.js");
+      return runDecision(cwd, "accept", rest);
+    },
+  },
+  {
+    name: "reject",
+    help: ["  reject    `lykos reject <id> --why <reason> [--cause <cause>]`: record that you reject it, and why (JSON; no arguments lists the causes)"],
+    run: async (rest, { cwd }) => {
+      const { runDecision } = await import("./delegation.js");
+      return runDecision(cwd, "reject", rest);
+    },
+  },
+  {
+    name: "merged",
+    help: ["  merged    `lykos merged <id> --why <reason> [--cause <cause>]`: record that its work is merged (JSON; no arguments lists the causes)"],
+    run: async (rest, { cwd }) => {
+      const { runDecision } = await import("./delegation.js");
+      return runDecision(cwd, "merged", rest);
+    },
+  },
+  {
+    name: "discard",
+    help: ["  discard   `lykos discard <id> --why <reason> [--cause <cause>]`: give up on a session, ended or crashed (JSON; no arguments lists the causes)"],
+    run: async (rest, { cwd }) => {
+      const { runDecision } = await import("./delegation.js");
+      return runDecision(cwd, "discard", rest);
+    },
+  },
+  {
     name: "recover",
     help: ["  recover   `lykos recover <id> [-m <message|->]`: continue a crashed delegated session once everything it started is stopped (JSON)"],
     run: async (rest, { cwd }) => {

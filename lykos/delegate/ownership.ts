@@ -15,6 +15,7 @@ import { realpathSync } from "node:fs";
 import type { Ledger } from "../ledger/use.js";
 import type { BaselineSummary } from "./baseline.js";
 import type { ContextPackSummary } from "./context-pack.js";
+import type { DecisionRow, FindingDecisionRow } from "./decisions.js";
 import { liveness, type Liveness } from "../process/identity.js";
 
 export type OwnerKind = "run" | "mcp";
@@ -344,6 +345,10 @@ export interface SessionView {
   context_pack?: ContextPackSummary;
   /** T249: the base's verification run the session was given: measured with its failing tests, or unmeasured with why. */
   baseline?: BaselineSummary;
+  /** T233: the decisions on the session (accept, reject, merged, discard), oldest first. Absent when there are none. */
+  decisions?: DecisionRow[];
+  /** T233: the findings the review cycle forwarded, dropped or retired for the session, oldest first. Absent when none. */
+  finding_decisions?: FindingDecisionRow[];
 }
 
 /**

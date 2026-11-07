@@ -11,6 +11,9 @@ import { loadConfig } from "../config/load.js";
 import { noBashMessage, resolveHostBash } from "../process/host-bash.js";
 import { readProcessStdin } from "./brief.js";
 import type { SessionView } from "../delegate/ownership.js";
+import { CAUSES, decide, isCause, type Cause, type DecisionKind } from "../delegate/decisions.js";
+import { defaultLedgerPath, withLedger } from "../ledger/use.js";
+import { existsSync } from "node:fs";
 import { stdoutWrite } from "../tui/io-mode.js";
 
 export interface ParsedFlags {
@@ -276,5 +279,60 @@ export async function runStop(cwd: string, args: readonly string[]): Promise<num
     return 1;
   }
   print({ ...stopped, next: stopped.next ?? (stopped.state === "running" || stopped.state === "waiting" ? "wait" : "review_or_accept") });
+  return 0;
+}
+
+/** R12: a command with no arguments prints its usage and the causes. */
+const CAUSE_LIST = `causes: ${CAUSES.join(", ")}`;
+const DECISION_USAGE: Record<DecisionKind, string> = {
+  accept: "usage: lykos accept <session-id> --why <reason> [--cause <cause>] [--actor <name>]    record that you accept the session's result",
+  reject: "usage: lykos reject <session-id> --why <reason> [--cause <cause>] [--actor <name>]    record that you reject the session's result, and why",
+  merged: "usage: lykos merged <session-id> --why <reason> [--cause <cause>] [--actor <name>]    record that the session's work is merged",
+  discard:
+    "usage: lykos discard <session-id> --why <reason> [--cause <cause>] [--actor <name>]    give up on the session, ended or crashed (once everything it started is confirmed stopped); never kills anything",
+};
+export function decisionUsage(kind: DecisionKind): string {
+  return `${DECISION_USAGE[kind]}
+${CAUSE_LIST}`;
+}
+
+export async function runDecision(cwd: string, kind: DecisionKind, args: readonly string[]): Promise<number> {
+  if (args.length === 0) return usage(decisionUsage(kind));
+  const parsed = parseFlags(args, kind, ["why", "cause", "actor"], []);
+  if ("error" in parsed) {
+    stderrWrite(`${parsed.error}
+`);
+    return 1;
+  }
+  if (parsed.ids.length !== 1) return usage(decisionUsage(kind));
+  const why = parsed.flags.get("why");
+  if (typeof why !== "string" || why.trim() === "") {
+    stderrWrite(`lykos ${kind}: --why <reason> is required
+${CAUSE_LIST}
+`);
+    return 1;
+  }
+  const causeRaw = parsed.flags.get("cause");
+  if (causeRaw !== undefined && (typeof causeRaw !== "string" || !isCause(causeRaw))) {
+    stderrWrite(`lykos ${kind}: unknown cause "${String(causeRaw)}"
+${CAUSE_LIST}
+`);
+    return 1;
+  }
+  const cause: Cause | undefined = typeof causeRaw === "string" && isCause(causeRaw) ? causeRaw : undefined;
+  const actorRaw = parsed.flags.get("actor");
+  const actor = typeof actorRaw === "string" && actorRaw.trim() !== "" ? actorRaw : "coordinator";
+  const id = parsed.ids[0]!;
+  const ledgerPath = defaultLedgerPath(cwd);
+  if (!existsSync(ledgerPath)) {
+    print({ outcome: "error", message: `unknown session id: ${id}`, next: "fix_environment" });
+    return 1;
+  }
+  const decided = await withLedger(ledgerPath, (ledger) => decide(ledger, { sessionId: id, decision: kind, reason: why, ...(cause !== undefined ? { cause } : {}), actor }));
+  if (!decided.ok) {
+    print({ outcome: "error", message: decided.message, session_id: id, next: decided.next });
+    return 1;
+  }
+  print({ ...decided.decision, ...(decided.discardedCrashed ? { crashed_session_ended: true } : {}), next: kind === "accept" ? "merged" : "run" });
   return 0;
 }

@@ -37,7 +37,11 @@ describe("Ledger", () => {
         // context_packs joined on T248: the context pack each delegated session was given, as it was given.
         "context_packs",
         // extension_counters joined on T149: a Lykos extension's own numbers.
+        // decisions joined on T233: the coordinator's accept, reject, merged and discard on a delegated session.
+        "decisions",
         "extension_counters",
+        // finding_decisions joined on T233: each finding the review cycle forwarded, dropped or retired.
+        "finding_decisions",
         // flaky_tests joined on T167: a test that failed in the gate and passed on rerun.
         "flaky_tests",
         // inbox joined on T244: steers for a delegated session, from any process, delivered by its owner.

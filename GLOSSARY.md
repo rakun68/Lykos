@@ -290,6 +290,15 @@ Continuing, by hand, a delegated session whose owner is `dead`: `lykos recover` 
 never a kill.
 _Avoid_: takeover (for anything automatic), resume (that continues an ended session)
 
+**Decision**:
+What the coordinator records about a delegated session's result: `accept`, `reject`, `merged` or `discard`, each with a
+reason, an actor and, optionally, a cause from Boxie's fixed list. Recorded in the ledger, never overwritten; a
+session's decisions are its history. `discard` is the only one a crashed session takes.
+_Avoid_: verdict, status (those are the session's own state)
+
+**Finding decision**:
+What the review cycle did with one finding: forwarded to the fixer, dropped, or retired.
+
 **Red outcome**:
 What the red check found at the writer commit: `failing`, `failing-exit-only` (the weaker guarantee), `passing`
 (WEAK-SPEC: the spec asks for nothing) or `error`.
