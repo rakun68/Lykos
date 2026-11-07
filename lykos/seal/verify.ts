@@ -4,6 +4,7 @@ import { detectDefaultBase, loadConfig } from "../config/load.js";
 import { parseYaml } from "../config/yaml-file.js";
 import { defaultLedgerPath, recordSealEvent } from "../ledger/use.js";
 import { activeSeals } from "./active.js";
+import { sealedDrift } from "./guard.js";
 import {
   getFileAtCommit,
   getModifiedFilesSince,
@@ -20,6 +21,12 @@ export interface VerifySealsOptions {
   commit?: string | undefined;
   record?: boolean | undefined;
   ledgerPath?: string | undefined;
+  /**
+   * T232: also compare the explicit sealed paths in the working tree and the index against the seal commit. The
+   * commit comparison alone cannot see an edit that was never committed. Meaningful for the checked-out HEAD, so
+   * it is ignored when `commit` names another ref.
+   */
+  workingTree?: boolean | undefined;
 }
 
 export interface SealVerifyItem {
@@ -159,6 +166,12 @@ export async function verifySeals(opts: VerifySealsOptions = {}): Promise<Verify
         causes.push(`deleted sealed paths: ${deleted.join(", ")}`);
       }
       causes.push(`changed sealed paths: ${modified.join(", ")}`);
+    }
+
+    const drift = opts.workingTree === true && opts.commit === undefined ? sealedDrift(cwd, [item], env) : [];
+    for (const d of drift) {
+      if (!modified.includes(d.path)) modified.push(d.path);
+      causes.push(`sealed path differs from the seal in the ${d.where.map((w) => (w === "worktree" ? "working tree" : "index")).join(" and ")}: ${d.path}`);
     }
 
     if (seal.test_command !== headTestCommand) {

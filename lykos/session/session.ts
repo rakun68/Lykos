@@ -60,6 +60,7 @@ import {
   verdictEventOf,
   type GateOutcome,
 } from "../gate/verify-gate.js";
+import { createSealOrder } from "../seal/order.js";
 import { sessionChangedPaths, sessionDiffSummary } from "../loop/diff-summary.js";
 import { renderTaskList } from "../tools/task-list.js";
 import type { GitState } from "../git/host-git.js";
@@ -1843,6 +1844,16 @@ ${decision.note}
       extensionHost: booted.extensionHost,
       startCommit: booted.bootArtifacts.gitHeadAtBoot,
       specialist: booted.extensionHost.getSpecialist(),
+      // T232: a sealed session is verified in the seal's order.
+      sealOrder: createSealOrder({
+        cwd: toolCwd,
+        ledgerPath,
+        sessionId,
+        ...(input.processOwnerId !== undefined ? { ownerId: input.processOwnerId } : {}),
+        specialist: booted.extensionHost.getSpecialist(),
+        readOnly,
+        closeWriters: () => booted.jobs.close(),
+      }),
     });
     gateOutcome = gate;
     gateGreen = gate.status === "recorded" && gate.outcome === "success";

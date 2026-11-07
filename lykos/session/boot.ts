@@ -854,6 +854,7 @@ async function assembleSession(opts: AssembleOpts): Promise<BootedStandaloneSess
     specialist: opts.specialistName,
     ledgerPath: opts.ledgerPath,
     ...(opts.delegated !== undefined ? { delegated: opts.delegated } : {}),
+    ...(opts.readOnly !== undefined ? { readOnly: opts.readOnly } : {}),
   });
   const sessionGate: ApprovalGate = gateWithExtensionEvents(gate, extensionHost.sink);
   const events = extensionHost.sink;
@@ -1095,6 +1096,8 @@ ${note}
     {
     cwd,
     ...(opts.stateRoot !== undefined ? { stateRoot: opts.stateRoot } : {}),
+    // T232: a job's end is an extension event; the seal guard restores what the job changed.
+    onJobEnd: (job) => extensionHost.emitJobEnd(job),
     // T179: `commit` needs a repository and a git binary, which the one probe above already settled.
     commitEnabled: gitState === "repo",
     // T179: a commit is written to the ledger the moment it is made. A session that is killed has no

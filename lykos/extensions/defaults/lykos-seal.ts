@@ -10,7 +10,7 @@ import type { LykosExtension, LykosExtensionApi } from "../api.js";
 import { Type } from "typebox";
 import { activeSeals, type ActiveSeal } from "../../seal/active.js";
 import { loadConfig } from "../../config/load.js";
-import { DEFAULT_SEAL_ENFORCE_FOR, DEFAULT_SEAL_WEAKENING_PATTERNS } from "../../config/defaults.js";
+import { DEFAULT_SEAL_ENFORCE_FOR, DEFAULT_SEAL_WEAKENING_PATTERNS, DEFAULT_SEAL_WRITERS } from "../../config/defaults.js";
 import { DEFAULT_SPECIALIST } from "../../config/specialists.js";
 import { commandPathAccesses } from "../../gate/bash-paths.js";
 import { defaultLedgerPath, recordSealEvent, openLedgerSync, type SealEventKind } from "../../ledger/use.js";
@@ -23,6 +23,9 @@ import { createTemporaryWorktree, getBranchOrNull, getChangedFilesBetween, getWo
 import { localExecutor } from "../../tools/executor.js";
 import { scanWeakening } from "../../seal/weakening.js";
 import { sealCreate } from "../../seal/create.js";
+import { enforceForDeprecation, sealEnforced } from "../../seal/enforce.js";
+import { restoreSealed } from "../../seal/guard.js";
+import { stderrWrite } from "../../tui/io-mode.js";
 
 export const SEAL_EXTENSION = "lykos-seal";
 
@@ -311,6 +314,15 @@ export function register(api: LykosExtensionApi): void {
   let cachedSeals: ActiveSeal[] | undefined;
   let needsRefresh = false;
 
+  // T232: every writable specialist except `seal.writers` is enforced; `seal.enforce_for` adds names and is
+  // reported once as deprecated. The specialist is read at each use, since a session can switch.
+  const writers = config.seal.writers ?? DEFAULT_SEAL_WRITERS;
+  const extraEnforced = config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR;
+  const deprecation = enforceForDeprecation(extraEnforced);
+  if (deprecation !== undefined) stderrWrite(`${deprecation}\n`);
+  const isEnforced = (specialist: string): boolean =>
+    sealEnforced({ specialist, readOnly: api.readOnly, writers, enforceFor: extraEnforced });
+
   const parkedTests = new Set<string>();
   const disputeCounts = new Map<string, number>();
   const upheldSealCommits = new Set<string>();
@@ -558,6 +570,87 @@ export function register(api: LykosExtensionApi): void {
     needsRefresh = true;
   });
 
+  // T232: after every tool call and every job end, the explicit sealed paths are compared in the working tree and
+  // the index against the active seal, and what differs is put back. The seals are re-read when HEAD moved, so a
+  // seal the coordinator advanced (`continue --reseal`, R22) is the one compared against: the coordinator's
+  // correction is never a session edit.
+  let lastHead: string | undefined;
+  const pendingNotes: string[] = [];
+
+  function freshSeals(): ActiveSeal[] {
+    let head: string | undefined;
+    try {
+      head = gitExec(["rev-parse", "HEAD"], cwd);
+    } catch {
+      head = undefined;
+    }
+    if (head !== lastHead) {
+      lastHead = head;
+      needsRefresh = true;
+    }
+    return getSeals();
+  }
+
+  /** Restores drifted sealed paths; returns the note for the model, or undefined when nothing had changed. */
+  async function guardSealed(source: "tool_result" | "job_end", what: string): Promise<string | undefined> {
+    const specialist = api.specialist ?? DEFAULT_SPECIALIST;
+    if (!isEnforced(specialist)) return undefined;
+    const seals = freshSeals();
+    if (seals.length === 0) return undefined;
+    let outcome;
+    try {
+      outcome = restoreSealed(cwd, seals);
+    } catch {
+      return undefined;
+    }
+    if (outcome.restored.length === 0 && outcome.failed.length === 0) return undefined;
+    const sessionId = api.getSessionId?.() ?? null;
+    const ledgerPath = resolveLedgerPath(cwd, config.telemetry.ledger, api.ledgerPath);
+    const paths = [...outcome.restored.map((d) => d.path), ...outcome.failed];
+    try {
+      await recordSealEvent(ledgerPath, {
+        branch: outcome.restored[0]?.branch ?? seals[0]!.seal.branch,
+        sessionId,
+        creator: sessionId ?? "cli",
+        specialist,
+        kind: "restored",
+        paths,
+        detail: JSON.stringify({
+          flag: "SEALED-EDIT",
+          source,
+          by: what,
+          restored: outcome.restored.map((d) => ({ path: d.path, where: d.where })),
+          ...(outcome.failed.length > 0 ? { failed: outcome.failed } : {}),
+        }),
+      });
+    } catch {
+      // Ignore ledger recording error
+    }
+    const parts: string[] = [];
+    if (outcome.restored.length > 0) {
+      parts.push(
+        `${outcome.restored.map((d) => `"${d.path}"`).join(", ")} ${outcome.restored.length === 1 ? "was" : "were"} changed by ${what} and has been restored to the sealed version.`,
+      );
+    }
+    if (outcome.failed.length > 0) {
+      parts.push(`${outcome.failed.map((p) => `"${p}"`).join(", ")} changed by ${what} and could not be restored.`);
+    }
+    return `[lykos-seal] SEALED-EDIT: ${parts.join(" ")} Sealed tests cannot be edited; if a test is wrong, call dispute_test.`;
+  }
+
+  api.on("tool_result", async (event) => {
+    const notes = pendingNotes.splice(0);
+    const note = await guardSealed("tool_result", `the ${event.toolName} call`);
+    if (note !== undefined) notes.push(note);
+    return notes.length > 0 ? { note: notes.join("\n") } : undefined;
+  });
+
+  // A job that ends has had its chance to write; the note waits for the model's next tool result.
+  api.on("job_end", async (event) => {
+    const note = await guardSealed("job_end", `job ${event.jobId} (${event.command})`);
+    if (note !== undefined) pendingNotes.push(note);
+  });
+
   api.on("tool_call", async (event) => {
     if (needsRefresh) {
       getSeals();
@@ -575,8 +668,7 @@ export function register(api: LykosExtensionApi): void {
     if (seals.length === 0) return undefined;
 
     const specialist = api.specialist ?? DEFAULT_SPECIALIST;
-    const enforceFor = config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR;
-    if (!enforceFor.includes(specialist)) {
+    if (!isEnforced(specialist)) {
       return undefined;
     }
 
@@ -645,6 +737,34 @@ export function register(api: LykosExtensionApi): void {
           : undefined;
       if (command) {
         const accesses = commandPathAccesses(command);
+        // T232: a shell write the parser sees is vetoed like an edit or a write. A write it cannot see (an
+        // interpreter's own file call) is caught after the call by the restore in `tool_result`.
+        for (const acc of accesses) {
+          if (acc.access !== "write") continue;
+          for (const s of seals) {
+            const writeMatches = findSealedPathMatches(cwd, acc.path, s.seal.sealed_paths);
+            if (writeMatches.length === 0) continue;
+            const sessionId = api.getSessionId?.() ?? null;
+            const ledgerPath = resolveLedgerPath(cwd, config.telemetry.ledger, api.ledgerPath);
+            try {
+              await recordSealEvent(ledgerPath, {
+                branch: s.seal.branch,
+                sessionId,
+                creator: sessionId ?? "cli",
+                specialist,
+                kind: "vetoed",
+                paths: writeMatches,
+                detail: `${actualToolName} ${command} (sealed: ${writeMatches.join(", ")})`,
+              });
+            } catch {
+              // Ignore ledger recording error
+            }
+            return {
+              block: true,
+              reason: `[lykos-seal] SEALED-EDIT veto: the command writes ${writeMatches.map((m) => `"${m}"`).join(", ")}, which ${writeMatches.length === 1 ? "is" : "are"} protected by an active test seal. Use dispute_test to dispute this test.`,
+            };
+          }
+        }
         const matched = new Set<string>();
         let matchedBranch: string | undefined;
         for (const acc of accesses) {
@@ -692,8 +812,7 @@ export function register(api: LykosExtensionApi): void {
     if (seals.length === 0) return { pass: true };
 
     const specialist = ctx.specialist ?? api.specialist ?? DEFAULT_SPECIALIST;
-    const enforceFor = config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR;
-    if (!enforceFor.includes(specialist)) {
+    if (!isEnforced(specialist)) {
       return { pass: true };
     }
 
@@ -1071,8 +1190,7 @@ export function register(api: LykosExtensionApi): void {
     if (seals.length === 0) return { pass: true };
 
     const specialist = ctx.specialist ?? api.specialist ?? DEFAULT_SPECIALIST;
-    const enforceFor = config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR;
-    if (!enforceFor.includes(specialist)) {
+    if (!isEnforced(specialist)) {
       return { pass: true };
     }
 

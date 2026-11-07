@@ -26,7 +26,7 @@ describe("seal config (T195)", () => {
     assert.deepEqual(resolved.seal.run_globs, [...DEFAULT_RUN_GLOBS]);
     assert.deepEqual(resolved.seal.always_sealed, [...DEFAULT_ALWAYS_SEALED]);
     assert.deepEqual(resolved.seal.writers, ["test-writer"]);
-    assert.deepEqual(resolved.seal.enforce_for, ["implementer"]);
+    assert.deepEqual(resolved.seal.enforce_for, []);
     assert.deepEqual(resolved.seal.weakening_patterns, []);
     assert.equal(resolved.seal.resolver, undefined);
     assert.equal(resolved.seal.escalate_after, 1);

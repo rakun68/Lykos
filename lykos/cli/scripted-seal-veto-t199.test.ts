@@ -155,12 +155,12 @@ describe("T199 ACCEPTANCE: the veto", () => {
 });
 
 describe("T199 ACCEPTANCE: no change where the seal does not apply", () => {
-  it("a specialist not in enforce_for edits the sealed test freely", async () => {
+  it("a seal.writers specialist edits the sealed test freely (T232: every other writable specialist is enforced)", async () => {
     const s = await runScriptedSession({
       env: NO_TEST_CONTEXT,
-      config: config({ enforceFor: ["implementer"] }),
+      config: config({ enforceFor: [] }),
       setup: sealedWorkspace(),
-      extra: { specialist: "build" },
+      extra: { specialist: "test-writer" },
       script: [reply(EDIT_TEST), reply(say("done"))],
     });
     const [edit] = resultsOf(s.sent);
@@ -241,16 +241,17 @@ describe("T199 ACCEPTANCE: the recorded test command is allowed without asking",
     }
   });
 
-  it("a specialist in neither writers nor enforce_for gets no allowance", async () => {
+  it("with seal.enforce_for empty, build is still enforced (T232) and gets the allowance", async () => {
     const s = await runScriptedSession({
       autoApprove: false,
       env: NO_TEST_CONTEXT,
-      config: config({ enforceFor: ["implementer"] }),
+      config: config({ enforceFor: [] }),
       setup: sealedWorkspace(),
       extra: { specialist: "build", ...DELEGATED },
       script: [reply(call("bash", { command: TEST_CMD })), reply(say("done"))],
     });
     const [run] = resultsOf(s.sent);
-    assert.match(run!.text, /is denied/, run!.text);
+    assert.doesNotMatch(run!.text, /is denied/, run!.text);
+    assert.match(run!.text, /adds/, run!.text);
   });
 });

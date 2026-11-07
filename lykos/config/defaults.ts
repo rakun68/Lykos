@@ -62,8 +62,8 @@ export const DEFAULT_TEST_COMMAND = "node --import tsx --test {files}";
 /** T199: default specialist names allowed to write sealed tests. */
 export const DEFAULT_SEAL_WRITERS: readonly string[] = ["test-writer"];
 
-/** T199: default specialist names enforced against editing sealed tests. */
-export const DEFAULT_SEAL_ENFORCE_FOR: readonly string[] = ["implementer"];
+/** T232: `seal.enforce_for` is deprecated; every writable specialist except `seal.writers` is enforced, so the default adds no names. */
+export const DEFAULT_SEAL_ENFORCE_FOR: readonly string[] = [];
 
 /** T202: default weakening patterns detected outside sealed files. */
 export const DEFAULT_SEAL_WEAKENING_PATTERNS: readonly string[] = [

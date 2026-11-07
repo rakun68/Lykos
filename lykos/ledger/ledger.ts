@@ -257,6 +257,8 @@ export const SEAL_EVENT_KINDS = [
   "dispute escalated",
   "dispute upheld",
   "dispute rejected",
+  // T232: the seal guard found a sealed path changed after a tool call or a job and put it back.
+  "restored",
 ] as const;
 
 export type SealEventKind = (typeof SEAL_EVENT_KINDS)[number];

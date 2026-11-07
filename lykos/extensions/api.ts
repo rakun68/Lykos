@@ -91,6 +91,7 @@ import type { ProjectExecutor } from "../tools/executor.js";
 import type { GateOutcome } from "../gate/verify-gate.js";
 import { workingTreeFingerprint } from "../loop/checkpoint.js";
 import { stderrWrite } from "../tui/io-mode.js";
+import type { JobRecord } from "../tools/job-runner.js";
 
 // ---------------------------------------------------------------------------
 // The nine events.
@@ -117,6 +118,10 @@ export const LYKOS_EVENTS = [
   // test and the tree at once. Delivered with `emitAndWait`, so a handler may
   // run a child session before the process moves on.
   "session_end",
+  // T232: fired when a background job ends, however it ended (exit, stop, cap, failure). Delivered with
+  // `emitAndWait`, so the job counts as ended only after its handlers have run: the seal guard compares and
+  // restores the sealed paths there.
+  "job_end",
 ] as const;
 
 export type LykosEvent = (typeof LYKOS_EVENTS)[number];
@@ -265,6 +270,16 @@ export interface SessionEndEvent {
   taskList: string;
 }
 
+/** T232: a background job ended (`tools/job-runner.ts`). */
+export interface JobEndEvent {
+  jobId: string;
+  command: string;
+  /** How it ended: `exited`, `stopped`, `capped` or `failed`. */
+  status: "exited" | "stopped" | "capped" | "failed";
+  /** The shell's exit code; absent when the job never ran or was killed before it reported one. */
+  exitCode?: number | null;
+}
+
 export interface LykosEventPayloads {
   post_edit_check: PostEditCheckEvent;
   verification_verdict: VerificationVerdictEvent;
@@ -276,6 +291,7 @@ export interface LykosEventPayloads {
   task_list_changed: TaskListChangedEvent;
   credential_rotated: CredentialRotatedEvent;
   session_end: SessionEndEvent;
+  job_end: JobEndEvent;
 }
 
 /**
@@ -312,7 +328,7 @@ export const NULL_EVENT_SINK: LykosEventSink = {
  * (T147) a declared package can fail to load at all — no entry file, an import
  * that throws, or an export that is not an extension.
  */
-export type ExtensionFailureSite = LykosEvent | "install" | "command" | "load" | "child_session" | "tool_call" | "gate_check";
+export type ExtensionFailureSite = LykosEvent | "install" | "command" | "load" | "child_session" | "tool_call" | "tool_result" | "gate_check";
 
 export interface ExtensionFailure {
   extension: string;
@@ -574,6 +590,24 @@ export type ToolCallVetoHandler = (
   event: ToolCallVetoEvent,
 ) => ToolCallVetoResult | Promise<ToolCallVetoResult>;
 
+/** T232: payload presented to a `tool_result` handler, after the tool ran. */
+export interface ToolResultNoteEvent {
+  toolName: string;
+  input: Record<string, unknown>;
+  isError: boolean;
+}
+
+/**
+ * T232: what a `tool_result` handler returns. A `note` is appended to the result the model is already reading, so
+ * what the extension did (a file it restored, a thing it refused) is said where the model will see it.
+ */
+export type ToolResultNoteResult = { note?: string } | void | undefined;
+
+/** T232: handler function for `tool_result`. */
+export type ToolResultNoteHandler = (
+  event: ToolResultNoteEvent,
+) => ToolResultNoteResult | Promise<ToolResultNoteResult>;
+
 /** T201: return value from a gate check handler. */
 export type GateCheckResult =
   | { pass: true; reason?: string }
@@ -612,12 +646,16 @@ export interface LykosExtensionApi {
   readonly specialist?: string | undefined;
   /** Session ledger path, if known. */
   readonly ledgerPath?: string | undefined;
+  /** T232: the session cannot change files (a read-only specialist or child). */
+  readonly readOnly?: boolean | undefined;
   /** T199: get current session ID if available. */
   getSessionId?(): string | undefined;
   /** Spec story 47: whether the session was started as delegated. */
   readonly delegated?: boolean | undefined;
   /** T199: register a block-only veto handler for tool_call. */
   on(event: "tool_call", handler: ToolCallVetoHandler): void;
+  /** T232: register a handler that runs after every tool call and may add a note to its result. */
+  on(event: "tool_result", handler: ToolResultNoteHandler): void;
   /**
    * T201: register a block-only gate check contribution.
    * Runs after the session gate's command. Returning a block turns success
@@ -704,6 +742,8 @@ export interface LykosExtensionHostOpts {
   specialist?: string | undefined;
   ledgerPath?: string | undefined;
   delegated?: boolean | undefined;
+  /** T232: the session cannot change files. */
+  readOnly?: boolean | undefined;
 }
 
 /**
@@ -720,6 +760,7 @@ export class LykosExtensionHost {
 
   private readonly handlers = new Map<LykosEvent, Array<{ extension: string; run: (payload: never) => void }>>();
   private readonly toolCallVetoHandlers: Array<{ extension: string; run: ToolCallVetoHandler }> = [];
+  private readonly toolResultHandlers: Array<{ extension: string; run: ToolResultNoteHandler }> = [];
   private readonly gateCheckHandlers: Array<{ extension: string; name?: string; run: GateCheckHandler }> = [];
   private sessionIdValue: string | (() => string | undefined) | undefined;
   private readonly toolRows: ExtensionToolRow[] = [];
@@ -797,6 +838,30 @@ export class LykosExtensionHost {
     return combinedWarning ? { block: false, warning: combinedWarning } : undefined;
   }
 
+  /**
+   * T232: run `tool_result` handlers in registration order, after a tool ran. Returns the notes they asked to have
+   * appended to the result. A handler that throws is counted and the next one still runs.
+   */
+  async runToolResult(toolName: string, input: unknown, isError: boolean): Promise<string[]> {
+    if (this.toolResultHandlers.length === 0) return [];
+    const event: ToolResultNoteEvent = {
+      toolName,
+      input: input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {},
+      isError,
+    };
+    const notes: string[] = [];
+    for (const entry of this.toolResultHandlers) {
+      try {
+        const result = await entry.run(event);
+        this.counters.deliveries += 1;
+        if (result && typeof result.note === "string" && result.note.length > 0) notes.push(result.note);
+      } catch (err) {
+        this.recordFailure(entry.extension, "tool_result", err);
+      }
+    }
+    return notes;
+  }
+
   /** T201: whether any extension registered a gate check. */
   get hasGateChecks(): boolean {
     return this.gateCheckHandlers.length > 0;
@@ -866,6 +931,9 @@ export class LykosExtensionHost {
       get delegated() {
         return self.opts.delegated;
       },
+      get readOnly() {
+        return self.opts.readOnly;
+      },
       get specialist() {
         return self.getSpecialist();
       },
@@ -876,6 +944,10 @@ export class LykosExtensionHost {
             extension: name,
             run: handler as ToolCallVetoHandler,
           });
+          return;
+        }
+        if (event === "tool_result") {
+          this.toolResultHandlers.push({ extension: name, run: handler as ToolResultNoteHandler });
           return;
         }
         const list = this.handlers.get(event as LykosEvent) ?? [];
@@ -999,15 +1071,32 @@ export class LykosExtensionHost {
     }
   }
 
+  /**
+   * T232: a background job ended. Handlers run before the job counts as done (`JobRegistry` waits on this), so the
+   * seal guard has compared and restored by the time `stop`, `stopAll` or the gate go on.
+   */
+  async emitJobEnd(job: JobRecord): Promise<void> {
+    if (job.status === "running") return;
+    await this.emitAndWait("job_end", {
+      jobId: job.id,
+      command: job.command,
+      status: job.status,
+      ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
+    });
+  }
+
   /** The narrow handle a firing site takes. `emit` and nothing else. */
   get sink(): LykosEventSink {
     return { emit: (event, payload) => this.emit(event, payload) };
   }
 
   /** Registered handler counts, for `lykos doctor` and for tests. */
-  listenerCount(event: LykosEvent | "tool_call"): number {
+  listenerCount(event: LykosEvent | "tool_call" | "tool_result"): number {
     if (event === "tool_call") {
       return this.toolCallVetoHandlers.length;
+    }
+    if (event === "tool_result") {
+      return this.toolResultHandlers.length;
     }
     return this.handlers.get(event)?.length ?? 0;
   }

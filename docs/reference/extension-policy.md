@@ -62,12 +62,16 @@ declaration path in `lykos/config/extensions.ts`, unchanged. The host exposes Ly
 and a pre-dispatch `tool_call` veto handler (mirroring Pi's `tool_call` event to allow extensions
 like `lykos-seal` to veto operations before execution).
 
-**Ten lifecycle events**, the moments Pi has no concept of: `post_edit_check`, `verification_verdict`,
+**Eleven lifecycle events**, the moments Pi has no concept of: `post_edit_check`, `verification_verdict`,
 `specialist_switch`, `budget_threshold`, `checkpoint_written`, `memory_injected`,
-`approval_decided`, `task_list_changed`, `credential_rotated`, `session_end`. Each fires from the one place that
+`approval_decided`, `task_list_changed`, `credential_rotated`, `session_end`, `job_end`. Each fires from the one place that
 already computed its payload. `verification_verdict` carries `status`, `outcome`, `command` and `exitCode` (the gate command's own exit code), and, when the gate reran its failed test files (T167, ADR-0030), `rerun: { command, exitCode, flakyTests }` — the rerun's exit code and the tests that failed then passed, each `{ file, name, editedBySession }`. `flakyTests` is empty when the rerun failed too, and a flaky test with `editedBySession` is why `outcome` can be `fail` beside a rerun that passed. `credential_rotated` carries provider, from-label, to-label and
 reason, never a secret (P14 ticket 06). A handler may return a promise; a rejection counts as a
 failure like a throw.
+
+**`job_end` (T232)** fires when a background job ends, however it ended (`exited`, `stopped`, `capped`, `failed`), with `jobId`, `command`, `status` and `exitCode`. It is awaited: the job counts as done, and `stop`/`stopAll` return, only after the handlers ran. `lykos-seal` restores sealed paths the job changed there.
+
+**`tool_result` (T232)** is registered like `tool_call`, with `api.on("tool_result", handler)`, and runs after every tool call with `{ toolName, input, isError }`. A handler may return `{ note }`; the notes are appended to the result the model reads, ahead of the harness's own notes. It uses Pi's `tool_result` hook (the harness extension), so it needs no patch to Pi.
 
 **`session_end` (P4 T149)** fires once per top-level session, after the gate, from the session
 owner (`session/session.ts`, `session/interactive.ts`). It carries the session id and model, how
@@ -337,12 +341,13 @@ a tier table in `config.yaml` rather than a flat percentage.
 ### `lykos-seal`
 
 The sealed TDD default extension (`lykos/extensions/defaults/lykos-seal.ts`, ADR-0034, T199, T208).
-It hooks pre-dispatch tool calls to veto edits to sealed test files by specialists in
-`seal.enforce_for`.
+It hooks pre-dispatch tool calls to veto edits and shell writes to sealed test files by every writable specialist
+except `seal.writers` (T232; `seal.enforce_for` is deprecated and adds names), and restores a sealed path that
+changed after a tool call or a job (`tool_result`, `job_end`).
 
 Through `SealAllowanceGate` (T199, T208), it allows test execution and dispute operations without human confirmation:
-- In all permission modes except plan, specialists in `seal.writers` and `seal.enforce_for` are allowed the test command matching the active seal's recorded template on test files.
+- In all permission modes except plan, specialists in `seal.writers` and every enforced specialist are allowed the test command matching the active seal's recorded template on test files.
 - When no active seal exists, specialists in `seal.writers` are allowed the resolved `seal.test_command` template from configuration.
 - Single-command PowerShell requests are allowed under the same token rules as Bash (rejecting command separators, pipelines, redirects, backticks, or subexpressions).
-- Specialists in `seal.enforce_for` are allowed the `dispute_test` tool from `lykos-seal` in all non-plan modes.
+- Enforced specialists are allowed the `dispute_test` tool from `lykos-seal` in all non-plan modes.
 

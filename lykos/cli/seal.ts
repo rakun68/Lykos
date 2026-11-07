@@ -119,9 +119,12 @@ export async function runSeal(cwd: string, args: string[]): Promise<number> {
   if (sub === "verify") {
     let branch: string | undefined;
     let commit: string | undefined;
+    let workingTree = false;
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i]!;
-      if (a === "--branch") {
+      if (a === "--working-tree") {
+        workingTree = true;
+      } else if (a === "--branch") {
         branch = rest[++i];
       } else if (a.startsWith("--branch=")) {
         branch = a.slice("--branch=".length);
@@ -133,7 +136,7 @@ export async function runSeal(cwd: string, args: string[]): Promise<number> {
     }
 
     try {
-      const res = await verifySeals({ cwd, branch, commit });
+      const res = await verifySeals({ cwd, branch, commit, workingTree });
       if (res.code === 0) {
         stdoutWrite(res.output);
       } else {

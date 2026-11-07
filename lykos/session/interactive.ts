@@ -72,6 +72,7 @@ import { createInterface } from "node:readline";
 import type { ResolvedConfig } from "../config/types.js";
 import { loadConfig } from "../config/load.js";
 import { resolveGatePolicy, renderGateOutcome, renderGateStart, runSessionGate, type GateOutcome } from "../gate/verify-gate.js";
+import { createSealOrder } from "../seal/order.js";
 
 /** T131: the three answers the exit-plan prompt offers. Named constants because the tool's caller has to compare against the exact strings `parseAskAnswer` returns. */
 export const PLAN_CONTINUE_AUTO = "yes — continue in Auto";
@@ -1849,6 +1850,14 @@ export async function finishInteractiveSession(opts: {
       extensionHost: booted.extensionHost,
       startCommit: booted.bootArtifacts.gitHeadAtBoot,
       specialist: booted.extensionHost.getSpecialist(),
+      // T232: a sealed session is verified in the seal's order.
+      sealOrder: createSealOrder({
+        cwd,
+        ledgerPath,
+        sessionId,
+        specialist: booted.extensionHost.getSpecialist(),
+        closeWriters: () => booted.jobs.close(),
+      }),
       onStart: (cmd) => opts.outcomeWrite(renderGateStart(cmd, gatePolicy.timeoutMs)),
     });
     gateOutcome = gate;

@@ -237,6 +237,11 @@ export interface JobRegistryOpts {
   maxLogBytes?: number;
   /** T172: where a job's command runs. Absent means this machine. */
   executor?: ProjectExecutor;
+  /**
+   * T232: called once when a job has ended, however it ended, before the job counts as done: `stop` and `stopAll`
+   * wait for it. The seal guard compares and restores the sealed paths here. A handler that throws is ignored.
+   */
+  onEnd?: (record: JobRecord) => Promise<void> | void;
 }
 
 /** T256: what `stopAll` stopped, and what it could not prove stopped. */
@@ -286,6 +291,8 @@ function publicRecord(entry: JobEntry): JobRecord {
 export class JobRegistry {
   private readonly jobs = new Map<string, JobEntry>();
   private readonly maxLogBytes: number;
+  /** T232: set by `close`; no job starts after it. */
+  private closed = false;
 
   constructor(private readonly opts: JobRegistryOpts) {
     this.maxLogBytes = opts.maxLogBytes ?? JOB_LOG_MAX_BYTES;
@@ -293,6 +300,14 @@ export class JobRegistry {
 
   get cwd(): string {
     return this.opts.cwd;
+  }
+
+  /**
+   * T232: no new job starts from here on. The session's verification order closes the registry before it confirms
+   * that nothing is running, so a writer cannot appear between the confirmation and the verification.
+   */
+  close(): void {
+    this.closed = true;
   }
 
   private mintId(): string {
@@ -314,6 +329,25 @@ export class JobRegistry {
    */
   start(opts: StartJobOpts): JobRecord {
     const id = this.mintId();
+    if (this.closed) {
+      const now = new Date().toISOString();
+      const refused: JobEntry = {
+        id,
+        command: opts.command,
+        pid: undefined,
+        logPath: join(jobsDirectory(this.opts.stateRoot ?? this.opts.cwd), `${id}.log`),
+        startedAt: now,
+        endedAt: now,
+        status: "failed",
+        reason: "the session is being verified or has ended, so no new job may start",
+        bytes: 0,
+        child: undefined,
+        stream: undefined,
+        done: Promise.resolve(),
+      };
+      this.jobs.set(id, refused);
+      return publicRecord(refused);
+    }
     const dir = jobsDirectory(this.opts.stateRoot ?? this.opts.cwd);
     mkdirSync(dir, { recursive: true });
     const logPath = join(dir, `${id}.log`);
@@ -337,13 +371,26 @@ export class JobRegistry {
     // `done` means the job is over AND its log is closed. `stop`/`stopAll`
     // await it, so a caller that tears the directory down afterwards never
     // races the stream's still-pending open or final write.
-    const finish = (s: WriteStream | undefined): void => {
+    const closeLog = (s: WriteStream | undefined): void => {
       if (s === undefined || s.closed) {
         resolveDone();
         return;
       }
       s.once("close", () => resolveDone());
       s.end();
+    };
+    // T232: the job's end handler runs before `done` resolves, so whoever waits for the job (`stop`, `stopAll`)
+    // also waits for the guard that looks at what it left behind.
+    const finish = (s: WriteStream | undefined): void => {
+      const ended = this.opts.onEnd;
+      if (ended === undefined) {
+        closeLog(s);
+        return;
+      }
+      void Promise.resolve()
+        .then(() => ended(publicRecord(entry)))
+        .catch(() => undefined)
+        .finally(() => closeLog(s));
     };
 
     const entry: JobEntry = {
@@ -505,7 +552,10 @@ export class JobRegistry {
   private async stopEntry(id: string, reason?: string): Promise<{ record: JobRecord; exited: boolean } | undefined> {
     const entry = this.jobs.get(id);
     if (entry === undefined) return undefined;
-    if (entry.status !== "running" && entry.status !== "capped") return { record: publicRecord(entry), exited: true };
+    // T232: a job that already ended may still be inside its end handler; `done` resolves when that has finished.
+    if (entry.status !== "running" && entry.status !== "capped") {
+      return { record: publicRecord(entry), exited: await settleWithin(entry.done, JOB_STOP_GRACE_MS) };
+    }
     if (entry.status === "running") {
       entry.status = "stopped";
       if (reason !== undefined) entry.reason = reason;

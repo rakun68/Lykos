@@ -32,6 +32,7 @@ import { DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { activeSeals } from "../seal/active.js";
 import { SEAL_EXTENSION } from "../extensions/defaults/index.js";
 import { matchGlob } from "../seal/matcher.js";
+import { sealEnforced } from "../seal/enforce.js";
 
 export type { DeniedAction } from "./approval.js";
 
@@ -311,8 +312,8 @@ export function canSealAllowanceEverAllow(opts: SealTestCommandAllowanceOptions)
   const specialist = opts.specialist ?? DEFAULT_SPECIALIST;
   const writers = config.seal.writers ?? DEFAULT_SEAL_WRITERS;
   const enforceFor = config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR;
-  const allowedSpecialists = new Set([...writers, ...enforceFor]);
-  return allowedSpecialists.has(specialist);
+  // T232: a writer writes sealed tests; every other writable specialist is enforced against them.
+  return writers.includes(specialist) || sealEnforced({ specialist, readOnly: false, writers, enforceFor });
 }
 
 function matchesTemplate(
@@ -397,8 +398,12 @@ export function createSealTestCommandAllowance(
   const specialist = opts.specialist ?? DEFAULT_SPECIALIST;
   const writers = new Set(config.seal.writers ?? DEFAULT_SEAL_WRITERS);
   const isWriter = writers.has(specialist);
-  const enforceFor = new Set(config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR);
-  const isEnforced = enforceFor.has(specialist);
+  const isEnforced = sealEnforced({
+    specialist,
+    readOnly: config.readOnly === true,
+    writers: [...writers],
+    enforceFor: config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR,
+  });
 
   let cachedSeals = activeSeals({ cwd });
   let stale = false;

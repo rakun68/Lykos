@@ -106,14 +106,16 @@ describe("T201 ACCEPTANCE: the gate passes an honest implementation", () => {
 });
 
 describe("T201 ACCEPTANCE: the gate fails a changed sealed test, however it changed", () => {
-  it("through bash, uncommitted: the session ends failed and the failure names the file", async () => {
+  it("through bash, uncommitted: the guard puts the file back (T232), so the honest implementation still ends success and the edit is on record", async () => {
     const s = await session([
       reply(IMPLEMENT),
       reply(COMMIT("implement add")),
       reply(call("bash", { command: "node -e \"require('fs').writeFileSync('test/add.test.mjs', '// gone\\n')\"" })),
     ]);
-    assert.equal(outcome(s), "fail");
-    assert.match(s.show(), /test\/add\.test\.mjs/);
+    assert.equal(s.file("test/add.test.mjs"), RED_TEST, "restored in the working tree");
+    assert.equal(outcome(s), "success", s.show());
+    const kinds = s.query<{ kind: string }>("SELECT kind FROM seal_events WHERE session_id = ?", s.sessionId).map((r) => r.kind);
+    assert.ok(kinds.includes("restored"), `seal_events: ${kinds}`);
   });
 
   it("through bash and a commit made with git", async () => {
@@ -176,10 +178,12 @@ describe("T201 ACCEPTANCE: what the gate reports", () => {
   });
 
   it("the seal verdict is in the ledger", async () => {
+    // One command writes the sealed test and commits it: the guard restores the tree, the commit stays in history.
     const s = await session([
-      reply(call("bash", { command: "node -e \"require('fs').writeFileSync('test/add.test.mjs', '// gone\\n')\"" })),
+      reply(call("bash", { command: "node -e \"require('fs').writeFileSync('test/add.test.mjs', '// gone\\n')\" && git commit -qam weaken" })),
     ]);
     const kinds = s.query<{ kind: string }>("SELECT kind FROM seal_events WHERE session_id = ?", s.sessionId).map((r) => r.kind);
     assert.ok(kinds.includes("tampered"), `seal_events: ${kinds}`);
+    assert.ok(kinds.includes("restored"), `seal_events: ${kinds}`);
   });
 });

@@ -220,6 +220,12 @@ a branch. It lives in the branch's signed seal file under `.lykos/seals/`, and i
 signature verifies and `git diff` from the seal commit over the sealed paths stays empty (ADR-0034).
 _Avoid_: lock, test firewall (the problem it solves), freeze
 
+**Sealed edit**:
+A change to a sealed path that the seal guard stopped or undid: a write the veto refused, or a sealed path found
+changed in the working tree or the index after a tool call, at a job's end or during verification, and put back.
+It raises the `SEALED-EDIT` flag. A coordinator's reseal is never one.
+_Avoid_: tamper (that is a committed change the verifier finds), violation
+
 **Dispute**:
 An implementer's claim that a sealed test is wrong, filed with `dispute_test` instead of an edit and
 decided by the test writer, the orchestrator or a human. An upheld dispute leads to a reseal.

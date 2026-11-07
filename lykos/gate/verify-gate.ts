@@ -69,6 +69,7 @@ import {
 } from "./rerun-failures.js";
 import { NULL_EVENT_SINK, type LykosEventSink, type LykosExtensionHost, type VerificationVerdictEvent } from "../extensions/api.js";
 import type { TaskItem } from "../tools.js";
+import type { SealOrder } from "../seal/order.js";
 
 export interface GateConfig {
   enabled?: boolean;
@@ -281,6 +282,12 @@ export interface SessionGateInput {
   startCommit?: string | undefined;
   /** T201: session specialist. */
   specialist?: string | undefined;
+  /**
+   * T232: the seal's verification order. Present only for a session with an active seal it is enforced against.
+   * `prepare` runs before the command (no new writer, quiescence, restore, seal record); `recheck` runs after it,
+   * before the verdict is written.
+   */
+  sealOrder?: SealOrder | undefined;
 }
 
 /** What the session says on screen before the gate's command runs. */
@@ -366,6 +373,18 @@ export async function runSessionGate(input: SessionGateInput): Promise<GateOutco
   }
 
   const verify = input.verify ?? defaultVerify(input);
+  if (input.sealOrder !== undefined) {
+    const refused = await input.sealOrder.prepare();
+    if (refused !== undefined) {
+      const { runVerify } = await import("../session/verify-outcome.js");
+      await runVerify(input.sessionId, {
+        ledgerPath: input.ledgerPath,
+        cwd: policy.cwd,
+        answer: { kind: "gate_check_only", reason: refused.refuse, cmd: policy.command },
+      });
+      return announce({ status: "recorded", outcome: "fail", cmd: policy.command, exitCode: null });
+    }
+  }
   input.onStart?.(policy.command);
   return announce(await verify(policy.command));
 }
@@ -393,6 +412,14 @@ function defaultVerify(input: SessionGateInput): (cmd: string) => Promise<GateOu
           runVerificationCommand(rerunCmd, rerunCwd, rerunTimeoutMs, input.executor),
       }),
       gateChecks: async (run) => {
+        // T232, step 6: integrity is rechecked before the verdict. A restore means a sealed file changed while the
+        // command ran, so the command is rerun once on the restored tree and the verdict fails.
+        if (input.sealOrder !== undefined) {
+          const blocked = await input.sealOrder.recheck(() =>
+            runVerificationCommand(run.cmd, input.policy.cwd, input.policy.timeoutMs, input.executor),
+          );
+          if (blocked !== undefined) return { pass: false, blockReason: blocked.blockReason };
+        }
         if (!input.extensionHost?.hasGateChecks) return undefined;
         return input.extensionHost.runGateChecks({
           sessionId: input.sessionId,

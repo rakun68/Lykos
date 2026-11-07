@@ -40,6 +40,13 @@ export interface QuiescenceDeps {
   driverFor?: (runtime: RuntimeName) => ContainerDriver;
   /** Remove the session's containers by name before counting them. Default false: only report. */
   stopContainers?: boolean;
+  /**
+   * T232: the caller is the session's own process, confirming at the end of its run that what the session started is
+   * gone. The owner row (live until the run ends) and the records that are the caller itself are not "something the
+   * session started"; `ignoreRecord` names the others to leave out (the container the verification still runs in).
+   */
+  ignoreOwner?: boolean;
+  ignoreRecord?: (record: ProcessRecordRow) => boolean;
 }
 
 const RUNTIMES: readonly string[] = ["docker", "podman"];
@@ -65,12 +72,12 @@ export async function confirmQuiescence(ledger: Ledger, sessionId: string, deps:
   const notStopped: NotStopped[] = [];
 
   const owner = ownerRow(ledger, sessionId);
-  if (owner !== undefined && isLive(owner.state)) {
+  if (deps.ignoreOwner !== true && owner !== undefined && isLive(owner.state)) {
     const state = owner.owner_pid === process.pid ? "alive" : livenessOf({ pid: owner.owner_pid, recordedAt: owner.owner_recorded_at_ms });
     if (state !== "dead") notStopped.push({ kind: "owner", pid: owner.owner_pid, liveness: state });
   }
 
-  const records = ledger.processRecords(sessionId).filter((r) => r.ended_at === null);
+  const records = ledger.processRecords(sessionId).filter((r) => r.ended_at === null && deps.ignoreRecord?.(r) !== true);
   for (const record of records) {
     const gone = await recordGone(record, sessionId, { livenessOf, treeOf, driverFor, stop: deps.stopContainers === true }, notStopped);
     if (gone) ledger.endProcess(record.id);

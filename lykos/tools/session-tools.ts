@@ -30,7 +30,7 @@ import { buildEvalTool } from "./eval.js";
 import { EvalRuntimePool } from "./eval-runtime.js";
 import { buildGithubTool } from "./github.js";
 import { buildHubTool } from "./hub.js";
-import { JobRegistry } from "./job-runner.js";
+import { JobRegistry, type JobRecord } from "./job-runner.js";
 import { newPeerFamily, type PeerMailbox } from "./mailbox.js";
 import { LspServerPool } from "./lsp-client.js";
 import { buildLspTool } from "./lsp.js";
@@ -195,6 +195,8 @@ export interface LoadToolsDeps {
    * worktree. Absent, it is `cwd`. A worktree is removed with the call, so state written there would be lost.
    */
   stateRoot?: string;
+  /** T232: called when a background job ends (the `job_end` extension event). */
+  onJobEnd?: (job: JobRecord) => Promise<void> | void;
 
   /** T172: where `bash`, `powershell`, `eval` and background jobs run their processes. Absent means this machine. */
   executor?: ProjectExecutor;
@@ -476,7 +478,12 @@ export function loadTools(names: readonly string[], deps: LoadToolsDeps): Loaded
   // Nothing spawns here: a session that never calls `hub` never starts a
   // process and never creates `.lykos/jobs/`.
   const stateRoot = deps.stateRoot ?? deps.cwd;
-  const jobs = new JobRegistry({ cwd: deps.cwd, stateRoot, ...(deps.executor !== undefined ? { executor: deps.executor } : {}) });
+  const jobs = new JobRegistry({
+    cwd: deps.cwd,
+    stateRoot,
+    ...(deps.executor !== undefined ? { executor: deps.executor } : {}),
+    ...(deps.onJobEnd !== undefined ? { onEnd: deps.onJobEnd } : {}),
+  });
   // P10.5 (ticket 17, D2): the family's bus, or a family of one. Never a
   // module-level singleton — two unrelated sessions in one process (every MCP
   // worker, every test file) must not be able to read each other's mail, and

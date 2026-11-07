@@ -56,11 +56,11 @@ describe("T205 ACCEPTANCE: the shipped sealed-TDD library", () => {
     assert.match(r.file.instructions ?? "", /commit/i);
   });
 
-  it("lykos-seal's default writers and enforce_for match the shipped names", () => {
+  it("lykos-seal's default writers match the shipped names and enforce_for is empty (T232)", () => {
     const p = freshProject();
     const names = new Set(discoverSpecialists(p.cwd, p.globalDir).map((s) => s.name));
     assert.deepEqual(SHIPPED_DEFAULTS.seal.writers, ["test-writer"]);
-    assert.deepEqual(SHIPPED_DEFAULTS.seal.enforce_for, ["implementer"]);
+    assert.deepEqual(SHIPPED_DEFAULTS.seal.enforce_for, []);
     for (const n of [...SHIPPED_DEFAULTS.seal.writers, ...SHIPPED_DEFAULTS.seal.enforce_for]) {
       assert.ok(names.has(n), `${n} is a shipped specialist`);
     }

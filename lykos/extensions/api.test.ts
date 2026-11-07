@@ -329,7 +329,7 @@ describe("P10.9 D3 a throwing extension is reported and counted", () => {
 // ---------------------------------------------------------------------------
 
 describe("P10.9 D1 two surfaces, no mirroring", () => {
-  it("the ten events are Lykos's own names and none of them is a Pi event name", () => {
+  it("the eleven events are Lykos's own names and none of them is a Pi event name", () => {
     assert.deepEqual([...LYKOS_EVENTS], [
       "post_edit_check",
       "verification_verdict",
@@ -341,6 +341,7 @@ describe("P10.9 D1 two surfaces, no mirroring", () => {
       "task_list_changed",
       "credential_rotated",
       "session_end",
+      "job_end",
     ]);
     // Pi's own event vocabulary, as `loop/harness-extension.ts` uses it. If a
     // name ever appeared in both lists, a Pi release could change a Lykos

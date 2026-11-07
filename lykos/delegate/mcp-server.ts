@@ -603,7 +603,33 @@ async function buildSessionOutcomeResult(
     let sealPaths: string[] | undefined;
 
     const attempts: Array<{ tool: string; detail: string; paths: string[] }> = [];
+    // T232: every veto and every restore of a sealed path raises SEALED-EDIT.
+    const sealedEditPaths = new Set<string>();
+    const sealedEditDetails: string[] = [];
     for (const ev of sealEventsForSession) {
+      if (ev.kind === "vetoed" || ev.kind === "restored") {
+        let evPaths: string[] = [];
+        if (typeof ev.paths === "string") {
+          try { evPaths = JSON.parse(ev.paths); } catch { evPaths = [ev.paths]; }
+        } else if (Array.isArray(ev.paths)) {
+          evPaths = ev.paths;
+        }
+        for (const p of evPaths) sealedEditPaths.add(p);
+        sealedEditDetails.push(ev.kind === "vetoed" ? `vetoed: ${typeof ev.detail === "string" ? ev.detail : evPaths.join(", ")}` : `restored: ${evPaths.join(", ")}`);
+      }
+      if (ev.kind === "restored") {
+        let by = "restore";
+        if (typeof ev.detail === "string") {
+          try { by = String((JSON.parse(ev.detail) as { by?: unknown }).by ?? by); } catch {}
+        }
+        let evPaths: string[] = [];
+        if (typeof ev.paths === "string") {
+          try { evPaths = JSON.parse(ev.paths); } catch { evPaths = [ev.paths]; }
+        } else if (Array.isArray(ev.paths)) {
+          evPaths = ev.paths;
+        }
+        attempts.push({ tool: "restore", detail: `${by}: ${evPaths.join(", ")}`, paths: evPaths });
+      }
       if (ev.kind === "tamper_attempted") {
         let parsedDetail: { tool?: string; detail?: string } = {};
         if (typeof ev.detail === "string") {
@@ -894,6 +920,15 @@ async function buildSessionOutcomeResult(
             removedLines,
           }),
         );
+      }
+
+      if (sealedEditDetails.length > 0) {
+        flags.push({
+          flag: "SEALED-EDIT",
+          detail: sealedEditDetails.join("; "),
+          files: [...sealedEditPaths],
+          ...(targetSessionId !== undefined ? { session: targetSessionId } : {}),
+        });
       }
 
       const GREEN_OVER_RED_PATTERNS = [

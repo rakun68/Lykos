@@ -366,6 +366,15 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
           for (const n of run.notes) pendingPreToolNotes.push(n.note);
         }
 
+        // T232: the Lykos extensions' `tool_result` handlers (the seal guard compares and restores sealed paths
+        // here). Their notes join the same list, so what an extension did is said on the result the model reads.
+        if (opts.extensionHost !== undefined) {
+          const e = event as { toolName?: string; input?: unknown; isError?: boolean };
+          const actualName = resolveActualToolName(e.toolName, e.input) ?? e.toolName ?? "";
+          const actualArgs = resolveActualToolArgs(e.toolName, e.input) ?? e.input ?? {};
+          for (const n of await opts.extensionHost.runToolResult(actualName, actualArgs, e.isError === true)) pendingPreToolNotes.push(n);
+        }
+
         // T102: counted before anything else and affecting nothing — this is
         // a measurement, not a policy. It reads the event rather than the
         // clamped result, because the clamp may have replaced a re-read with

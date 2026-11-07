@@ -461,6 +461,36 @@ describe("T220 ACCEPTANCE: a denied write to a sealed path is a tamper attempt",
     });
   });
 
+  it("T232: a restored sealed path raises SEALED-EDIT, is listed as an attempt, and points the coordinator at the seal", async () => {
+    const run = implementer(() => [
+      { branch: sealed, kind: "restored", paths: ["test/add.test.mjs"], detail: { flag: "SEALED-EDIT", source: "tool_result", by: "the bash call" } },
+    ]);
+    await withServer(ws, run, async (client) => {
+      const { r } = await call(client, { specialist: "implementer", base: sealed });
+      const flags = (r.flags as Array<{ flag: string; files?: string[] }> | undefined) ?? [];
+      const edit = flags.find((f) => f.flag === "SEALED-EDIT");
+      assert.ok(edit, JSON.stringify(r));
+      assert.deepEqual(edit.files, ["test/add.test.mjs"]);
+      assert.equal(r.seal?.status, "tamper_attempted", JSON.stringify(r));
+      assert.deepEqual(r.seal?.attempts?.map((a) => [a.tool, a.paths]), [["restore", ["test/add.test.mjs"]]]);
+      assert.equal(r.next, "inspect_seal");
+    });
+  });
+
+  it("T232: a veto raises SEALED-EDIT too, and a session with no veto and no restore raises nothing (R22)", async () => {
+    const vetoed = implementer(() => [{ branch: sealed, kind: "vetoed", paths: ["test/add.test.mjs"], detail: "bash echo x > test/add.test.mjs" }]);
+    await withServer(ws, vetoed, async (client) => {
+      const { r } = await call(client, { specialist: "implementer", base: sealed });
+      assert.ok((r.flags as Array<{ flag: string }> | undefined)?.some((f) => f.flag === "SEALED-EDIT"), JSON.stringify(r));
+    });
+    // A coordinator's reseal is not a session edit: the session recorded nothing, and nothing is raised.
+    await withServer(ws, implementer(() => []), async (client) => {
+      const { r } = await call(client, { specialist: "implementer", base: sealed });
+      assert.ok(!((r.flags as Array<{ flag: string }> | undefined) ?? []).some((f) => f.flag === "SEALED-EDIT"), JSON.stringify(r));
+      assert.equal(r.seal?.status, "intact", JSON.stringify(r));
+    });
+  });
+
   it("the child records a denied action that touches a sealed path in the ledger, and no other denial", async () => {
     const input = new PassThrough();
     const lines: string[] = [];

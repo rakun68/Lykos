@@ -92,6 +92,24 @@ describe("T256: confirmed quiescence", () => {
     l.close();
   });
 
+  it("T232: the session's own process confirming its end ignores its owner row and the records it names, and nothing else", async () => {
+    const l = ledger();
+    ownerRow(l, "s2b", process.pid, 0);
+    l.recordProcess({ kind: "child", sessionId: "s2b", pid: process.pid, command: "session-child" });
+    l.recordProcess({ kind: "container", sessionId: "s2b", pid: 0, command: "docker" });
+    const own = (r: { kind: string; pid: number }): boolean => r.kind === "container" || (r.kind === "child" && r.pid === process.pid);
+    assert.equal((await confirmQuiescence(l, "s2b", { driverFor: () => ({ listContainers: async () => [], removeContainer: async () => {} }) })).quiet, false, "without the option, the session is its own stray");
+    assert.equal((await confirmQuiescence(l, "s2b", { ignoreOwner: true, ignoreRecord: own })).quiet, true);
+
+    const stray = sleeper();
+    l.recordProcess({ kind: "child", sessionId: "s2b", pid: stray.pid!, command: "stray" });
+    const q = await confirmQuiescence(l, "s2b", { ignoreOwner: true, ignoreRecord: own });
+    assert.deepEqual(q, { quiet: false, notStopped: [{ kind: "child", pid: stray.pid, liveness: "alive" }] }, "a process the session started still counts");
+    stray.kill("SIGKILL");
+    await exited(stray);
+    l.close();
+  });
+
   it("a guard killed while its command runs is not stopped until the command is gone", async () => {
     const l = ledger();
     const started = startGuard(process.execPath, SLEEPER, {
