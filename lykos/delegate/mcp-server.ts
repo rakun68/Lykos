@@ -31,6 +31,7 @@ import { baselineSummary } from "./baseline.js";
 import { contextPackSummary } from "./context-pack.js";
 import { judgedClaimsOf } from "./claims.js";
 import { judgeSessionClaims } from "./session-claims.js";
+import { specCheckOf } from "./spec-check.js";
 import { CAUSES, DECISIONS, decideAt, decisionsOf, findingDecisionsOf } from "./decisions.js";
 import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
@@ -147,6 +148,7 @@ const TaskInputShape = {
   reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
   files: z.array(z.string().min(1)).optional().describe("T248: the files the task is about. A new session is given a context pack built from them: the project's rules and traps, the glossary terms the task uses, the docs naming them, their recent history and related tests, read at the base commit with absolute paths, and recorded in the ledger."),
   test: z.string().min(1).optional().describe("T248: the exact verification command the session may run; it is in the context pack."),
+  rulings_from: z.array(z.string().min(1)).optional().describe("T259: sessions whose spec-check rulings bind this one. A new session is handed them after its brief, as the coordinator's answers to the points the implementer could not decide; a reviewer names the implementer it reviews."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -176,6 +178,7 @@ const StartInputShape = {
   reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
   files: z.array(z.string().min(1)).optional().describe("T248: the files the task is about. A new session is given a context pack built from them: the project's rules and traps, the glossary terms the task uses, the docs naming them, their recent history and related tests, read at the base commit with absolute paths, and recorded in the ledger."),
   test: z.string().min(1).optional().describe("T248: the exact verification command the session may run; it is in the context pack."),
+  rulings_from: z.array(z.string().min(1)).optional().describe("T259: sessions whose spec-check rulings bind this one. A new session is handed them after its brief, as the coordinator's answers to the points the implementer could not decide; a reviewer names the implementer it reviews."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -227,6 +230,7 @@ const SpecialistInputShape = {
   reseal: z.string().min(1).optional().describe("T254 (R9), with session_id: the commit on the session's branch that corrects a sealed test. The branch is sealed again there before the session continues."),
   files: z.array(z.string().min(1)).optional().describe("T248: the files the task is about. A new session is given a context pack built from them: the project's rules and traps, the glossary terms the task uses, the docs naming them, their recent history and related tests, read at the base commit with absolute paths, and recorded in the ledger."),
   test: z.string().min(1).optional().describe("T248: the exact verification command the session may run; it is in the context pack."),
+  rulings_from: z.array(z.string().min(1)).optional().describe("T259: sessions whose spec-check rulings bind this one. A new session is handed them after its brief, as the coordinator's answers to the points the implementer could not decide; a reviewer names the implementer it reviews."),
   containment: z
     .enum(["off", "auto", "required"])
     .optional()
@@ -293,6 +297,8 @@ type TaskInput = {
   /** T248: the files the task is about and its verification command; the child builds the context pack from them. */
   files?: string[] | undefined;
   test?: string | undefined;
+  /** T259: sessions whose spec-check rulings bind this one; a new session is handed them after its brief. */
+  rulings_from?: string[] | undefined;
   /** T243, `lykos run` only: the interaction mode, and the session fields the CLI carries. */
   mode?: InteractionMode | undefined;
   cli?: SessionRequest["cli"] | undefined;
@@ -929,6 +935,18 @@ async function buildSessionOutcomeResult(
             shellPath: config.delegation.shell_path,
           })
         : undefined;
+    // T259: the spec check the session recorded before its first edit, with its points and the rulings. A session that
+    // recorded none made no edit (the harness refused them), so there is nothing to show.
+    const specCheck =
+      !isRefused && targetSessionId !== undefined
+        ? (() => {
+            try {
+              return withLedgerSync(ledgerPath, (ledger) => specCheckOf(ledger, targetSessionId));
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined;
     const flags: SessionFlag[] = [];
     if (!isRefused) {
       if (!isEffectiveReadOnly) {
@@ -1040,6 +1058,7 @@ async function buildSessionOutcomeResult(
       next: nextToken,
       ...(flags.length > 0 ? { flags } : {}),
       ...(judged !== undefined ? { claims: judged.claims } : {}),
+      ...(specCheck !== undefined ? { spec_check: specCheck } : {}),
       ...(verification !== undefined ? { verification } : {}),
       ...(diffStat !== undefined ? { diff_stat: diffStat } : {}),
       ...(outcome && "containment" in outcome && outcome.containment ? { containment: outcome.containment } : {}),
@@ -1262,6 +1281,7 @@ async function startTrackedSession(
       ? { context: { files: args.files ?? [], ...(args.test !== undefined ? { test: args.test } : {}) } }
       : {}),
     ...(args.reseal !== undefined && args.session_id !== undefined ? { reseal: args.reseal } : {}),
+    ...(args.rulings_from !== undefined && args.rulings_from.length > 0 && args.session_id === undefined ? { rulingsFrom: args.rulings_from } : {}),
     ...(args.cli !== undefined ? { cli: args.cli } : {}),
   };
 
@@ -1523,6 +1543,7 @@ export function ledgerViews(workspace: string, ids?: readonly string[]): Session
       const decisions = decisionsOf(ledger, row.session_id);
       const findings = findingDecisionsOf(ledger, row.session_id);
       const claims = judgedClaimsOf(ledger, row.session_id);
+      const specCheck = specCheckOf(ledger, row.session_id);
       return {
         ...view,
         ...(pack !== undefined ? { context_pack: pack } : {}),
@@ -1530,6 +1551,7 @@ export function ledgerViews(workspace: string, ids?: readonly string[]): Session
         ...(decisions.length > 0 ? { decisions } : {}),
         ...(findings.length > 0 ? { finding_decisions: findings } : {}),
         ...(claims.length > 0 ? { claims } : {}),
+        ...(specCheck !== undefined ? { spec_check: specCheck } : {}),
       };
     }),
   );

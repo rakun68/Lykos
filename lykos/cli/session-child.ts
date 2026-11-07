@@ -14,6 +14,8 @@ import { runResume } from "./resume.js";
 import { sessionInput } from "./run.js";
 import { defaultLedgerPath, openLedger, withLedger, withLedgerSync } from "../ledger/use.js";
 import { recordClaim } from "../delegate/claims.js";
+import { ledgerSpecCheck, renderRulings, rulingsOf } from "../delegate/spec-check.js";
+import { loadConfig } from "../config/load.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { stderrWrite } from "../tui/io-mode.js";
@@ -358,6 +360,30 @@ async function sealBeforeModel(
   return { outcome: "error", message: `${sealedNow.message ?? "seal creation refused"}${output}`, next: "fix_environment" };
 }
 
+/** `delegation.spec_check`: on unless the project or the user turned it off. */
+function specCheckEnabled(workspace: string): boolean {
+  try {
+    return loadConfig({ cwd: workspace }).resolved.delegation.spec_check !== false;
+  } catch {
+    // A config that cannot be read fails the session elsewhere; the gate stays on.
+    return true;
+  }
+}
+
+/**
+ * T259: the rulings of the sessions named in `rulingsFrom`, as a later reviewer reads them, after its brief. A new
+ * session only: a continuation already has them in its transcript.
+ */
+async function withRulings(request: SessionRequest, prompt: string, ledgerPath: string, progress: (message: string) => void): Promise<string> {
+  if (request.sessionId !== undefined || request.rulingsFrom === undefined || request.rulingsFrom.length === 0) return prompt;
+  const rulings = await withLedger(ledgerPath, async (ledger) => rulingsOf(ledger, request.rulingsFrom!));
+  if (rulings.length === 0) return prompt;
+  progress(`rulings: ${rulings.length} from ${request.rulingsFrom.length} session(s)`);
+  return `${prompt}
+
+${renderRulings(rulings)}`;
+}
+
 /**
  * T248: the context pack of a new session with a task: built from the base commit (the caller's HEAD, or `base`),
  * rooted at the session's own tree so every path in it is one the session can use, and recorded in the ledger before
@@ -466,6 +492,11 @@ async function runRequest(
 
   // T234: claims are filed under the id the caller knows the session by.
   onSessionId?.(ledgerPath, request.sessionId ?? sessionId);
+  // T259 (ADR-0061): a writable session records its spec check before its first edit; the check is filed under the
+  // same id, so a continuation of a session that recorded it is not gated again.
+  if (coordinator !== undefined && !readOnly && specCheckEnabled(request.workspace)) {
+    coordinator.specCheck = ledgerSpecCheck(ledgerPath, request.sessionId ?? sessionId);
+  }
 
   const worked = await withWorkTarget(
     {
@@ -481,7 +512,12 @@ async function runRequest(
       // T254: the seal from `sealed:`, and a reseal, come before any model runs.
       const sealed = await sealBeforeModel(request, target.workTree?.path, ledgerPath, sessionId, env, progress);
       if (sealed !== undefined) return { spec: sealed };
-      const prompt = await withContextPack(request, target.workTree?.path ?? request.workspace, ledgerPath, sessionId, progress);
+      const prompt = await withRulings(
+        request,
+        await withContextPack(request, target.workTree?.path ?? request.workspace, ledgerPath, sessionId, progress),
+        ledgerPath,
+        progress,
+      );
       await recordBaselineFor(request, ledgerPath, sessionId, env, progress);
       const existingCreateSession = deps.sessionExtras?.bootDeps?.createSession;
       const wrappedCreateSession: typeof createAgentSession = async (bootOpts) => {

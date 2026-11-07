@@ -79,6 +79,8 @@ export interface RunCliOptions {
   requestId?: string;
   /** T243: `--base <ref>`, the branch a new worktree starts from. */
   base?: string;
+  /** T259: `--rulings-from <id>[,<id>]`, sessions whose spec-check rulings bind this one. */
+  rulingsFrom?: string[];
 }
 
 /** The env half of `--ask-outcome`. Any value but `0`/`false`/empty counts as on. */
@@ -220,6 +222,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
         ...(opts.specialist !== undefined ? { specialist: opts.specialist } : {}),
         ...(opts.base !== undefined ? { base: opts.base } : {}),
         ...(opts.requestId !== undefined ? { request_id: opts.requestId } : {}),
+        ...(opts.rulingsFrom !== undefined && opts.rulingsFrom.length > 0 ? { rulings_from: opts.rulingsFrom } : {}),
         ...(taskScope !== undefined ? { scope: taskScope } : {}),
         ...(taskContext !== undefined ? { files: taskContext.files, ...(taskContext.test !== undefined ? { test: taskContext.test } : {}) } : {}),
         ...(taskSealed !== undefined ? { sealed: taskSealed.sealed, ...(taskSealed.red ? {} : { red: false }) } : {}),

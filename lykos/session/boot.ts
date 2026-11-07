@@ -70,6 +70,7 @@ import type { InteractionMode } from "../gate/modes.js";
 import {
   type Coordinator,
   CLAIM_TOOL_NAME,
+  SPEC_CHECKED_TOOL_NAME,
   COORDINATOR_ASK_TOOL_NAME,
   COORDINATOR_GIVE_UP_TOOL_NAME,
 } from "../tools/coordinator.js";
@@ -1047,6 +1048,7 @@ async function assembleSession(opts: AssembleOpts): Promise<BootedStandaloneSess
     events,
     extensionHost,
     ...(opts.readOnly === true && opts.readOnlyChildTest?.bypass !== "harness" ? { readOnly: true } : {}),
+    ...(opts.coordinator?.specCheck !== undefined && opts.readOnly !== true ? { specCheck: opts.coordinator.specCheck } : {}),
     ...((neutralHead ? bootArtifacts.toolNames : app.requestToolNames).includes(TASK_LIST_TOOL_NAME) ? { taskList } : {}),
     ...(postEditPolicy.enabled && postEditPolicy.command !== undefined
       ? { postEdit: { policy: postEditPolicy, state: postEditState, events, run: createCommandRunner(executor) } }
@@ -1229,7 +1231,7 @@ ${note}
       }
     }
     if (opts.coordinator !== undefined) {
-      for (const name of [COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME]) {
+      for (const name of [COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME, SPEC_CHECKED_TOOL_NAME]) {
         if (defined.has(name) && !names.includes(name)) {
           names.push(name);
         }

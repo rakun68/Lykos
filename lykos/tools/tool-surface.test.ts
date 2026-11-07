@@ -358,7 +358,7 @@ describe("catalog specialists used in DECISIONS.md T20", () => {
 
 describe('P10.1 registry residency and prompt presence', () => {
   it('every row in the registry carries risk, residency and promptPresence', () => {
-    assert.equal(TOOL_REGISTRY.length, 45);
+    assert.equal(TOOL_REGISTRY.length, 46);
     for (const entry of TOOL_REGISTRY) {
       assert.ok(entry.name && entry.name.length > 0, 'tool has a name');
       assert.ok(entry.rationale && entry.rationale.length > 0, entry.name + ' missing rationale');
@@ -372,7 +372,7 @@ describe('P10.1 registry residency and prompt presence', () => {
     }
   });
   it('every tool named in the spec set has a row', () => {
-    const expected = ['read', 'bash', 'edit', 'write', 'commit', 'agent', 'get_subagent_result', 'steer_subagent', 'grep', 'find', 'ls', 'powershell', 'subagent_workflow', 'glob', 'ast_grep', 'ast_edit', 'lsp', 'eval', 'github', 'hub', 'checkpoint', 'rewind', 'context_notes', 'new_context', 'manage_skill', 'skill', 'security_scan', 'web_search', 'web_fetch', 'yield', 'goal', 'think', 'retain', 'recall', 'reflect', 'memory_edit', 'learn', 'todo', 'ask', 'exit_plan', 'tool_search', 'tool_call', 'ask_coordinator', 'give_up', 'claim'];
+    const expected = ['read', 'bash', 'edit', 'write', 'commit', 'agent', 'get_subagent_result', 'steer_subagent', 'grep', 'find', 'ls', 'powershell', 'subagent_workflow', 'glob', 'ast_grep', 'ast_edit', 'lsp', 'eval', 'github', 'hub', 'checkpoint', 'rewind', 'context_notes', 'new_context', 'manage_skill', 'skill', 'security_scan', 'web_search', 'web_fetch', 'yield', 'goal', 'think', 'retain', 'recall', 'reflect', 'memory_edit', 'learn', 'todo', 'ask', 'exit_plan', 'tool_search', 'tool_call', 'ask_coordinator', 'give_up', 'claim', 'spec_checked'];
     const registered = TOOL_REGISTRY.map((e) => e.name);
     assert.deepEqual(registered, expected);
   });
@@ -382,7 +382,7 @@ describe('P10.1 registry residency and prompt presence', () => {
     // P10.7 (ticket 12): `web_search` and `web_fetch` moved off -> resident,
     // where the registry already had their rows, so they appear in registry
     // order rather than at the end.
-    const expectedResident = ['read', 'bash', 'edit', 'write', 'commit', 'grep', 'powershell', 'glob', 'web_search', 'web_fetch', 'todo', 'ask', 'exit_plan', 'tool_search', 'tool_call', 'ask_coordinator', 'give_up', 'claim'];
+    const expectedResident = ['read', 'bash', 'edit', 'write', 'commit', 'grep', 'powershell', 'glob', 'web_search', 'web_fetch', 'todo', 'ask', 'exit_plan', 'tool_search', 'tool_call', 'ask_coordinator', 'give_up', 'claim', 'spec_checked'];
     assert.deepEqual(residentNames, expectedResident);
     for (const row of resident) {
       assert.equal(row.promptPresence, 'full', row.name + ' resident tool should have full prompt presence');

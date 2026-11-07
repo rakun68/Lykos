@@ -323,6 +323,17 @@ _Avoid_: result, status
 The mark on a claim verdict whose check ran on this machine because containment was off, on a project the user's trust store
 holds. A project it does not hold is `unchecked` instead.
 
+**Spec check**:
+The first step of a writable delegated session: it records, with the `spec_checked` tool, the points of the task it
+cannot decide alone (none, when the task is clear) and asks each of the coordinator. The harness refuses every edit, write
+and shell write until it is recorded. It is a step of the implementer, not a session of its own.
+_Avoid_: spec-check session, pre-flight
+
+**Ruling**:
+The coordinator's answer to a point of a spec check. It binds the session that asked and, in a cycle, every later reviewer,
+who is handed it and does not report a point as a defect because it follows a ruling.
+_Avoid_: decision (that is accept, reject, merged or discard), answer (any reply to a question)
+
 **Red outcome**:
 What the red check found at the writer commit: `failing`, `failing-exit-only` (the weaker guarantee), `passing`
 (WEAK-SPEC: the spec asks for nothing) or `error`.

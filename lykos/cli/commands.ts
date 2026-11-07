@@ -687,6 +687,7 @@ export const COMMANDS: readonly Command[] = [
       "            `lykos run --interactive` (or `lykos` with no args) starts the standalone terminal UI",
       "            `lykos run task.md`: a task file (frontmatter files/sealed/test/scope/red/steps/issue, then the brief)",
       "            [--max-steps n] the step cap; [--request-id id] a retry with the same id finds its session; [--base ref]",
+      "            [--rulings-from id[,id]] sessions whose spec-check rulings bind this one (a reviewer names the implementer it reviews)",
       "            A delegated run blocks until the result and prints it as JSON with `next` (T243)",
     ],
     run: async (rest, { cwd }) => {
@@ -786,7 +787,9 @@ export const COMMANDS: readonly Command[] = [
       }
       const requestId = flagValue(rest, "request-id");
       const base = flagValue(rest, "base");
+      const rulingsFrom = flagValue(rest, "rulings-from");
       return runRun(cwd, prompt, {
+        ...(rulingsFrom !== undefined ? { rulingsFrom: rulingsFrom.split(",").map((s) => s.trim()).filter((s) => s !== "") } : {}),
         ...(taskFile !== undefined ? { taskFile } : {}),
         ...(maxSteps !== undefined ? { maxSteps } : {}),
         ...(requestId !== undefined ? { requestId } : {}),

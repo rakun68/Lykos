@@ -392,6 +392,11 @@ export interface DelegationConfig {
    * `mcp.max_sessions` caps one server too; the smallest wins. Default 4.
    */
   max_sessions?: number;
+  /**
+   * T259 (ADR-0061): a writable delegated session records `spec_checked` before its first edit, write or shell write,
+   * and the harness refuses them until it has. `false` turns the gate off. Default true.
+   */
+  spec_check?: boolean;
 }
 
 /**

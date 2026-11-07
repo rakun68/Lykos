@@ -67,6 +67,8 @@ describe("Ledger", () => {
         // session_baselines joined on T249: the baseline each delegated session was given, and whether it was reused.
         "session_baselines",
         "sessions",
+        // spec_checks joined on T259: the spec check a writable delegated session records before its first edit.
+        "spec_checks",
         "sqlite_sequence",
         "tasks",
         // tree_locks joined on T243: one write-in-place session per tree, across MCP and the CLI.

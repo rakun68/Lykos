@@ -39,6 +39,7 @@ import { resolveActualToolArgs, resolveActualToolName, tierForToolCall } from ".
 import { createCheckpoint, type CheckpointDeps } from "./checkpoint.js";
 import { isFileChangingCall } from "../tools/tool-call.js";
 import type { HookRegistry } from "./hooks.js";
+import { specCheckRefusal } from "../delegate/spec-check.js";
 import { NULL_EVENT_SINK, type LykosEventSink, type LykosExtensionHost } from "../extensions/api.js";
 import {
   isMutatingTool,
@@ -190,6 +191,11 @@ export interface HarnessExtensionOpts {
   readOnly?: boolean;
   /** T199: the extension host for tool_call veto handlers (lykos-seal, etc.). */
   extensionHost?: LykosExtensionHost;
+  /**
+   * T259 (ADR-0061): the session's spec check. While `recorded()` is false, every edit, write and shell write is
+   * blocked on Pi's `tool_call` with the reason (`specCheckRefusal`). Absent: no gate.
+   */
+  specCheck?: { recorded(): boolean };
   /** Test seam. Defaults to the real environment. */
   env?: NodeJS.ProcessEnv;
 }
@@ -284,6 +290,16 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
             return { block: true, reason: readOnlyRefusal(resolveActualToolName(e.toolName, e.input) ?? name) };
           }
           return undefined;
+        });
+      }
+
+      // T259: until the spec check is recorded, nothing that changes the repository runs.
+      if (opts.specCheck !== undefined) {
+        const gate = opts.specCheck;
+        pi.on("tool_call", (event) => {
+          const e = event as { toolName?: string; input?: unknown };
+          const reason = specCheckRefusal(e.toolName, e.input);
+          return reason === undefined || gate.recorded() ? undefined : { block: true, reason };
         });
       }
 

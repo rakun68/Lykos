@@ -52,8 +52,10 @@ import {
   type Coordinator,
   buildCoordinatorAskTool,
   buildClaimTool,
+  buildSpecCheckedTool,
   buildCoordinatorGiveUpTool,
   CLAIM_TOOL_NAME,
+  SPEC_CHECKED_TOOL_NAME,
   COORDINATOR_ASK_TOOL_NAME,
   COORDINATOR_GIVE_UP_TOOL_NAME,
 } from "./coordinator.js";
@@ -676,6 +678,7 @@ export function loadTools(names: readonly string[], deps: LoadToolsDeps): Loaded
           buildCoordinatorAskTool(deps.coordinator),
           buildCoordinatorGiveUpTool(deps.coordinator),
           ...(deps.coordinator.claim !== undefined ? [buildClaimTool(deps.coordinator)] : []),
+          ...(deps.coordinator.specCheck !== undefined ? [buildSpecCheckedTool(deps.coordinator)] : []),
         ]
       : []),
   ];
@@ -698,6 +701,7 @@ export function loadTools(names: readonly string[], deps: LoadToolsDeps): Loaded
     if (!activeToolNames.includes(COORDINATOR_ASK_TOOL_NAME)) activeToolNames.push(COORDINATOR_ASK_TOOL_NAME);
     if (!activeToolNames.includes(COORDINATOR_GIVE_UP_TOOL_NAME)) activeToolNames.push(COORDINATOR_GIVE_UP_TOOL_NAME);
     if (deps.coordinator.claim !== undefined && !activeToolNames.includes(CLAIM_TOOL_NAME)) activeToolNames.push(CLAIM_TOOL_NAME);
+    if (deps.coordinator.specCheck !== undefined && !activeToolNames.includes(SPEC_CHECKED_TOOL_NAME)) activeToolNames.push(SPEC_CHECKED_TOOL_NAME);
   }
 
   return {

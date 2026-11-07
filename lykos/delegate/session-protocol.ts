@@ -91,6 +91,11 @@ export interface SessionRequest {
    * the base commit, with absolute paths, and recorded in the ledger. A continuation already has its pack.
    */
   context?: { files: string[]; test?: string };
+  /**
+   * T259: sessions whose spec-check rulings bind this one. A new session is handed them after its brief; a reviewer in a
+   * cycle names the implementer it reviews.
+   */
+  rulingsFrom?: string[];
   /** T243: what `lykos run` carries that an MCP call does not. */
   cli?: {
     tools?: string[];
@@ -429,6 +434,7 @@ export function parseRequest(line: string): SessionRequest | undefined {
   if (v.cli !== undefined && (typeof v.cli !== "object" || v.cli === null || Array.isArray(v.cli))) return undefined;
   if (v.sealed !== undefined && !(Array.isArray(v.sealed) && v.sealed.every((p) => typeof p === "string" && p !== ""))) return undefined;
   if (v.red !== undefined && typeof v.red !== "boolean") return undefined;
+  if (v.rulingsFrom !== undefined && !(Array.isArray(v.rulingsFrom) && v.rulingsFrom.every((s) => typeof s === "string" && s !== ""))) return undefined;
   if (v.reseal !== undefined && (typeof v.reseal !== "string" || v.reseal === "")) return undefined;
   if (v.context !== undefined) {
     const c = v.context as Partial<NonNullable<SessionRequest["context"]>> | null;

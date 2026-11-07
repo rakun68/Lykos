@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { ASK_TOOL_NAME } from "./ask.js";
-import { COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME } from "./coordinator.js";
+import { COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME, SPEC_CHECKED_TOOL_NAME } from "./coordinator.js";
 import { classifyCommandRisk, type CommandRisk } from "../gate/command-safety.js";
 import { INTERACTION_MODES, decideForMode, tierForAction, type GatedAction, type InteractionMode } from "../gate/modes.js";
 import { EXIT_PLAN_TOOL_NAME } from "./plan-tool.js";
@@ -82,7 +82,7 @@ describe("T107.1 every tool the agent can call declares a tier", () => {
   it("keeps LYKOS_TOOL_RISKS keyed by the real exported tool names, so a rename cannot drift", () => {
     assert.deepEqual(
       Object.keys(LYKOS_TOOL_RISKS).sort(),
-      [ASK_TOOL_NAME, EXIT_PLAN_TOOL_NAME, TASK_LIST_TOOL_NAME, TOOL_SEARCH_TOOL_NAME, TOOL_CALL_TOOL_NAME, COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME].sort(),
+      [ASK_TOOL_NAME, EXIT_PLAN_TOOL_NAME, TASK_LIST_TOOL_NAME, TOOL_SEARCH_TOOL_NAME, TOOL_CALL_TOOL_NAME, COORDINATOR_ASK_TOOL_NAME, COORDINATOR_GIVE_UP_TOOL_NAME, CLAIM_TOOL_NAME, SPEC_CHECKED_TOOL_NAME].sort(),
     );
   });
 

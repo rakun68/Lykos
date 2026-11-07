@@ -16,6 +16,7 @@ export const RUN_VALUED_FLAGS = [
   "max-steps",
   "request-id",
   "base",
+  "rulings-from",
 ] as const;
 
 /** Flags on `lykos run` that take no value. Any other flag is an error (R19). */

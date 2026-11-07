@@ -747,6 +747,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateBaselines(db);
   migrateDecisions(db);
   migrateClaims(db);
+  migrateSpecChecks(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -1015,6 +1016,20 @@ function migrateClaims(db: Database.Database): void {
       checked_at   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_claims_session ON claims(session_id);
+  `);
+}
+
+/**
+ * T259: the spec check a writable delegated session records before its first edit (`spec_checked`, ADR-0061): one row
+ * per session, the points it could not decide alone and the coordinator's ruling on each (`points_json`).
+ */
+function migrateSpecChecks(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS spec_checks (
+      session_id   TEXT PRIMARY KEY,
+      recorded_at  TEXT NOT NULL,
+      points_json  TEXT NOT NULL
+    );
   `);
 }
 

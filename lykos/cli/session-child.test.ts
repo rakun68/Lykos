@@ -455,7 +455,8 @@ describe("the engine reports the id of a session that failed partway (T181, stor
 });
 
 describe("a writing call works on a branch of its own and a continuation adds to it (T184, stories 42-47)", () => {
-  const QUIET = "feedback:\n  enabled: false\ngate:\n  enabled: false\n";
+  // These tests are about the branch and the work, not the spec check (T259): the session writes at once.
+  const QUIET = "feedback:\n  enabled: false\ngate:\n  enabled: false\ndelegation:\n  spec_check: false\n";
   const gitIn = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true }).trim();
 
   /** One call through the child on the real engine, with a scripted model, against `workspace`. */
@@ -690,7 +691,7 @@ export default function (pi) {
           ".pi/settings.json": JSON.stringify({ npmCommand: [process.execPath, fakeNpm], packages: ["npm:lykos-t183-package@1.0.0"] }),
         },
         config:
-          "feedback:\n  enabled: false\ngate:\n  enabled: false\nextensions:\n  - { name: lykos-prune }\n" +
+          "feedback:\n  enabled: false\ngate:\n  enabled: false\ndelegation:\n  spec_check: false\nextensions:\n  - { name: lykos-prune }\n" +
           "  - { name: demo-user-ext, version: 1.0.0 }\n  - { name: demo-project-ext, version: 1.0.0 }\n" +
           // A project credential that is a command: Pi would run it on the host when it resolves the key.
           'providers:\n  deepseek:\n    auth: api_key\n    source: "!echo project-command"\n',

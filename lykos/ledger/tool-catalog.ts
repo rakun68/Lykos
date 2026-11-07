@@ -1017,6 +1017,13 @@ export const TOOL_CATALOG: Record<string, CatalogTool> = {
       ["text", "check"],
     ),
   },
+  spec_checked: {
+    name: "spec_checked",
+    source: "lykos",
+    description:
+      "Your first step: record your reading of the task before you change anything. List in `undecided` every point you cannot decide alone (a missing acceptance criterion, unclear scope, no test command, a sealed test that contradicts the task), or pass [] when nothing is unclear. Each point is asked of the coordinator now and its answer is a ruling that binds you and every later reviewer. Until this is recorded, every edit, write and shell command that is not a plain read is refused. Use give_up instead for a point that blocks all work.",
+    parameters: objectSchema({ undecided: strArray("The points you cannot decide alone. [] when the task is clear.") }, ["undecided"]),
+  },
   yield: {
     name: "yield",
     source: "lykos",
