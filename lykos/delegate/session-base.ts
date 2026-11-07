@@ -11,8 +11,22 @@ export function commitOf(repo: string, ref: string): string | undefined {
 }
 
 /** Stores the base of a session's first run. A continuation keeps the first one. */
-export function recordSessionBase(ledger: Ledger, sessionId: string, base: string): void {
-  ledger.db.prepare("INSERT OR IGNORE INTO session_bases (session_id, base_commit, recorded_at) VALUES (?, ?, ?)").run(sessionId, base, new Date().toISOString());
+export function recordSessionBase(ledger: Ledger, sessionId: string, base: string, modelPath?: string): void {
+  ledger.db
+    .prepare("INSERT OR IGNORE INTO session_bases (session_id, base_commit, recorded_at, model_path) VALUES (?, ?, ?, ?)")
+    .run(sessionId, base, new Date().toISOString(), modelPath ?? null);
+}
+
+/**
+ * The full model path a session ran on (`provider/model`): the one it was started with, else the session row's, or undefined when none was recorded. A session's `model` column
+ * holds the bare id, which names the wrong provider when a continuation resolves it again; a continuation that must keep
+ * the model names this one (T236: the review cycle's fixer and recheck, and `lykos recover`).
+ */
+export function sessionModelPath(ledger: Ledger, sessionId: string): string | undefined {
+  const asked = ledger.db.prepare("SELECT model_path FROM session_bases WHERE session_id = ?").get(sessionId) as { model_path: string | null } | undefined;
+  if (asked?.model_path != null) return asked.model_path;
+  const row = ledger.db.prepare("SELECT model_path FROM sessions WHERE id = ?").get(sessionId) as { model_path: string | null } | undefined;
+  return row?.model_path ?? undefined;
 }
 
 /** The base a session started from, or undefined for one that predates the record. */

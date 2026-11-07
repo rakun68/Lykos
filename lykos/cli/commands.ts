@@ -871,7 +871,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "recover",
-    help: ["  recover   `lykos recover <id> [-m <message|->]`: continue a crashed delegated session once everything it started is stopped (JSON)"],
+    help: ["  recover   `lykos recover <session-id|cycle-id> [-m <message|->]`: continue a crashed delegated session or review cycle once everything it started is stopped (JSON)"],
     run: async (rest, { cwd }) => {
       const { runRecover } = await import("./delegation.js");
       return runRecover(cwd, rest);
@@ -883,6 +883,16 @@ export const COMMANDS: readonly Command[] = [
     run: async (rest, { cwd }) => {
       const { runReview } = await import("./delegation.js");
       return runReview(cwd, rest);
+    },
+  },
+  {
+    name: "cycle",
+    help: [
+      "  cycle     `lykos cycle <session-id|cycle-id> [--task file] [-m note|-] [--add text] [--forward ids] [--drop ids]`: review, fix and recheck a session's change until it is approved or needs you (JSON, `next` is the stop)",
+    ],
+    run: async (rest, { cwd }) => {
+      const { runCycleCommand } = await import("./delegation.js");
+      return runCycleCommand(cwd, rest);
     },
   },
   {

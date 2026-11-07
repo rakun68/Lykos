@@ -229,6 +229,17 @@ const ReviewInputShape = {
   request_id: z.string().min(1).optional().describe("Your id for this request. A retry with the same id finds the reviewer it started instead of starting another."),
 };
 
+const CycleInputShape = {
+  target: z.string().min(1).describe("The session id whose change to review and fix, to start a cycle; or the cycle id (cycle-xxxxxxxx) of one that stopped, to resume it."),
+  task: z.string().min(1).optional().describe("A task file (path, relative to the project) whose body, scope and files the change is judged against."),
+  note: z.string().optional().describe("A note to the reviewer; or, for a cycle stopped on answer_question, your answer to the question."),
+  base: z.string().min(1).optional().describe("The commit the work started from. Default: the base stored with the session."),
+  max_steps: z.number().int().positive().optional().describe("Stop each session the cycle starts after this many model turns. Default: no cap."),
+  add: z.string().min(1).optional().describe("One more item for the fixer, whatever the review finds."),
+  forward: z.array(z.string().min(1)).optional().describe("Finding ids left to triage that go to the fixer (resume only)."),
+  drop: z.array(z.string().min(1)).optional().describe("Finding ids left to triage that are set aside (resume only)."),
+};
+
 const SpecialistInputShape = {
   brief: z.string().min(1).describe("The task to delegate: a specific, self-contained brief."),
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
@@ -267,7 +278,7 @@ interface TrackedSession {
   startTime: number;
   endTime?: number | undefined;
   abortController: AbortController;
-  stoppedReason?: "stopped: lykos_stop" | "stopped: server shutdown" | undefined;
+  stoppedReason?: "stopped: lykos_stop" | "stopped: server shutdown" | "stopped: question unanswered" | undefined;
   runnerPromise: Promise<void>;
   builtResult?: Record<string, unknown> | undefined;
   onSteer?: ((message: string) => void | Promise<void>) | undefined;
@@ -279,6 +290,8 @@ interface TrackedSession {
   ownedId: string;
   ownerKind: OwnerKind;
   isBlocking: boolean;
+  /** T236: false in a review cycle. A question nobody answers in time then stops the session; it is never decided alone. */
+  decideAlone: boolean;
   pendingQuestion?: string | undefined;
   unansweredQuestions: string[];
   askTimeoutTimer?: NodeJS.Timeout | undefined;
@@ -311,6 +324,8 @@ type TaskInput = {
   rulings_from?: string[] | undefined;
   /** T235, `lykos review` only: the session records findings. */
   review?: true | undefined;
+  /** T236, the review cycle only: `false` stops the session when its question times out, instead of letting it decide alone. */
+  decide_alone?: false | undefined;
   /** T243, `lykos run` only: the interaction mode, and the session fields the CLI carries. */
   mode?: InteractionMode | undefined;
   cli?: SessionRequest["cli"] | undefined;
@@ -379,6 +394,7 @@ const DECIDE_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: fa
 
 /** A review starts a read-only session and has the harness run its findings' checks, which run project code in temporary worktrees. */
 const REVIEW_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+const CYCLE_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
 
 function taskHints(readOnly: boolean | undefined): ToolAnnotations {
   return readOnly === true ? READER_HINTS : WRITER_HINTS;
@@ -1086,6 +1102,9 @@ async function buildSessionOutcomeResult(
       ...(outcome && "denied" in outcome && outcome.denied ? { denied: outcome.denied } : {}),
       ...(outcome && "refusals" in outcome && outcome.refusals ? { refusals: outcome.refusals } : {}),
       ...(unansweredQuestions && unansweredQuestions.length > 0 ? { unanswered_questions: unansweredQuestions } : {}),
+      // T236 (G3, G4): a run that ended in an error (a provider outage mid-run) on a session that already has an ended row
+      // is otherwise read from that row, as a run that finished. The error is said here, so a cycle never treats it as one.
+      ...(outcome?.outcome === "error" && finalOutcome !== "error" && stoppedReason === undefined ? { runner_error: outcome.message } : {}),
     };
 
     if (hasSealsReport) {
@@ -1268,7 +1287,7 @@ async function startTrackedSession(
     diffBase = withLedgerSync(ledgerPath, (ledger) => {
       if (args.session_id !== undefined) return sessionBaseOf(ledger, args.session_id) ?? diffBase;
       const sha = diffBase !== undefined ? commitOf(workspace, diffBase) : undefined;
-      if (sha !== undefined) recordSessionBase(ledger, targetSessionId, sha);
+      if (sha !== undefined) recordSessionBase(ledger, targetSessionId, sha, args.model);
       return diffBase;
     });
   } catch {
@@ -1337,6 +1356,7 @@ async function startTrackedSession(
     queuedSteers: [],
     listeners: [],
     isBlocking,
+    decideAlone: args.decide_alone !== false,
     unansweredQuestions: [],
     ownedId: targetSessionId,
     ownerKind: owner.kind,
@@ -1652,6 +1672,14 @@ function handleSessionQuestion(sessionEntry: TrackedSession, question: string, w
   } catch {}
 
   sessionEntry.askTimeoutTimer = setTimeout(() => {
+    if (sessionEntry.state === "waiting" && !sessionEntry.decideAlone) {
+      // T236 (spec decision 18): in a cycle nobody decides alone. The question stays open in the ledger, the session
+      // stops, and the cycle reports `answer_question`.
+      sessionEntry.unansweredQuestions.push(question);
+      sessionEntry.stoppedReason = "stopped: question unanswered";
+      sessionEntry.abortController.abort();
+      return;
+    }
     if (sessionEntry.state === "waiting") {
       sessionEntry.state = "running";
       sessionEntry.pendingQuestion = undefined;
@@ -2100,6 +2128,39 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
           ...(args.base !== undefined ? { base: args.base } : {}),
           ...(args.max_steps !== undefined ? { maxSteps: args.max_steps } : {}),
           ...(args.request_id !== undefined ? { requestId: args.request_id } : {}),
+          signal: (extra as unknown as Extra).signal,
+          ...(deps.run !== undefined ? { run: deps.run } : {}),
+        }),
+      );
+    },
+  );
+
+  server.registerTool(
+    "lykos_cycle",
+    {
+      description:
+        "Review a session's change, have the session fix what the review proves, and have the same reviewer recheck, until nothing is open or something needs you, and block until then. A session id starts a cycle; a cycle id resumes one that stopped. The result's `next` is the stop: approve, answer_spec, triage, answer_question, decide or fix_environment. Same as lykos cycle.",
+      inputSchema: CycleInputShape,
+      annotations: CYCLE_HINTS,
+    },
+    async (args, extra) => {
+      let trust: { source: TrustSource };
+      try {
+        trust = await ensureWorkspaceTrust({ workspace: opts.workspace, interactive: false, ...(deps.trustPath !== undefined ? { trustPath: deps.trustPath } : {}) });
+      } catch (err) {
+        return toResult({ outcome: "blocked", reason: String(err), next: "fix_environment" });
+      }
+      const { runCycle } = await import("./cycle.js");
+      return toResult(
+        await runCycle(opts.workspace, args.target, {
+          trustSource: trust.source,
+          ...(args.task !== undefined ? { taskFile: resolve(opts.workspace, args.task) } : {}),
+          ...(args.note !== undefined ? { note: args.note } : {}),
+          ...(args.base !== undefined ? { base: args.base } : {}),
+          ...(args.max_steps !== undefined ? { maxSteps: args.max_steps } : {}),
+          ...(args.add !== undefined ? { add: args.add } : {}),
+          ...(args.forward !== undefined ? { forward: args.forward } : {}),
+          ...(args.drop !== undefined ? { drop: args.drop } : {}),
           signal: (extra as unknown as Extra).signal,
           ...(deps.run !== undefined ? { run: deps.run } : {}),
         }),

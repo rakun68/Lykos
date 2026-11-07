@@ -38,6 +38,10 @@ describe("Ledger", () => {
         "compactions",
         // context_packs joined on T248: the context pack each delegated session was given, as it was given.
         "context_packs",
+        // cycle_rulings, cycle_steps and cycles joined on T236: the review cycle, its steps written before they act, and the answers it was given.
+        "cycle_rulings",
+        "cycle_steps",
+        "cycles",
         // extension_counters joined on T149: a Lykos extension's own numbers.
         // decisions joined on T233: the coordinator's accept, reject, merged and discard on a delegated session.
         "decisions",

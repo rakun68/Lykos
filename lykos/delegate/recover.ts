@@ -14,6 +14,7 @@ import { confirmQuiescence, type Quiescence, type QuiescenceDeps } from "../proc
 import type { Liveness } from "../process/identity.js";
 import { runDelegated } from "./mcp-server.js";
 import { isLive, ownerLiveness, ownerRow, takeOver, type LivenessOf, type OwnerRow } from "./ownership.js";
+import { sessionModelPath } from "./session-base.js";
 import type { SessionRunner } from "./session-protocol.js";
 
 /** The turn a recovered session continues with. */
@@ -25,6 +26,9 @@ export interface RecoverOptions {
   trustSource: TrustSource;
   /** Added to the standard turn. */
   message?: string;
+  /** T236: `false` for a session a review cycle owns; a question nobody answers in time then stops it. */
+  decideAlone?: false;
+  signal?: AbortSignal;
   onProgress?: (line: string) => void;
   /** Tests pass stand-ins. */
   run?: SessionRunner;
@@ -52,6 +56,7 @@ export async function recoverSession(workspace: string, sessionId: string, opts:
   if (!existsSync(ledgerPath)) return refuse(sessionId, `unknown session id: ${sessionId}`, "fix_environment");
   let row: OwnerRow;
   let crashes: number;
+  let modelPath: string | undefined;
   const ledger = openLedgerSync(ledgerPath);
   try {
     const found = ownerRow(ledger, sessionId);
@@ -79,6 +84,7 @@ export async function recoverSession(workspace: string, sessionId: string, opts:
     const taken = takeOver(ledger, row);
     if (!taken.ok) return refuse(sessionId, taken.reason, taken.kind === "lost" ? "wait" : "fix_environment");
     crashes = taken.crashes;
+    modelPath = sessionModelPath(ledger, sessionId);
   } finally {
     ledger.close();
   }
@@ -89,12 +95,16 @@ export async function recoverSession(workspace: string, sessionId: string, opts:
     {
       brief,
       session_id: sessionId,
+      // The model it ran on, by its full path: the bare id the ledger shows would name the wrong provider.
+      ...(modelPath !== undefined ? { model: modelPath } : {}),
       ...(row.specialist !== null ? { specialist: row.specialist } : {}),
       ...(row.write_in_place === 1 ? { write_in_place: true } : {}),
+      ...(opts.decideAlone === false ? { decide_alone: false as const } : {}),
     },
     {
       trustSource: opts.trustSource,
       adopt: true,
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
       ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
       ...(opts.run !== undefined ? { run: opts.run } : {}),
     },

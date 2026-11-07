@@ -81,7 +81,7 @@ describe("MCP tool hints", () => {
       assert.equal(tools.get(name)?.annotations?.readOnlyHint, true, `${name} is read-only`);
       assert.equal(tools.get(name)?.annotations?.destructiveHint, false, `${name} is not destructive`);
     }
-    for (const name of ["lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session"]) {
+    for (const name of ["lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session", "lykos_cycle"]) {
       assert.equal(tools.get(name)?.annotations?.destructiveHint, false, `${name} is not destructive`);
     }
   });

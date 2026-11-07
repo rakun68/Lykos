@@ -749,6 +749,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateClaims(db);
   migrateSpecChecks(db);
   migrateFindings(db);
+  migrateCycles(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -1054,6 +1055,61 @@ function migrateFindings(db: Database.Database): void {
       checked_at    TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_findings_session ON findings(session_id);
+  `);
+  // T236: the model a session was started with, by its full path, for the continuations a cycle makes.
+  const bases = new Set((db.prepare(`PRAGMA table_info(session_bases)`).all() as Array<{ name: string }>).map((c) => c.name));
+  if (!bases.has("model_path")) db.exec(`ALTER TABLE session_bases ADD COLUMN model_path TEXT`);
+}
+
+/**
+ * T236 (spec decision 13): the review cycle. One `cycles` row per cycle, owned like a session (the process holding it,
+ * by pid and the time of the record), and one `cycle_steps` row per step, written as `started` before the step acts and
+ * finished after. A step that starts a session carries `request_id` = cycle id + step id, which `owner_requests` also
+ * holds, so a recovered cycle finds that step's session instead of starting another. `cycle_rulings` holds the
+ * coordinator's answers to the questions a cycle's sessions asked.
+ */
+function migrateCycles(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cycles (
+      id                    TEXT PRIMARY KEY,
+      target_session        TEXT NOT NULL,
+      branch                TEXT NOT NULL,
+      base_commit           TEXT NOT NULL,
+      options_json          TEXT NOT NULL,
+      owner_pid             INTEGER NOT NULL,
+      owner_recorded_at_ms  INTEGER NOT NULL,
+      state                 TEXT NOT NULL,
+      stop                  TEXT,
+      started_at            TEXT NOT NULL,
+      ended_at              TEXT,
+      crashes               INTEGER NOT NULL DEFAULT 0,
+      result_json           TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cycles_target ON cycles(target_session);
+    CREATE TABLE IF NOT EXISTS cycle_steps (
+      cycle_id     TEXT NOT NULL,
+      seq          INTEGER NOT NULL,
+      step_id      TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      round        INTEGER NOT NULL,
+      state        TEXT NOT NULL,
+      request_id   TEXT,
+      session_id   TEXT,
+      started_at   TEXT NOT NULL,
+      ended_at     TEXT,
+      input_json   TEXT,
+      result_json  TEXT,
+      PRIMARY KEY (cycle_id, seq)
+    );
+    CREATE TABLE IF NOT EXISTS cycle_rulings (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      cycle_id     TEXT NOT NULL,
+      session_id   TEXT NOT NULL,
+      question     TEXT NOT NULL,
+      ruling       TEXT NOT NULL,
+      ts           TEXT NOT NULL,
+      UNIQUE (cycle_id, session_id, question)
+    );
   `);
 }
 

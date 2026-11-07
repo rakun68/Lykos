@@ -102,13 +102,24 @@ export function findingDecisionsOf(ledger: Ledger, sessionId: string): FindingDe
 }
 
 /**
- * The review's decision on one finding: forwarded (it blocks), dropped, or retired. `lykos review` (T235, `review.ts`)
- * records `forwarded` and `dropped`; `retired` and the cycle id are the review cycle's (T236).
+ * The review's decision on one finding: forwarded (it blocks), dropped, or retired (a fix cleared it). `lykos review`
+ * (T235, `review.ts`) records `forwarded` and `dropped`; the review cycle (T236) adds `retired` and its `cycle_id`.
+ *
+ * Recording is idempotent: when the finding's latest row in the same cycle already says the same action, that row is
+ * returned and nothing is written. A retried review or a recovered cycle judges its findings again and must not append
+ * the same decision twice; a changed action (forwarded, then retired, then forwarded again) is a new row.
  */
 export function recordFindingDecision(
   ledger: Ledger,
   input: { sessionId: string; cycleId?: string | undefined; findingId: string; action: FindingAction; reason: string },
 ): FindingDecisionRow {
+  const latest = ledger.db
+    .prepare(
+      `SELECT id, ts, session_id, cycle_id, finding_id, action, reason FROM finding_decisions
+       WHERE session_id = ? AND finding_id = ? AND cycle_id IS ? ORDER BY id DESC LIMIT 1`,
+    )
+    .get(input.sessionId, input.findingId, input.cycleId ?? null) as FindingDecisionRow | undefined;
+  if (latest !== undefined && latest.action === input.action) return latest;
   const ts = new Date().toISOString();
   const info = ledger.db
     .prepare("INSERT INTO finding_decisions (ts, session_id, cycle_id, finding_id, action, reason) VALUES (?, ?, ?, ?, ?, ?)")

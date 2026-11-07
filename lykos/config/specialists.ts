@@ -250,7 +250,7 @@ export function specialistToolName(name: string): string {
 }
 
 /** T223: the four asynchronous orchestration MCP tool names. */
-export const ASYNC_TOOL_NAMES: ReadonlySet<string> = new Set(["lykos_start", "lykos_status", "lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session"]);
+export const ASYNC_TOOL_NAMES: ReadonlySet<string> = new Set(["lykos_start", "lykos_status", "lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session", "lykos_cycle"]);
 
 /** Whether a tool name matches one of the reserved asynchronous orchestration tools. */
 export function isReservedAsyncTool(toolName: string): boolean {

@@ -773,7 +773,7 @@ describe("a specialist's containment (T177, ADR-0037)", () => {
 
 describe("specialist tool collision resolution and reserved async tools", () => {
   it("recognizes the reserved async tools", () => {
-    for (const name of ["lykos_start", "lykos_status", "lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session"]) {
+    for (const name of ["lykos_start", "lykos_status", "lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session", "lykos_cycle"]) {
       assert.equal(isReservedAsyncTool(name), true, `${name} must be reserved`);
     }
     assert.equal(isReservedAsyncTool("lykos_implementer"), false);

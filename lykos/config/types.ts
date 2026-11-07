@@ -397,6 +397,14 @@ export interface DelegationConfig {
    * and the harness refuses them until it has. `false` turns the gate off. Default true.
    */
   spec_check?: boolean;
+  /**
+   * T236 (spec decision 13, G11): the review cycle's caps, from here and nowhere else. `cycle_max_rounds` is the most
+   * reviews (the first and every recheck) one cycle makes; `cycle_max_fixes` the most fixer runs; `cycle_stall_after`
+   * the consecutive rounds without fewer open items after which it stops with `decide`. Defaults 5, 3 and 2.
+   */
+  cycle_max_rounds?: number;
+  cycle_max_fixes?: number;
+  cycle_stall_after?: number;
 }
 
 /**

@@ -274,7 +274,8 @@ A small process recorded in the ledger before it starts the command it holds. It
 record is written and kills the command's tree when its parent lets go or dies.
 
 **Owner**:
-The process that holds a delegated session's stdin, and so owns it: an MCP server or `lykos run`. Recorded in the
+The process that holds a delegated session's stdin, and so owns it: an MCP server, `lykos run` or `lykos cycle` (which
+owns its own row besides, and every session it starts). Recorded in the
 ledger's `owners` row by pid and record time. A session whose owner is `dead` is crashed and waits for `lykos
 recover`; nothing takes it over by itself.
 
@@ -285,7 +286,7 @@ child, every guard and the tree its command started, and every container, which 
 _Avoid_: stopped, cleaned up (without the proof)
 
 **Recover**:
-Continuing, by hand, a delegated session whose owner is `dead`: `lykos recover` confirms quiescence, takes the
+Continuing, by hand, a delegated session or a review cycle whose owner is `dead`: `lykos recover` confirms quiescence, takes the
 `owners` row over with one conditional update, and continues with the standard interrupted turn. Never automatic,
 never a kill.
 _Avoid_: takeover (for anything automatic), resume (that continues an ended session)
@@ -325,6 +326,34 @@ and the review ends with `next` `approve`, `resume`, `triage` or `inspect_flags`
 review with its own error; an empty list of findings never stands for a reviewer that did not review.
 _Avoid_: audit, second opinion
 
+**Review cycle** (a cycle):
+`lykos cycle`: code, not a model, drives a delegated session's change through review, fix and recheck until nothing is open
+or something needs the coordinator. Round 1 is one reviewer's full review; the harness judges its findings; the
+implementer's session is continued with every open item at once; the proof suite is rerun; the same reviewer session
+rechecks the fix's diff. It stops with one of `approve`, `answer_spec`, `triage`, `answer_question`, `decide`,
+`fix_environment` or `recover`. Its sessions run with decide-alone off.
+_Avoid_: loop (Boxie's word for it), pipeline
+
+**Cycle step**:
+One unit of a cycle's work (review, judge, fix, proof, recheck), written to the ledger as started before it acts and
+finished after. A step that starts a session carries the request id cycle id plus step id, so a recovered cycle finds the
+session instead of starting another. A step left started is the one the cycle's process died in.
+_Avoid_: phase, stage
+
+**Round**:
+One review of the change in a cycle: the first full review, or a recheck after a fix. The rounds, the fixes and the rounds
+in a row that leave no fewer items open are the cycle's caps, set in config.
+_Avoid_: iteration, attempt (a fresh attempt is P21)
+
+**Proof suite**:
+The reproductions of every finding that was proven in a cycle, rerun at the head after each fix. A proof that no longer fails
+retires its finding; one that fails again is open again, so a fix cannot undo an earlier one unseen.
+_Avoid_: regression suite (it is the findings' own tests, not the project's)
+
+**Retired** (a finding):
+A finding decision: a fix cleared the finding. Its reproduction no longer fails at the new head, or the fixer was handed it
+from triage and the recheck judged the fix.
+
 **Stored base**:
 The commit a delegated session started from, written when the session is admitted and never changed. Every diff of the
 session's work, a review's included, is against it, however far the project's HEAD has moved since.
@@ -361,8 +390,9 @@ and shell write until it is recorded. It is a step of the implementer, not a ses
 _Avoid_: spec-check session, pre-flight
 
 **Ruling**:
-The coordinator's answer to a point of a spec check. It binds the session that asked and, in a cycle, every later reviewer,
-who is handed it and does not report a point as a defect because it follows a ruling.
+The coordinator's answer to a point of a spec check, or to a question a cycle's session asked. It binds the session that
+asked and, in a cycle, the fixer and every later reviewer, who are handed it and do not report a point as a defect because
+it follows a ruling.
 _Avoid_: decision (that is accept, reject, merged or discard), answer (any reply to a question)
 
 **Red outcome**:

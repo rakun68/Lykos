@@ -6,6 +6,7 @@
 
 import { resolve } from "node:path";
 import { stderrWrite } from "../tui/io-mode.js";
+import { cycleViews, isCycleId, recoverCycle, runCycle } from "../delegate/cycle.js";
 import { ledgerViews, runDelegated, steerElsewhere, stopElsewhere, waitForQuestions, waitForSessions } from "../delegate/mcp-server.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from "../gate/trust.js";
 import { loadConfig } from "../config/load.js";
@@ -72,7 +73,9 @@ export const STEER_USAGE = "usage: lykos steer <session-id> -m <message|->    se
 export const CONTINUE_USAGE =
   "usage: lykos continue <session-id> -m <message|-> [--max-steps n] [--request-id id] [--reseal <commit>] [--trust-workspace]    resume an ended session on its branch with a new message; --reseal seals its branch again at the commit that corrects a sealed test";
 export const RECOVER_USAGE =
-  "usage: lykos recover <session-id> [-m <message|->] [--trust-workspace]    continue a crashed session (its owner is dead) after confirming everything it started is stopped; never kills anything";
+  "usage: lykos recover <session-id|cycle-id> [-m <message|->] [--max-steps n] [--add <text>] [--trust-workspace]    continue a crashed session, or a crashed review cycle from its last written step (its owner is dead), after confirming everything it started is stopped; never kills anything";
+export const CYCLE_USAGE =
+  "usage: lykos cycle <session-id|cycle-id> [--task <file>] [-m <note|->] [--base <ref>] [--max-steps n] [--add <text>] [--forward <finding-id,...>] [--drop <finding-id,...>] [--trust-workspace]    review a session's change, have it fixed and rechecked until nothing is open; a session id starts a cycle, a cycle id resumes one that stopped, and every option works at both. It stops with `next`: approve, answer_spec, triage, answer_question, decide, fix_environment or recover. The caps are delegation.cycle_max_rounds, cycle_max_fixes and cycle_stall_after";
 export const REVIEW_USAGE =
   "usage: lykos review <session-id|branch> [--task <file>] [-m <note|->] [--base <ref>] [--max-steps n] [--request-id id] [--trust-workspace]    one reviewer reads the change against the base the session started from; each finding comes back as a claim the harness has checked";
 export const STOP_USAGE = "usage: lykos stop <session-id>    ask the session's owner to stop it, and wait up to 10 s for it to end";
@@ -99,13 +102,27 @@ export function runStatus(cwd: string, args: readonly string[]): number {
     stderrWrite("lykos status: give session ids or --all, not both\n");
     return 1;
   }
-  const views = ledgerViews(cwd, all ? undefined : parsed.ids);
-  const unknown = all ? [] : missing(parsed.ids, views);
+  // T236: an id may be a review cycle's. Cycles are listed beside the sessions, and a crashed one asks for `recover` too.
+  const cycleIds = all ? undefined : parsed.ids.filter((id) => isCycleId(cwd, id));
+  const sessionIds = all ? undefined : parsed.ids.filter((id) => !(cycleIds ?? []).includes(id));
+  const views = ledgerViews(cwd, sessionIds);
+  const cycles = cycleViews(cwd, cycleIds);
+  const unknown = sessionIds === undefined ? [] : missing(sessionIds, views);
   if (unknown.length > 0) {
-    print({ outcome: "error", message: `unknown session id: ${unknown.join(", ")}`, sessions: views, next: "fix_environment" });
+    print({ outcome: "error", message: `unknown session id: ${unknown.join(", ")}`, sessions: views, ...(cycles.length > 0 ? { cycles } : {}), next: "fix_environment" });
     return 1;
   }
-  print({ sessions: views, next: views.length === 0 ? "run" : nextOf(views) });
+  const next =
+    views.length === 0 && cycles.length === 0
+      ? "run"
+      : cycles.some((c) => c.next === "recover")
+        ? "recover"
+        : views.length === 0
+          ? (cycles.find((c) => c.state === "running")?.next ?? cycles.at(-1)!.next)
+          : cycles.some((c) => c.state === "running")
+            ? nextOf([...views, { state: "running" } as SessionView])
+            : nextOf(views);
+  print({ sessions: views, ...(cycles.length > 0 ? { cycles } : {}), next });
   return 0;
 }
 
@@ -236,7 +253,7 @@ export async function runContinue(cwd: string, args: readonly string[]): Promise
 
 export async function runRecover(cwd: string, args: readonly string[]): Promise<number> {
   if (args.length === 0) return usage(RECOVER_USAGE);
-  const parsed = parseFlags(args, "recover", ["message"], ["trust-workspace"]);
+  const parsed = parseFlags(args, "recover", ["message", "max-steps", "add"], ["trust-workspace"]);
   if ("error" in parsed) {
     stderrWrite(`${parsed.error}\n`);
     return 1;
@@ -253,6 +270,26 @@ export async function runRecover(cwd: string, args: readonly string[]): Promise<
   }
   const trust = await trustAndShell(cwd, "recover", parsed.flags.has("trust-workspace"));
   if (trust === undefined) return 1;
+  if (isCycleId(cwd, parsed.ids[0]!)) {
+    const stepsRaw = parsed.flags.get("max-steps");
+    const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
+    if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
+      stderrWrite(`lykos recover: --max-steps must be a positive integer, got "${String(stepsRaw)}"
+`);
+      return 1;
+    }
+    const add = parsed.flags.get("add");
+    const recovered = await recoverCycle(cwd, parsed.ids[0]!, {
+      trustSource: trust.source,
+      ...(message !== undefined ? { note: message } : {}),
+      ...(maxSteps !== undefined ? { maxSteps } : {}),
+      ...(typeof add === "string" ? { add } : {}),
+      onProgress: (line) => stderrWrite(`lykos recover: ${line}
+`),
+    });
+    print(recovered);
+    return delegatedExitCode(recovered);
+  }
   const { recoverSession } = await import("../delegate/recover.js");
   const result = await recoverSession(cwd, parsed.ids[0]!, {
     trustSource: trust.source,
@@ -356,6 +393,58 @@ export async function runReview(cwd: string, args: readonly string[]): Promise<n
     ...(maxSteps !== undefined ? { maxSteps } : {}),
     ...(typeof requestId === "string" ? { requestId } : {}),
     onProgress: (line) => stderrWrite(`lykos review: ${line}
+`),
+  });
+  print(result);
+  return delegatedExitCode(result);
+}
+
+/** A comma list of finding ids. */
+function listOf(value: string | true | undefined): string[] {
+  return typeof value === "string" ? value.split(",").map((v) => v.trim()).filter((v) => v !== "") : [];
+}
+
+export async function runCycleCommand(cwd: string, args: readonly string[]): Promise<number> {
+  if (args.length === 0) return usage(CYCLE_USAGE);
+  const parsed = parseFlags(args, "cycle", ["task", "message", "base", "max-steps", "add", "forward", "drop"], ["trust-workspace"]);
+  if ("error" in parsed) {
+    stderrWrite(`${parsed.error}
+`);
+    return 1;
+  }
+  if (parsed.ids.length !== 1) return usage(CYCLE_USAGE);
+  let note: string | undefined;
+  if (parsed.flags.has("message")) {
+    const read = await messageOf(parsed, "cycle");
+    if (typeof read !== "string") {
+      stderrWrite(`${read.error}
+`);
+      return 1;
+    }
+    note = read;
+  }
+  const stepsRaw = parsed.flags.get("max-steps");
+  const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
+  if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
+    stderrWrite(`lykos cycle: --max-steps must be a positive integer, got "${String(stepsRaw)}"
+`);
+    return 1;
+  }
+  const trust = await trustAndShell(cwd, "cycle", parsed.flags.has("trust-workspace"));
+  if (trust === undefined) return 1;
+  const task = parsed.flags.get("task");
+  const base = parsed.flags.get("base");
+  const add = parsed.flags.get("add");
+  const result = await runCycle(cwd, parsed.ids[0]!, {
+    trustSource: trust.source,
+    ...(typeof task === "string" ? { taskFile: resolve(cwd, task) } : {}),
+    ...(note !== undefined ? { note } : {}),
+    ...(typeof base === "string" ? { base } : {}),
+    ...(maxSteps !== undefined ? { maxSteps } : {}),
+    ...(typeof add === "string" ? { add } : {}),
+    forward: listOf(parsed.flags.get("forward")),
+    drop: listOf(parsed.flags.get("drop")),
+    onProgress: (line) => stderrWrite(`lykos cycle: ${line}
 `),
   });
   print(result);

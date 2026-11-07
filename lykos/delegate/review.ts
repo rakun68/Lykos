@@ -14,7 +14,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { loadConfig } from "../config/load.js";
-import { modelFamily, reviewerRole } from "../config/roles.js";
+import { modelFamily, reviewerRole, type RoleChoice } from "../config/roles.js";
+import type { ResolvedConfig } from "../config/types.js";
 import type { TrustSource } from "../gate/trust.js";
 import { hostGit } from "../git/host-git.js";
 import { defaultLedgerPath, withLedger, withLedgerSync, type Ledger } from "../ledger/use.js";
@@ -22,7 +23,7 @@ import { sessionBaseline } from "./baseline.js";
 import { checkClaims } from "./claim-checks.js";
 import type { ClaimResult } from "./claims.js";
 import { recordFindingDecision } from "./decisions.js";
-import { dispose, judged, findingsOf, nextOfFindings, recordFindingJudgements, type JudgedFinding } from "./findings.js";
+import { dispose, judged, findingsOf, nextOfFindings, recordFindingJudgements, type JudgedFinding, type StoredFinding } from "./findings.js";
 import { runDelegated } from "./mcp-server.js";
 import { changeFlags, parseNameStatus, addedLines, type ChangedPath } from "./result-flags.js";
 import { commitOf, sessionBaseOf } from "./session-base.js";
@@ -246,13 +247,108 @@ function readTask(path: string): { ok: true; task: TaskFile } | { ok: false; mes
   }
 }
 
-const error = (message: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ outcome: "error", message, ...extra, next: "fix_environment" });
+export interface JudgeInput {
+  workspace: string;
+  ledgerPath: string;
+  /** The reviewer session the findings were recorded under. */
+  reviewerId: string;
+  /** The findings to judge: all of the reviewer's, or (in a cycle's recheck) the ones that recheck recorded. */
+  stored: readonly StoredFinding[];
+  head: string;
+  base: string;
+  /** The session whose change is reviewed; decisions are filed under it. Absent: under the reviewer. */
+  targetSession?: string | undefined;
+  trust: TrustSource;
+  containment: ContainmentChoice;
+  /** `seal.test_command`. */
+  testCommand: string;
+  /** `delegation.shell_path`. */
+  shellPath?: string | undefined;
+  /** The cycle these findings belong to; its id is on every decision row (T236). */
+  cycleId?: string | undefined;
+}
 
 /**
- * Reviews a session's change (or a branch) with one reviewer and returns the findings as the harness judged them. Never
- * throws; a review that could not run is an `error` result with the reviewer's own message (R14).
+ * The harness's side of a review, shared by `lykos review` and the review cycle: it runs every finding's check on the
+ * branch, decides by rule (`findings.ts`), stores what it found and files the decisions. Recording is idempotent, so a
+ * retried review or a recovered cycle judges again without appending a decision twice.
  */
-export async function runReview(workspace: string, targetArg: string, opts: ReviewOptions): Promise<Record<string, unknown>> {
+export async function judgeFindings(input: JudgeInput): Promise<JudgedFinding[]> {
+  const { reviewerId, head, base, ledgerPath } = input;
+  const checkable = input.stored.filter((f) => f.check !== undefined);
+  const results: ClaimResult[] =
+    checkable.length === 0
+      ? []
+      : await checkClaims({
+          repo: input.workspace,
+          ledgerPath,
+          sessionId: reviewerId,
+          claims: checkable.map((f) => ({ id: f.id, session_id: f.session_id, ts: f.ts, text: f.text, check: f.check! })),
+          head,
+          base,
+          trust: input.trust,
+          containment: input.containment,
+          testCommand: input.testCommand,
+          shellPath: input.shellPath,
+        });
+  const baselineFailing = await withLedger(ledgerPath, async (ledger) => {
+    const found = sessionBaseline(ledger, reviewerId) ?? (input.targetSession !== undefined ? sessionBaseline(ledger, input.targetSession) : undefined);
+    return found?.baseline.status === "measured" && found.baseline.kind === "names" ? found.baseline.failing : undefined;
+  });
+  const judgedFindings: JudgedFinding[] = input.stored.map((f) => {
+    const result = results.find((r) => r.id === f.id);
+    return judged(f, result, dispose({ severity: f.severity, check: f.check, result, baselineFailing }));
+  });
+
+  // The decisions go under the session the findings are about, so `lykos status` on it shows what became of them.
+  const about = input.targetSession ?? reviewerId;
+  withLedgerSync(ledgerPath, (ledger) => {
+    recordFindingJudgements(ledger, judgedFindings, head, base);
+    for (const f of judgedFindings) {
+      if (f.disposition === "triage") continue;
+      recordFindingDecision(ledger, {
+        sessionId: about,
+        ...(input.cycleId !== undefined ? { cycleId: input.cycleId } : {}),
+        findingId: f.finding_id,
+        action: f.disposition === "blocks" ? "forwarded" : "dropped",
+        reason: f.why,
+      });
+    }
+  });
+  return judgedFindings;
+}
+
+const error = (message: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ outcome: "error", message, ...extra, next: "fix_environment" });
+
+export interface ReviewPlan {
+  config: ResolvedConfig;
+  task?: TaskFile;
+  target: ReviewTarget;
+  implementerModel?: string;
+  choice: RoleChoice;
+  sameFamily: boolean;
+  facts: ChangeFacts;
+  /** The verification command the task or the stored baseline names. */
+  testCommand?: string;
+  /** The task the change is judged against: the task file's body, else the brief the session was given. */
+  taskText: string;
+  /** What the reviewer is told of the verification command's failures on the base. */
+  baselineBrief: BriefInput["baseline"];
+  /** The first reviewer brief. */
+  brief: string;
+  packFiles: string[];
+}
+
+/**
+ * Everything a review needs before its reviewer starts, shared by `lykos review` and the review cycle's first round:
+ * the target and its stored base, the reviewer role (swapped when its model is the implementer's family), the change,
+ * the task and the brief. A review that cannot be planned comes back as the error result to return.
+ */
+export function planReview(
+  workspace: string,
+  targetArg: string,
+  opts: Pick<ReviewOptions, "taskFile" | "note" | "base">,
+): { ok: true; plan: ReviewPlan } | { ok: false; result: Record<string, unknown> } {
   const ledgerPath = defaultLedgerPath(workspace);
   const config = (() => {
     try {
@@ -261,12 +357,12 @@ export async function runReview(workspace: string, targetArg: string, opts: Revi
       return err instanceof Error ? err : new Error(String(err));
     }
   })();
-  if (config instanceof Error) return error(`lykos review: the configuration cannot be read: ${config.message}`);
+  if (config instanceof Error) return { ok: false, result: error(`lykos review: the configuration cannot be read: ${config.message}`) };
 
   let task: TaskFile | undefined;
   if (opts.taskFile !== undefined) {
     const read = readTask(opts.taskFile);
-    if (!read.ok) return error(read.message);
+    if (!read.ok) return { ok: false, result: error(read.message) };
     task = read.task;
   }
 
@@ -276,7 +372,7 @@ export async function runReview(workspace: string, targetArg: string, opts: Revi
     return { ...found, facts: sessionFacts(ledger, found.target.session), baseline: sessionBaseline(ledger, found.target.session)?.baseline };
   };
   const resolved = existsSync(ledgerPath) ? withLedgerSync(ledgerPath, lookup) : lookup(undefined);
-  if (!resolved.ok) return error(resolved.message);
+  if (!resolved.ok) return { ok: false, result: error(resolved.message) };
   const { target } = resolved;
 
   // The reviewer: the role's model, or its alternate when the role's is the implementer's family. An implementer whose
@@ -295,14 +391,37 @@ export async function runReview(workspace: string, targetArg: string, opts: Revi
       : resolved.baseline.status === "measured"
         ? { command: resolved.baseline.key.command, failing: resolved.baseline.failing }
         : { command: resolved.baseline.key.command, unmeasured: resolved.baseline.reason };
-  const brief = reviewBrief({
-    target,
-    facts,
-    task: task?.body ?? resolved.facts.brief ?? "",
-    baseline: baselineBrief,
-    note: opts.note,
-  });
+  const taskText = task?.body ?? resolved.facts.brief ?? "";
+  const brief = reviewBrief({ target, facts, task: taskText, baseline: baselineBrief, note: opts.note });
   const packFiles = [...new Set([...(task?.files ?? []), ...facts.changed.filter((c) => c.status !== "D").map((c) => c.path)])].slice(0, MAX_PACK_FILES);
+  return {
+    ok: true,
+    plan: {
+      config,
+      ...(task !== undefined ? { task } : {}),
+      target,
+      ...(implementerModel !== undefined ? { implementerModel } : {}),
+      choice,
+      sameFamily,
+      facts,
+      ...(testCommand !== undefined ? { testCommand } : {}),
+      taskText,
+      baselineBrief,
+      brief,
+      packFiles,
+    },
+  };
+}
+
+/**
+ * Reviews a session's change (or a branch) with one reviewer and returns the findings as the harness judged them. Never
+ * throws; a review that could not run is an `error` result with the reviewer's own message (R14).
+ */
+export async function runReview(workspace: string, targetArg: string, opts: ReviewOptions): Promise<Record<string, unknown>> {
+  const ledgerPath = defaultLedgerPath(workspace);
+  const planned = planReview(workspace, targetArg, opts);
+  if (!planned.ok) return planned.result;
+  const { config, task, target, implementerModel, choice, sameFamily, facts, testCommand, brief, packFiles } = planned.plan;
 
   opts.onProgress?.(`reviewer: ${choice.role}${choice.model !== undefined ? ` on ${choice.model}` : ""}${choice.reason !== undefined ? ` (the alternate: ${choice.reason})` : ""}`);
   const reviewed = await runDelegated(
@@ -345,39 +464,18 @@ export async function runReview(workspace: string, targetArg: string, opts: Revi
 
   const stored = await withLedger(ledgerPath, async (ledger) => findingsOf(ledger, reviewerId));
   const containment: ContainmentChoice = (reviewed["containment"] as ContainmentChoice | undefined) ?? config.containment.level ?? "off";
-  const checkable = stored.filter((f) => f.check !== undefined);
-  const results: ClaimResult[] =
-    checkable.length === 0
-      ? []
-      : await checkClaims({
-          repo: workspace,
-          ledgerPath,
-          sessionId: reviewerId,
-          claims: checkable.map((f) => ({ id: f.id, session_id: f.session_id, ts: f.ts, text: f.text, check: f.check! })),
-          head: target.head,
-          base: target.base,
-          trust: opts.trustSource,
-          containment,
-          testCommand: config.seal.test_command,
-          shellPath: config.delegation.shell_path,
-        });
-  const baselineFailing = await withLedger(ledgerPath, async (ledger) => {
-    const found = sessionBaseline(ledger, reviewerId) ?? (target.session !== undefined ? sessionBaseline(ledger, target.session) : undefined);
-    return found?.baseline.status === "measured" && found.baseline.kind === "names" ? found.baseline.failing : undefined;
-  });
-  const judgedFindings: JudgedFinding[] = stored.map((f) => {
-    const result = results.find((r) => r.id === f.id);
-    return judged(f, result, dispose({ severity: f.severity, check: f.check, result, baselineFailing }));
-  });
-
-  // The decisions go under the session the findings are about, so `lykos status` on it shows what became of them.
-  const about = target.session ?? reviewerId;
-  withLedgerSync(ledgerPath, (ledger) => {
-    recordFindingJudgements(ledger, judgedFindings, target.head, target.base);
-    for (const f of judgedFindings) {
-      if (f.disposition === "triage") continue;
-      recordFindingDecision(ledger, { sessionId: about, findingId: f.finding_id, action: f.disposition === "blocks" ? "forwarded" : "dropped", reason: f.why });
-    }
+  const judgedFindings = await judgeFindings({
+    workspace,
+    ledgerPath,
+    reviewerId,
+    stored,
+    head: target.head,
+    base: target.base,
+    ...(target.session !== undefined ? { targetSession: target.session } : {}),
+    trust: opts.trustSource,
+    containment,
+    testCommand: config.seal.test_command,
+    shellPath: config.delegation.shell_path,
   });
 
   const flags: SessionFlag[] = [
