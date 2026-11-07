@@ -166,6 +166,9 @@ describe("T243: sessions are owned in the project ledger", () => {
     const status = json(await client.callTool({ name: "lykos_status", arguments: { session_id: runId } })) as { sessions: Array<{ session_id: string; owner: string }> };
     assert.equal(status.sessions[0]!.session_id, runId);
     assert.equal(status.sessions[0]!.owner, "run");
+    // One call naming this server's session and another process's answers for both.
+    const mixed = json(await client.callTool({ name: "lykos_status", arguments: { session_ids: [mcpId, runId] } })) as { sessions: Array<{ session_id: string; owner: string }> };
+    assert.deepEqual(mixed.sessions.map((s) => [s.session_id, s.owner]), [[mcpId, "mcp"], [runId, "run"]]);
     m.release();
     r.release();
     await run;
@@ -186,6 +189,28 @@ describe("T243: sessions are owned in the project ledger", () => {
     assert.equal(b.sessionId, id);
     assert.equal(b.duplicate, true);
     assert.equal(ledgerViews(ws).length, 1);
+  });
+
+  it("a retried continuation with its own request id finds the session, not a second continuation", async () => {
+    const ws = workspace();
+    const s = held();
+    const first = runDelegated(ws, { brief: "step 1", request_id: "cycle-2/step-1" }, { trustSource: "flag", run: s.run });
+    const [id] = await untilViews(ws, 1);
+    s.release();
+    await first;
+    const c = held();
+    const continued = runDelegated(ws, { brief: "step 2", session_id: id!, request_id: "cycle-2/step-2" }, { trustSource: "flag", run: c.run });
+    await sleep(200);
+    // While the continuation runs, the retry waits on it and answers with it.
+    const retrying = runDelegated(ws, { brief: "step 2", session_id: id!, request_id: "cycle-2/step-2" }, { trustSource: "flag", run: c.run });
+    await sleep(200);
+    c.release();
+    const [, retry] = await Promise.all([continued, retrying]);
+    assert.equal(retry.duplicate, true, JSON.stringify(retry));
+    assert.equal(retry.sessionId, id);
+    const late = await runDelegated(ws, { brief: "step 2", session_id: id!, request_id: "cycle-2/step-2" }, { trustSource: "flag", run: c.run });
+    assert.equal(late.duplicate, true, JSON.stringify(late));
+    assert.equal(c.calls(), 1, "one continuation ran");
   });
 
   it("two write-in-place sessions on one tree, from the CLI and MCP: the second is refused, naming the first", async () => {

@@ -301,6 +301,18 @@ async function runExitMode(
         signature,
       };
     }
+    // A command that never ran is no red: 126 cannot execute, 127 not found, no code at all killed by a signal.
+    if (exitCode === null || exitCode === 126 || exitCode === 127) {
+      return {
+        ok: false,
+        adapter: "exit",
+        tests: [],
+        errors: [`the test command could not run (${exitCode === null ? "killed by a signal" : `exit ${exitCode}`})`],
+        fileErrors: new Map(),
+        rawOutput: `${stdout}\n${stderr}`,
+        signature,
+      };
+    }
     return {
       ok: true,
       adapter: "exit",

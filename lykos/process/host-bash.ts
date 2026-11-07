@@ -4,19 +4,26 @@
 
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 
-export interface ResolvedShell {
-  shell: string;
-  args: string[];
-  /** Pi's: a legacy WSL bash reads the command from stdin. */
-  commandTransport?: "stdin";
-}
+/** Pi's shell config: `shell`, `args`, and `commandTransport` (`stdin` for a legacy WSL bash). Pi does not export the name. */
+export type ResolvedShell = ReturnType<typeof getShellConfig>;
 
 export type ShellResolution = { ok: true; resolved: ResolvedShell } | { ok: false; message: string };
 
-/** The bash Pi resolves, with `shellPath` first when set. Never throws. */
+let configuredShellPath: string | undefined;
+
+/**
+ * Sets `delegation.shell_path` for this process: every shell line that names no shell path of its own (verification,
+ * red checks, hooks, jobs on `localExecutor`) runs in that bash. Called where the project's config is loaded.
+ */
+export function useConfiguredShellPath(shellPath: string | undefined): void {
+  configuredShellPath = shellPath !== undefined && shellPath.trim() !== "" ? shellPath : undefined;
+}
+
+/** The bash Pi resolves, with `shellPath` (else the configured `delegation.shell_path`) first when set. Never throws. */
 export function resolveHostBash(shellPath?: string): ShellResolution {
   try {
-    const config = getShellConfig(shellPath !== undefined && shellPath.trim() !== "" ? shellPath : undefined) as ResolvedShell;
+    const explicit = shellPath !== undefined && shellPath.trim() !== "" ? shellPath : configuredShellPath;
+    const config = getShellConfig(explicit);
     return { ok: true, resolved: config };
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) };

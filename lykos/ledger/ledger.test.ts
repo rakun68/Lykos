@@ -41,6 +41,8 @@ describe("Ledger", () => {
         "memory_eligibility",
         // owners joined on T243: who owns each delegated session, by pid and record time.
         "owners",
+        // owner_requests: every request id a session was admitted under, so a retried continuation finds it.
+        "owner_requests",
         "price_versions",
         // process_records joined on T257: each guard or process a session relies on, recorded before it runs.
         "process_records",

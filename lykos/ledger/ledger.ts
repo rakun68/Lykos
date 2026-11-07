@@ -923,6 +923,10 @@ function migrateOwners(db: Database.Database): void {
       result_json           TEXT,
       crashes               INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS owner_requests (
+      request_id   TEXT PRIMARY KEY,
+      session_id   TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS tree_locks (
       path         TEXT PRIMARY KEY,
       session_id   TEXT NOT NULL,

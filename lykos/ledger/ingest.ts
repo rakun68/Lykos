@@ -652,7 +652,9 @@ export function ingestDelegateSnapshot(
     ingestSnapshotBody(ledger, snap, opts);
     return snap.sessionId;
   });
-  return write();
+  // IMMEDIATE: the body reads before it writes, and a deferred transaction that has read cannot wait for another
+  // writer (SQLITE_BUSY at once, busy_timeout or not). The session's owner writes this ledger while it runs (T243).
+  return write.immediate();
 }
 
 /** T9.1 (docs/08-sessions-and-archive.md §1.1, DECISIONS.md 2026-08-29) verified

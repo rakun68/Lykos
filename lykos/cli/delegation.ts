@@ -4,8 +4,9 @@
 // or an MCP server). Every command prints JSON with `next`; no arguments prints its usage; an unknown flag is an
 // error (R19).
 
+import { stderrWrite } from "../tui/io-mode.js";
 import { ledgerViews, runDelegated, steerElsewhere, stopElsewhere, waitForQuestions, waitForSessions } from "../delegate/mcp-server.js";
-import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
+import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from "../gate/trust.js";
 import { loadConfig } from "../config/load.js";
 import { noBashMessage, resolveHostBash } from "../process/host-bash.js";
 import { readProcessStdin } from "./brief.js";
@@ -45,6 +46,11 @@ export function parseFlags(args: readonly string[], command: string, valued: rea
   return { ids, flags };
 }
 
+/** A delegated run's exit code: 1 only when it could not run (`error`, `blocked`); every result the session reached is 0, read through `next`. */
+export function delegatedExitCode(result: { outcome?: unknown }): number {
+  return result.outcome === "error" || result.outcome === "blocked" ? 1 : 0;
+}
+
 function print(value: unknown): void {
   stdoutWrite(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -80,12 +86,12 @@ export function runStatus(cwd: string, args: readonly string[]): number {
   if (args.length === 0) return usage(STATUS_USAGE);
   const parsed = parseFlags(args, "status", [], ["all"]);
   if ("error" in parsed) {
-    process.stderr.write(`${parsed.error}\n`);
+    stderrWrite(`${parsed.error}\n`);
     return 1;
   }
   const all = parsed.flags.has("all");
   if (all === (parsed.ids.length > 0)) {
-    process.stderr.write("lykos status: give session ids or --all, not both\n");
+    stderrWrite("lykos status: give session ids or --all, not both\n");
     return 1;
   }
   const views = ledgerViews(cwd, all ? undefined : parsed.ids);
@@ -102,7 +108,7 @@ export async function runWait(cwd: string, args: readonly string[]): Promise<num
   if (args.length === 0) return usage(WAIT_USAGE);
   const parsed = parseFlags(args, "wait", ["timeout"], ["any", "questions"]);
   if ("error" in parsed) {
-    process.stderr.write(`${parsed.error}\n`);
+    stderrWrite(`${parsed.error}\n`);
     return 1;
   }
   if (parsed.ids.length === 0) return usage(WAIT_USAGE);
@@ -111,7 +117,7 @@ export async function runWait(cwd: string, args: readonly string[]): Promise<num
   if (timeoutRaw !== undefined) {
     const seconds = Number(timeoutRaw);
     if (!Number.isFinite(seconds) || seconds <= 0) {
-      process.stderr.write(`lykos wait: --timeout must be a positive number of seconds, got "${String(timeoutRaw)}"\n`);
+      stderrWrite(`lykos wait: --timeout must be a positive number of seconds, got "${String(timeoutRaw)}"\n`);
       return 1;
     }
     timeoutMs = seconds * 1000;
@@ -145,13 +151,13 @@ export async function runSteer(cwd: string, args: readonly string[]): Promise<nu
   if (args.length === 0) return usage(STEER_USAGE);
   const parsed = parseFlags(args, "steer", ["message"], []);
   if ("error" in parsed) {
-    process.stderr.write(`${parsed.error}\n`);
+    stderrWrite(`${parsed.error}\n`);
     return 1;
   }
   if (parsed.ids.length !== 1) return usage(STEER_USAGE);
   const message = await messageOf(parsed, "steer");
   if (typeof message !== "string") {
-    process.stderr.write(`${message.error}\n`);
+    stderrWrite(`${message.error}\n`);
     return 1;
   }
   const id = parsed.ids[0]!;
@@ -172,31 +178,31 @@ export async function runContinue(cwd: string, args: readonly string[]): Promise
   if (args.length === 0) return usage(CONTINUE_USAGE);
   const parsed = parseFlags(args, "continue", ["message", "max-steps", "request-id", "reseal"], ["trust-workspace"]);
   if ("error" in parsed) {
-    process.stderr.write(`${parsed.error}\n`);
+    stderrWrite(`${parsed.error}\n`);
     return 1;
   }
   if (parsed.ids.length !== 1) return usage(CONTINUE_USAGE);
   const message = await messageOf(parsed, "continue");
   if (typeof message !== "string") {
-    process.stderr.write(`${message.error}\n`);
+    stderrWrite(`${message.error}\n`);
     return 1;
   }
   const stepsRaw = parsed.flags.get("max-steps");
   const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
   if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
-    process.stderr.write(`lykos continue: --max-steps must be a positive integer, got "${String(stepsRaw)}"\n`);
+    stderrWrite(`lykos continue: --max-steps must be a positive integer, got "${String(stepsRaw)}"\n`);
     return 1;
   }
-  let trust;
+  let trust: TrustDecision;
   try {
     trust = await ensureWorkspaceTrust({ workspace: cwd, interactive: false, ...(parsed.flags.has("trust-workspace") ? { trustWorkspace: true } : {}) });
   } catch (err) {
-    process.stderr.write(`lykos continue: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
+    stderrWrite(`lykos continue: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
     return 1;
   }
   const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
   if (!bash.ok) {
-    process.stderr.write(`lykos continue: refused — ${noBashMessage(bash)}\n`);
+    stderrWrite(`lykos continue: refused — ${noBashMessage(bash)}\n`);
     return 1;
   }
   const requestId = parsed.flags.get("request-id");
@@ -210,17 +216,17 @@ export async function runContinue(cwd: string, args: readonly string[]): Promise
       ...(typeof requestId === "string" ? { request_id: requestId } : {}),
       ...(typeof reseal === "string" ? { reseal } : {}),
     },
-    { trustSource: trust.source, onProgress: (line) => process.stderr.write(`lykos continue: ${line}\n`) },
+    { trustSource: trust.source, onProgress: (line) => stderrWrite(`lykos continue: ${line}\n`) },
   );
   print(result);
-  return result.outcome === "ok" || result.outcome === "needs_answer" ? 0 : 1;
+  return delegatedExitCode(result);
 }
 
 export async function runRecover(cwd: string, args: readonly string[]): Promise<number> {
   if (args.length === 0) return usage(RECOVER_USAGE);
   const parsed = parseFlags(args, "recover", ["message"], ["trust-workspace"]);
   if ("error" in parsed) {
-    process.stderr.write(`${parsed.error}\n`);
+    stderrWrite(`${parsed.error}\n`);
     return 1;
   }
   if (parsed.ids.length !== 1) return usage(RECOVER_USAGE);
@@ -228,38 +234,38 @@ export async function runRecover(cwd: string, args: readonly string[]): Promise<
   if (parsed.flags.has("message")) {
     const read = await messageOf(parsed, "recover");
     if (typeof read !== "string") {
-      process.stderr.write(`${read.error}\n`);
+      stderrWrite(`${read.error}\n`);
       return 1;
     }
     message = read;
   }
-  let trust;
+  let trust: TrustDecision;
   try {
     trust = await ensureWorkspaceTrust({ workspace: cwd, interactive: false, ...(parsed.flags.has("trust-workspace") ? { trustWorkspace: true } : {}) });
   } catch (err) {
-    process.stderr.write(`lykos recover: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
+    stderrWrite(`lykos recover: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
     return 1;
   }
   const bash = resolveHostBash(loadConfig({ cwd }).resolved.delegation.shell_path);
   if (!bash.ok) {
-    process.stderr.write(`lykos recover: refused — ${noBashMessage(bash)}\n`);
+    stderrWrite(`lykos recover: refused — ${noBashMessage(bash)}\n`);
     return 1;
   }
   const { recoverSession } = await import("../delegate/recover.js");
   const result = await recoverSession(cwd, parsed.ids[0]!, {
     trustSource: trust.source,
     ...(message !== undefined ? { message } : {}),
-    onProgress: (line) => process.stderr.write(`lykos recover: ${line}\n`),
+    onProgress: (line) => stderrWrite(`lykos recover: ${line}\n`),
   });
   print(result);
-  return result.outcome === "ok" || result.outcome === "needs_answer" ? 0 : 1;
+  return delegatedExitCode(result);
 }
 
 export async function runStop(cwd: string, args: readonly string[]): Promise<number> {
   if (args.length === 0) return usage(STOP_USAGE);
   const parsed = parseFlags(args, "stop", [], []);
   if ("error" in parsed) {
-    process.stderr.write(`${parsed.error}\n`);
+    stderrWrite(`${parsed.error}\n`);
     return 1;
   }
   if (parsed.ids.length !== 1) return usage(STOP_USAGE);

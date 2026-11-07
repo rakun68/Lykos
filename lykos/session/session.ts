@@ -36,6 +36,7 @@
 // and the host's answer to a full context is the context strategy
 // (`loop/context-strategy.ts`).
 
+import { useConfiguredShellPath } from "../process/host-bash.js";
 import { sessionRoleModel } from "../config/roles.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -267,6 +268,12 @@ export interface RunStandaloneTaskInput {
    * (the branch of its worktree). Ignored on a successor session and when resuming.
    */
   sessionId?: string;
+  /**
+   * T256: the id this session's process records are filed under: the `owners` row it runs for, which a continuation
+   * keeps while its Pi session id changes. Quiescence and `lykos recover` read the records by it. Defaults to the
+   * session's own id once it exists.
+   */
+  processOwnerId?: string;
   /**
    * T184: the worktree this session's tools and commands work in (made by the caller, who removes it after the call).
    * `workspace` stays the project's root, which is where config, the ledger and the project's identity live.
@@ -1468,7 +1475,23 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   // T247: a delegated session that runs on this machine starts every process behind a recorded guard, and its
   // shell lines in the resolved bash. A contained session's commands run in its container; a child runs on its
   // parent's executor.
-  const guardedSession: { id?: string } = {};
+  const guardedSession: { id?: string } = input.processOwnerId !== undefined ? { id: input.processOwnerId } : {};
+  const recordOwnProcesses = (sessionId: string): void => {
+    const ledger = openLedgerSync(ledgerPath);
+    try {
+      ledger.recordProcess({ kind: "child", sessionId, pid: process.pid, command: "session-child" });
+      const runtime = containment?.record.runtime;
+      if (runtime !== undefined && containment?.record.used !== "off") {
+        ledger.recordProcess({ kind: "container", sessionId, pid: 0, command: containerRecordCommand(runtime) });
+      }
+    } finally {
+      ledger.close();
+    }
+  };
+  const recordedOwnProcesses = input.delegated === true && input.processOwnerId !== undefined;
+  if (recordedOwnProcesses) recordOwnProcesses(input.processOwnerId!);
+  // T247: every shell line this process runs, verification and hooks too, uses `delegation.shell_path` when set.
+  useConfiguredShellPath(config.delegation.shell_path);
   // T247: one shell. A delegated session has no `powershell` tool unless `delegation.powershell` turns it on.
   const withheldTools = input.delegated === true && config.delegation.powershell !== true ? ["powershell"] : [];
   const hostExecutor =
@@ -1517,7 +1540,8 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
           resumeHandoffFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           sessionIdOverride: input.resume.fromSessionId,
         }
-      : (containment !== undefined && containment.record.used !== "off") || (input.workTree !== undefined && input.continuation === undefined)
+      : (containment !== undefined && containment.record.used !== "off") ||
+          ((input.workTree !== undefined || input.sessionId !== undefined) && input.continuation === undefined)
         ? { sessionIdOverride: containedSessionId }
         : {}),
     specialistName: specialist,
@@ -1544,21 +1568,11 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
     throw err;
   }
   const { session } = booted;
-  guardedSession.id = session.sessionId;
+  guardedSession.id ??= session.sessionId;
   // T256: a delegated session records its own process and its container, so quiescence can be confirmed from any
   // process. The container is found again by its session label; the record names its runtime.
-  if (input.delegated === true) {
-    const ledger = openLedgerSync(ledgerPath);
-    try {
-      ledger.recordProcess({ kind: "child", sessionId: session.sessionId, pid: process.pid, command: "session-child" });
-      const runtime = containment?.record.runtime;
-      if (runtime !== undefined && containment?.record.used !== "off") {
-        ledger.recordProcess({ kind: "container", sessionId: session.sessionId, pid: 0, command: containerRecordCommand(runtime) });
-      }
-    } finally {
-      ledger.close();
-    }
-  }
+  // Recorded before boot when the owner's id is known, so an owner killed during boot still finds them.
+  if (input.delegated === true && !recordedOwnProcesses) recordOwnProcesses(guardedSession.id);
   // T182: the family's handle carries what a child needs to boot the way this session did.
   if (booted.spawnContext !== undefined && input.nativeProviders !== undefined) booted.spawnContext.nativeProviders = input.nativeProviders;
   // T194: a child answers to the same trust as its parent, so an untrusted delegated parent cannot hand a child back

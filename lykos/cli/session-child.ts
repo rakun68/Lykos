@@ -438,6 +438,8 @@ async function runRequest(
         readOnly,
         // A new session gets the id its branch was named from.
         ...(request.sessionId === undefined ? { sessionId } : {}),
+        // T256: process records are filed under the owners row: the caller's id, which a continuation keeps.
+        processOwnerId: request.sessionId ?? sessionId,
         ...(target.workTree !== undefined ? { workTree: target.workTree } : {}),
         ...deps.sessionExtras,
         bootDeps,

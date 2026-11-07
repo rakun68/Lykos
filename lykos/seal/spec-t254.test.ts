@@ -91,6 +91,12 @@ describe("T254: red outcomes", () => {
     assert.equal(res.outcome, "failing-exit-only");
   });
 
+  it("error: in exit-code mode, a command that cannot run is no red", async () => {
+    const res = await red(FAILING, "lykos-no-such-test-runner {files}");
+    assert.equal(res.adapter, "exit");
+    assert.equal(res.outcome, "error");
+  });
+
   it("passing: a sealed test already passes, named", async () => {
     const res = await red(PASSING);
     assert.equal(res.outcome, "passing");

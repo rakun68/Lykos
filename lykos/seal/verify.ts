@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { useConfiguredShellPath } from "../process/host-bash.js";
 import { detectDefaultBase, loadConfig } from "../config/load.js";
 import { parseYaml } from "../config/yaml-file.js";
 import { defaultLedgerPath, recordSealEvent } from "../ledger/use.js";
@@ -55,6 +56,7 @@ function getHeadTestCommand(head: string, cwd: string, env?: NodeJS.ProcessEnv):
     } catch {}
   }
   const { resolved: config } = loadConfig({ cwd, ...(env ? { env } : {}) });
+  useConfiguredShellPath(config.delegation.shell_path);
   return config.seal.test_command;
 }
 
@@ -79,6 +81,7 @@ export async function verifySeals(opts: VerifySealsOptions = {}): Promise<Verify
   }
 
   const { resolved: config } = loadConfig({ cwd, ...(env ? { env } : {}) });
+  useConfiguredShellPath(config.delegation.shell_path);
 
   if (opts.base) {
     const baseSha = resolveRef(opts.base, cwd, env);

@@ -1,4 +1,5 @@
 import { firstPositional, positionals, RUN_BOOLEAN_FLAGS, RUN_VALUED_FLAGS, unknownRunFlag } from "./args.js";
+import { stderrWrite } from "../tui/io-mode.js";
 import { parseInteractionMode, type InteractionMode } from "../gate/modes.js";
 import { claimProtocolStream, stdoutWrite } from "../tui/io-mode.js";
 import type { ColorFlag } from "../tui/theme/resolve.js";
@@ -779,7 +780,7 @@ export const COMMANDS: readonly Command[] = [
       if (maxStepsRaw !== undefined) {
         maxSteps = Number(maxStepsRaw);
         if (!Number.isInteger(maxSteps) || maxSteps < 1) {
-          process.stderr.write(`lykos run: --max-steps must be a positive integer, got "${maxStepsRaw}"\n`);
+          stderrWrite(`lykos run: --max-steps must be a positive integer, got "${maxStepsRaw}"\n`);
           return 1;
         }
       }

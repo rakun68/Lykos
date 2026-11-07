@@ -211,14 +211,17 @@ export function createGuardedExecutor(opts: GuardedExecutorOptions): ProjectExec
       if (options.shell === true) {
         const line = [command, ...args].join(" ");
         const bash = bashCommandLine(line, shellPath);
-        if (bash === undefined) throw new Error(noBashMessage(resolveHostBash(shellPath) as { message: string }));
+        if (bash === undefined) {
+          const resolution = resolveHostBash(shellPath);
+          throw new Error(noBashMessage(resolution.ok ? { message: "a bash resolved, then none did" } : resolution));
+        }
         return guardedChild(bash.command, bash.args, options, opts.record);
       }
       return guardedChild(command, args, options, opts.record);
     },
     shellOperations: (shell) =>
       shell === "bash"
-        ? createGuardedShellOperations("bash", () => getShellConfig(shellPath) as ResolvedShell, opts.record)
-        : powerShellOperations(createGuardedShellOperations("powershell", () => getPowerShellConfig() as ResolvedShell, opts.record)),
+        ? createGuardedShellOperations("bash", () => getShellConfig(shellPath), opts.record)
+        : powerShellOperations(createGuardedShellOperations("powershell", () => getPowerShellConfig(), opts.record)),
   };
 }

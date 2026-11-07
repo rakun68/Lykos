@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { stderrWrite } from "../tui/io-mode.js";
+import { useConfiguredShellPath } from "../process/host-bash.js";
 import { dirname, join, resolve } from "node:path";
 import { detectDefaultBase, loadConfig } from "../config/load.js";
 import { defaultLedgerPath, recordSealEvent } from "../ledger/use.js";
@@ -98,6 +100,7 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
     } catch {}
   }
   const { resolved: config } = loadConfig({ cwd, ...(env ? { env } : {}) });
+  useConfiguredShellPath(config.delegation.shell_path);
   const baseBranch = opts.base !== undefined && opts.base !== "" ? opts.base : (configBase && configBase.length > 0) ? configBase : detectDefaultBase(cwd);
   const baseSha = resolveRef(baseBranch, cwd, env);
   if (!baseSha) {
@@ -253,10 +256,10 @@ export async function sealCreate(opts: SealCreateOptions): Promise<SealCreateRes
           workspace: worktree.dir,
           ...(gitWorktree !== undefined ? { gitWorktree } : {}),
           hostEnv: env,
-          log: (line) => process.stderr.write(`${line}\n`),
+          log: (line) => stderrWrite(`${line}\n`),
         });
         if (containment.notice !== undefined) {
-          process.stderr.write(`${containment.notice}\n`);
+          stderrWrite(`${containment.notice}\n`);
         }
         executor = containment.executor;
       }

@@ -9,15 +9,17 @@ import { formatSessionSummary, loadSessionSummary } from "../ledger/summary.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { DEFAULT_DELEGATED_MODE } from "../delegate/session-protocol.js";
 import { stderrWrite, stdoutWrite } from "../tui/io-mode.js";
-import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
+import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from "../gate/trust.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { loadConfig } from "../config/load.js";
+import type { ResolvedConfig } from "../config/types.js";
 import type { RunStandaloneTaskInput } from "../session/session.js";
 import { readFileSync } from "node:fs";
 import { runDelegated } from "../delegate/mcp-server.js";
 import { parseTaskFile, resolveTestCommand, testCommandBrief, type TaskFile } from "../delegate/task-file.js";
 import { taskBrief } from "../delegate/issue-fetch.js";
 import { noBashMessage, resolveHostBash } from "../process/host-bash.js";
+import { delegatedExitCode } from "./delegation.js";
 
 export interface RunCliOptions {
   model?: string;
@@ -124,10 +126,10 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
   // not a trust bypass: no workspace content is read, and an invalid command
   // cannot start a session regardless of trust.
   if (!opts.interactive && (!prompt || prompt.trim().length === 0)) {
-    process.stderr.write('lykos run: expected a brief, e.g. `lykos run "..."`\n');
+    stderrWrite('lykos run: expected a brief, e.g. `lykos run "..."`\n');
     return 1;
   }
-  let trust;
+  let trust: TrustDecision;
   try {
     trust = await ensureWorkspaceTrust({
       workspace: cwd,
@@ -136,15 +138,15 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
     });
   } catch (err) {
     const message = err instanceof WorkspaceTrustError ? err.message : String(err);
-    process.stderr.write(`lykos run: refused — ${message}\n`);
+    stderrWrite(`lykos run: refused — ${message}\n`);
     return 1;
   }
   if (opts.interactive && opts.inPlace === true) {
-    process.stderr.write("lykos run: --in-place is read by delegated sessions only; an interactive session edits the workspace directly.\n");
+    stderrWrite("lykos run: --in-place is read by delegated sessions only; an interactive session edits the workspace directly.\n");
     return 1;
   }
   if (opts.interactive && (opts.containment !== undefined || opts.network !== undefined)) {
-    process.stderr.write(
+    stderrWrite(
       "lykos run: --containment and --network are not read by --interactive; set containment.level and containment.network in config.\n",
     );
     return 1;
@@ -155,16 +157,16 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
   }
 
   // T247: every delegated host shell is the resolved bash; without one the run never starts.
-  let config;
+  let config: ResolvedConfig;
   try {
     config = loadConfig({ cwd }).resolved;
   } catch (err) {
-    process.stderr.write(`lykos run: refused — ${err instanceof Error ? err.message : String(err)}\n`);
+    stderrWrite(`lykos run: refused — ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
   }
   const bash = resolveHostBash(config.delegation.shell_path);
   if (!bash.ok) {
-    process.stderr.write(`lykos run: refused — ${noBashMessage(bash)}\n`);
+    stderrWrite(`lykos run: refused — ${noBashMessage(bash)}\n`);
     return 1;
   }
 
@@ -180,7 +182,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
       for (const warning of task.warnings) stderrWrite(`lykos run: ${warning}\n`);
       brief = taskBrief(task, { cwd });
     } catch (err) {
-      process.stderr.write(`lykos run: ${err instanceof Error ? err.message : String(err)}\n`);
+      stderrWrite(`lykos run: ${err instanceof Error ? err.message : String(err)}\n`);
       return 1;
     }
     brief = `${brief.trim()}\n\n${testCommandBrief(resolveTestCommand(task, config))}`;
@@ -230,7 +232,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
     process.off("SIGINT", onSigint);
   }
   stdoutWrite(`${JSON.stringify(result, null, 2)}\n`);
-  return result.outcome === "ok" || result.outcome === "needs_answer" ? 0 : 1;
+  return delegatedExitCode(result);
 }
 
 /**
@@ -260,7 +262,7 @@ async function runInteractive(cwd: string, opts: RunCliOptions, trustSource: "st
   });
 
   if (result.status === "error") {
-    process.stderr.write(`lykos run: ${result.message}\n`);
+    stderrWrite(`lykos run: ${result.message}\n`);
     return 1;
   }
 

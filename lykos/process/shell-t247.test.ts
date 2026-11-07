@@ -14,7 +14,7 @@ import { call, reply, runScriptedSession, say } from "../cli/scripted-session.js
 import { openLedgerSync } from "../ledger/use.js";
 import { runVerificationCommand } from "../session/verify-outcome.js";
 import { localExecutor } from "../tools/executor.js";
-import { bashCommandLine, resolveHostBash } from "./host-bash.js";
+import { bashCommandLine, resolveHostBash, useConfiguredShellPath } from "./host-bash.js";
 import { pidExists } from "./identity.js";
 import { createGuardedExecutor } from "./shell.js";
 
@@ -129,6 +129,20 @@ describe("T247: one shell for harness commands", () => {
     const run = await runVerificationCommand('[[ -n "$BASH_VERSION" ]] && echo in-bash', tmp(), 60_000, localExecutor);
     assert.equal(run.exitCode, 0, run.output);
     assert.match(run.output, /in-bash/);
+  });
+
+  it("delegation.shell_path, once configured, is the bash localExecutor runs (verification, red checks)", () => {
+    const missing = join(tmp(), "no-such-bash.exe");
+    useConfiguredShellPath(missing);
+    try {
+      const resolved = resolveHostBash();
+      assert.equal(resolved.ok, false, "the configured path is tried, not Pi's search order");
+      assert.match((resolved as { message: string }).message, /no-such-bash/);
+      assert.equal(bashCommandLine("true"), undefined);
+    } finally {
+      useConfiguredShellPath(undefined);
+    }
+    assert.equal(resolveHostBash().ok, true);
   });
 
   it("the guarded executor runs a shell line in the same bash", async () => {

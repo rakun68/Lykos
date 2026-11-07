@@ -6,14 +6,20 @@
 import { lstatSync, readdirSync, rmdirSync, unlinkSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
-/** Unlinks every symbolic link and junction under `dir`, never descending through one. Returns those that stayed. */
+function isGone(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+}
+
+/** Unlinks every symbolic link and junction under `dir`, never descending through one. Returns those that stayed, and every entry it could not read: either keeps the tree. */
 export function unlinkLinksUnder(dir: string): string[] {
   const stayed: string[] = [];
   const walk = (folder: string): void => {
     let entries: Dirent[];
     try {
       entries = readdirSync(folder, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      // A folder that is gone holds no link; one that cannot be read may, so the tree stays.
+      if (!isGone(err)) stayed.push(folder);
       return;
     }
     for (const entry of entries) {
@@ -24,7 +30,8 @@ export function unlinkLinksUnder(dir: string): string[] {
         const st = lstatSync(path);
         isLink = st.isSymbolicLink();
         isDir = st.isDirectory();
-      } catch {
+      } catch (err) {
+        if (!isGone(err)) stayed.push(path);
         continue;
       }
       if (isLink) {

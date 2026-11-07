@@ -81,8 +81,6 @@ export interface AdmitInput {
   writeInPlaceTree?: string | undefined;
   /** `delegation.max_sessions`. */
   projectCap: number;
-  /** A continuation of an earlier session: its row is reused. */
-  continuation?: boolean;
   /** T246: this process took the live row over with `takeOver` (`lykos recover`); it runs it. */
   adopt?: boolean;
   /** Tests pass a stand-in. */
@@ -109,7 +107,10 @@ export function admit(ledger: Ledger, input: AdmitInput): Admission {
 
   const run = ledger.db.transaction((): Admission => {
     if (input.requestId !== undefined) {
-      const existing = ledger.db.prepare(`SELECT ${COLUMNS} FROM owners WHERE request_id = ?`).get(input.requestId) as OwnerRow | undefined;
+      // Every request id a session was admitted under finds it: the first is on the row, a continuation's in owner_requests.
+      const existing = ledger.db
+        .prepare(`SELECT ${COLUMNS} FROM owners WHERE request_id = @id OR session_id = (SELECT session_id FROM owner_requests WHERE request_id = @id)`)
+        .get({ id: input.requestId }) as OwnerRow | undefined;
       if (existing !== undefined) return { ok: false, kind: "duplicate", sessionId: existing.session_id, row: existing };
     }
     const current = ownerRow(ledger, input.sessionId);
@@ -163,7 +164,8 @@ export function admit(ledger: Ledger, input: AdmitInput): Admission {
       started_at: new Date(me.recordedAt).toISOString(),
     };
     if (current !== undefined) {
-      // A continuation: the same session, a new owner and a fresh run. Its first request id stays.
+      // A continuation: the same session, a new owner and a fresh run. Its first request id stays on the row; every
+      // later one is in owner_requests.
       ledger.db
         .prepare(
           `UPDATE owners SET owner = @owner, owner_pid = @owner_pid, owner_recorded_at_ms = @owner_recorded_at_ms,
@@ -180,6 +182,9 @@ export function admit(ledger: Ledger, input: AdmitInput): Admission {
            VALUES (@session_id, @request_id, @owner, @owner_pid, @owner_recorded_at_ms, @specialist, @write_in_place, 'running', @started_at)`,
         )
         .run(values);
+    }
+    if (input.requestId !== undefined) {
+      ledger.db.prepare("INSERT OR IGNORE INTO owner_requests (request_id, session_id) VALUES (?, ?)").run(input.requestId, input.sessionId);
     }
     return { ok: true };
   });

@@ -12,7 +12,9 @@ import { describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SESSION_LABEL } from "../containment/containment.js";
 import type { ListedContainer } from "../containment/runtime.js";
+import { reply, runScriptedSession, say } from "../cli/scripted-session.js";
 import { Ledger } from "../ledger/ledger.js";
+import { openLedgerSync } from "../ledger/use.js";
 import { JobRegistry } from "../tools/job-runner.js";
 import type { ExecChild, ProjectExecutor } from "../tools/executor.js";
 import { startGuard } from "./guard.js";
@@ -184,5 +186,40 @@ describe("T256: the job runner reports what did not stop", () => {
       report.notStopped.map((j) => j.id),
       [job.id],
     );
+  });
+});
+
+describe("T256: a delegated session files its records under the owners row", () => {
+  it("an in-place session without containment carries the id it was given, and its records are under it", async () => {
+    const run = await runScriptedSession({
+      files: { "package.json": "{}\n" },
+      config: "gate:\n  enabled: false\n",
+      extra: { delegated: true, trustSource: "stored", sessionId: "owner-row-new", processOwnerId: "owner-row-new" },
+      script: [reply(say("done"))],
+    });
+    assert.equal(run.result.status, "ok", JSON.stringify(run.result));
+    assert.equal((run.result as { sessionId: string }).sessionId, "owner-row-new", "the session is the row it runs for");
+    const l = openLedgerSync(run.ledgerPath);
+    try {
+      assert.deepEqual(l.processRecords("owner-row-new").map((r) => r.kind), ["child"]);
+    } finally {
+      l.close();
+    }
+  });
+
+  it("a continuation's records are under the owners row, whatever its Pi session id", async () => {
+    const run = await runScriptedSession({
+      files: { "package.json": "{}\n" },
+      config: "gate:\n  enabled: false\n",
+      extra: { delegated: true, trustSource: "stored", processOwnerId: "owner-row-continued" },
+      script: [reply(say("done"))],
+    });
+    assert.equal(run.result.status, "ok", JSON.stringify(run.result));
+    const l = openLedgerSync(run.ledgerPath);
+    try {
+      assert.deepEqual(l.processRecords("owner-row-continued").map((r) => r.kind), ["child"]);
+    } finally {
+      l.close();
+    }
   });
 });

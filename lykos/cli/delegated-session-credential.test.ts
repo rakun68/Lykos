@@ -68,8 +68,10 @@ describe("a delegated `lykos run` uses Lykos's credential pool (T180)", () => {
     assert.equal(exit, 0, `child failed: ${stderr}`);
     assert.equal((JSON.parse(readFileSync(outFile, "utf8")) as { code: number }).code, 0, `lykos run failed: ${stderr}`);
     assert.ok(server.seen.length >= 1 && server.seen.every((k) => k === "pooled-key"), `keys seen: ${server.seen.join(",")}`);
-    assert.match(stdout, /pong/);
-    assert.match(stdout, /containment: off \(commands ran on this machine\)/);
+    // T243: `lykos run` prints the MCP result contract as JSON.
+    const printed = JSON.parse(stdout) as { answer: string; containment: string };
+    assert.equal(printed.answer, "pong");
+    assert.equal(printed.containment, "off");
 
     // `lykos show` names the pool credential the ledger recorded for the session's calls.
     const ledgerPath = join(workspace, ".lykos", "ledger.db");

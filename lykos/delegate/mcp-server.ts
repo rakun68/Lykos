@@ -51,6 +51,7 @@ import {
   stopRequested,
   takeInbox,
   viewOf,
+  type Admission,
   type OpenQuestion,
   ownerLiveness,
   type OwnerKind,
@@ -1121,7 +1122,7 @@ async function startTrackedSession(
   const newSessionId = args.session_id === undefined ? randomUUID() : undefined;
   const targetSessionId = args.session_id ?? newSessionId!;
   const ledgerPath = defaultLedgerPath(workspace);
-  let admission;
+  let admission: Admission;
   try {
     admission = withLedgerSync(ledgerPath, (ledger) =>
       admit(ledger, {
@@ -1131,7 +1132,6 @@ async function startTrackedSession(
         specialist: specialistName,
         ...(!isEffectiveReadOnly && args.write_in_place === true ? { writeInPlaceTree: workspace } : {}),
         projectCap,
-        continuation: args.session_id !== undefined,
         ...(owner.adopt === true ? { adopt: true } : {}),
       }),
     );
@@ -1179,7 +1179,8 @@ async function startTrackedSession(
     mode,
     specialist: specialistName,
     ...(args.base !== undefined && args.session_id === undefined ? { base: args.base } : {}),
-    ...(def.isAlias && args.model !== undefined ? { model: args.model } : {}),
+    // `lykos run --model` is the CLI's own flag; on MCP only the deprecated aliases take a model.
+    ...((def.isAlias || owner.kind === "run") && args.model !== undefined ? { model: args.model } : {}),
     ...(args.budget !== undefined ? { budgetUsd: args.budget } : {}),
     ...(args.max_steps !== undefined ? { maxSteps: args.max_steps } : {}),
     ...(args.containment !== undefined ? { containment: args.containment } : {}),
@@ -1548,9 +1549,10 @@ async function handleStatus(
   }
   const ids = args.session_id !== undefined ? [args.session_id] : args.session_ids!;
 
-  // T243: a session another process owns (`lykos run`, another server) is read from the ledger.
+  // T243: a session another process owns (`lykos run`, another server) is read from the ledger. A mix of this
+  // server's sessions and others' is read from the ledger too: this server's are admitted there as well.
   const elsewhere = ids.filter((id) => !registry.has(id));
-  if (elsewhere.length > 0 && elsewhere.length === ids.length) {
+  if (elsewhere.length > 0) {
     const views = ledgerViews(workspace, ids);
     if (views.length === ids.length) {
       const waitSeconds = Math.min(Math.max(args.wait_seconds ?? 0, 0), 300);

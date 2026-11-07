@@ -1,4 +1,5 @@
 import { sealKeyInit } from "../seal/keys.js";
+import { stderrWrite } from "../tui/io-mode.js";
 import { sealCreate } from "../seal/create.js";
 import { sealStatus } from "../seal/status.js";
 import { verifySeals } from "../seal/verify.js";
@@ -44,7 +45,7 @@ export async function runSeal(cwd: string, args: string[]): Promise<number> {
       } else if (a === "--path") {
         const p = rest[++i];
         if (p === undefined) {
-          process.stderr.write("lykos seal create: --path needs a file\n");
+          stderrWrite("lykos seal create: --path needs a file\n");
           return 1;
         }
         paths.push(p);
@@ -68,7 +69,7 @@ export async function runSeal(cwd: string, args: string[]): Promise<number> {
         ...(noRed ? { red: false } : {}),
       });
       if (!res.ok) {
-        if (res.red === "passing") process.stderr.write("lykos seal create: WEAK-SPEC: the sealed tests already pass (next: answer_spec)\n");
+        if (res.red === "passing") stderrWrite("lykos seal create: WEAK-SPEC: the sealed tests already pass (next: answer_spec)\n");
         for (const err of res.errors ?? ["seal creation failed"]) {
           process.stderr.write(`${err}\n`);
         }
