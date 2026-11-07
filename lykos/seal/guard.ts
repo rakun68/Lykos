@@ -24,8 +24,10 @@ export interface SealedDrift {
 export interface SealRestore {
   /** What differed and was put back. */
   restored: SealedDrift[];
-  /** Paths still different after the restore. */
+  /** Paths still different after the restore. When git could not compare at all, every explicit sealed path: none of them is known to be intact. */
   failed: string[];
+  /** Set when git could not compare or restore; the guard is then unsure, not clean. */
+  error?: string;
 }
 
 const GLOB_CHARS = /[*?[\]{}]/;
@@ -65,9 +67,18 @@ export function sealedDrift(cwd: string, seals: readonly ActiveSeal[], env?: Nod
   return found;
 }
 
-/** Puts every drifted sealed path back to its seal commit, in the working tree and the index. */
+/**
+ * Puts every drifted sealed path back to its seal commit, in the working tree and the index. Never throws: a
+ * comparison git could not make is a failed restore of every path it should have compared, with the reason, so a
+ * caller that sees nothing wrong has seen nothing wrong.
+ */
 export function restoreSealed(cwd: string, seals: readonly ActiveSeal[], env?: NodeJS.ProcessEnv): SealRestore {
-  const drift = sealedDrift(cwd, seals, env);
+  let drift: SealedDrift[];
+  try {
+    drift = sealedDrift(cwd, seals, env);
+  } catch (err) {
+    return { restored: [], failed: seals.flatMap(explicitSealedPaths), error: `sealed paths could not be compared: ${err instanceof Error ? err.message : String(err)}` };
+  }
   const failed: string[] = [];
   const bySeal = new Map<string, SealedDrift[]>();
   for (const d of drift) bySeal.set(d.sealCommit, [...(bySeal.get(d.sealCommit) ?? []), d]);
@@ -79,7 +90,12 @@ export function restoreSealed(cwd: string, seals: readonly ActiveSeal[], env?: N
     }
   }
   if (drift.length > 0) {
-    const still = new Set(sealedDrift(cwd, seals, env).map((d) => d.path));
+    let still: Set<string>;
+    try {
+      still = new Set(sealedDrift(cwd, seals, env).map((d) => d.path));
+    } catch (err) {
+      return { restored: [], failed: drift.map((d) => d.path), error: `sealed paths could not be compared after the restore: ${err instanceof Error ? err.message : String(err)}` };
+    }
     for (const d of drift) if (still.has(d.path)) failed.push(d.path);
   }
   return { restored: drift.filter((d) => !failed.includes(d.path)), failed };

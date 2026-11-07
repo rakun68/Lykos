@@ -290,6 +290,8 @@ export interface SealTestCommandAllowanceOptions {
   cwd: string;
   config: ResolvedConfig;
   specialist?: string | undefined;
+  /** The session cannot change files for a reason the config does not carry (a read-only child, an interaction mode). */
+  readOnly?: boolean | undefined;
 }
 
 export interface SealTestCommandAllowance {
@@ -306,7 +308,8 @@ export function canSealAllowanceEverAllow(opts: SealTestCommandAllowanceOptions)
   if (!hasSealExtension) {
     return false;
   }
-  if (config.readOnly === true) {
+  // A read-only session has no sealed test to write and none to be guarded from.
+  if (config.readOnly === true || opts.readOnly === true) {
     return false;
   }
   const specialist = opts.specialist ?? DEFAULT_SPECIALIST;
@@ -400,7 +403,7 @@ export function createSealTestCommandAllowance(
   const isWriter = writers.has(specialist);
   const isEnforced = sealEnforced({
     specialist,
-    readOnly: config.readOnly === true,
+    readOnly: config.readOnly === true || opts.readOnly === true,
     writers: [...writers],
     enforceFor: config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR,
   });

@@ -72,17 +72,20 @@ export function createSealOrder(input: SealOrderInput): SealOrder | undefined {
     writers: config.seal.writers ?? DEFAULT_SEAL_WRITERS,
     enforceFor: config.seal.enforce_for ?? DEFAULT_SEAL_ENFORCE_FOR,
   });
-  if (!enforced || sealsOf(input.cwd, input.env).length === 0) return undefined;
+  const sealsAtStart = sealsOf(input.cwd, input.env);
+  if (!enforced || sealsAtStart.length === 0) return undefined;
+  const startBranch = sealsAtStart[0]!.seal.branch;
 
+  /** Records an event; returns why it could not be written. */
   const event = async (
     kind: "restored" | "tampered",
     seals: readonly ActiveSeal[],
     paths: readonly string[],
     detail: Record<string, unknown>,
-  ): Promise<void> => {
+  ): Promise<string | undefined> => {
     try {
       await recordSealEvent(input.ledgerPath, {
-        branch: seals[0]?.seal.branch ?? "",
+        branch: seals[0]?.seal.branch ?? startBranch,
         sessionId: input.sessionId,
         creator: input.sessionId,
         specialist,
@@ -90,24 +93,33 @@ export function createSealOrder(input: SealOrderInput): SealOrder | undefined {
         paths: [...paths],
         detail: JSON.stringify(detail),
       });
-    } catch {
-      // The verdict does not depend on the ledger row.
+      return undefined;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
     }
   };
 
-  const restore = async (phase: "before verification" | "during verification"): Promise<SealRestore> => {
+  /**
+   * Puts the sealed paths back. A restore that failed, or that could not be recorded for the coordinator, is a
+   * problem the caller must raise: `problem` says it, and the order refuses to verify on it.
+   */
+  const restore = async (phase: "before verification" | "during verification"): Promise<SealRestore & { problem?: string }> => {
     const current = sealsOf(input.cwd, input.env);
     const outcome = restoreSealed(input.cwd, current, input.env);
-    if (outcome.restored.length > 0 || outcome.failed.length > 0) {
-      await event("restored", current, [...outcome.restored.map((d) => d.path), ...outcome.failed], {
-        flag: "SEALED-EDIT",
-        source: "verification",
-        by: `a process of the session ${phase}`,
-        restored: outcome.restored.map((d) => ({ path: d.path, where: d.where })),
-        ...(outcome.failed.length > 0 ? { failed: outcome.failed } : {}),
-      });
-    }
-    return outcome;
+    if (outcome.restored.length === 0 && outcome.failed.length === 0 && outcome.error === undefined) return outcome;
+    const unrecorded = await event("restored", current, [...outcome.restored.map((d) => d.path), ...outcome.failed], {
+      flag: "SEALED-EDIT",
+      source: "verification",
+      by: `a process of the session ${phase}`,
+      restored: outcome.restored.map((d) => ({ path: d.path, where: d.where })),
+      ...(outcome.failed.length > 0 ? { failed: outcome.failed } : {}),
+      ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+    });
+    const problems = [
+      ...(outcome.error !== undefined ? [outcome.error] : outcome.failed.length > 0 ? [`could not be restored: ${outcome.failed.join(", ")}`] : []),
+      ...(unrecorded !== undefined ? [`the restore could not be recorded for the coordinator (${unrecorded})`] : []),
+    ];
+    return problems.length > 0 ? { ...outcome, problem: problems.join("; ") } : outcome;
   };
 
   return {
@@ -132,7 +144,10 @@ export function createSealOrder(input: SealOrderInput): SealOrder | undefined {
         return { refuse: `[lykos-seal] Verification not run: the session's processes are not confirmed stopped: ${describeNotStopped(notStopped)}` };
       }
 
-      await restore("before verification");
+      const restored = await restore("before verification");
+      if (restored.problem !== undefined) {
+        return { refuse: `[lykos-seal] SEALED-EDIT: Verification not run: sealed paths ${restored.problem}` };
+      }
 
       const verified = await verifySeals({
         cwd: input.cwd,
@@ -151,10 +166,11 @@ export function createSealOrder(input: SealOrderInput): SealOrder | undefined {
 
     async recheck(rerun) {
       const first = await restore("during verification");
-      if (first.restored.length === 0 && first.failed.length === 0) return undefined;
+      if (first.restored.length === 0 && first.failed.length === 0 && first.error === undefined) return undefined;
       await rerun();
       const second = await restore("during verification");
       const failed = first.failed.length + second.failed.length > 0;
+      const problems = [first.problem, second.problem].filter((p): p is string => p !== undefined);
       const paths = [
         ...new Set([...first.restored.map((d) => d.path), ...first.failed, ...second.restored.map((d) => d.path), ...second.failed]),
       ];
@@ -162,6 +178,7 @@ export function createSealOrder(input: SealOrderInput): SealOrder | undefined {
         blockReason:
           `[lykos-seal] SEALED-EDIT: ${paths.map((p) => `"${p}"`).join(", ")} changed while the verification command ran and ` +
           `${failed ? "could not be restored" : "was restored"}; the command was rerun once on the restored tree. ` +
+          `${problems.length > 0 ? `Problem: ${problems.join("; ")}. ` : ""}` +
           `Sealed tests cannot be edited; if a test is wrong, dispute it.`,
       };
     },

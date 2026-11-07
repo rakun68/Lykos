@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { LykosExtensionHost } from "../extensions/api.js";
@@ -534,5 +534,104 @@ describe("T232: the verification order", () => {
     const restored = events("restored");
     assert.equal(restored.length, 2, "the restore after the first run, and after the rerun");
     assert.ok(restored.every((e) => /during verification/.test(String(e.detail.by))));
+  });  // Review round: the seal's order fails closed and survives a committed sealed edit.
+  it("a sealed edit committed in the same command: restored, SEALED-EDIT raised, the command still runs, and the session-end commit leaves the seal valid", async () => {
+    const { ledger, sessionId } = session();
+    ledger.close();
+    const h = host("implementer");
+    NODE.overwrite(wt, SEALED, "// weakened\n");
+    git(wt, "commit", "-q", "-am", "weaken and commit in one command");
+    const notes = await h.runToolResult("bash", { command: 'python -c "..." && git commit -am x' }, false);
+    assert.match(notes[0] ?? "", /SEALED-EDIT/);
+    assert.equal(read(SEALED), FAILING);
+    assert.equal(events("restored").length, 1, "SEALED-EDIT is on record for the coordinator");
+
+    const counter = join(root, "runs-committed.txt");
+    const command = `node "${script("count2.mjs", "import { appendFileSync } from 'node:fs'; appendFileSync(process.argv[2], 'run\\n');")}" "${counter.replace(/\\/g, "/")}"`;
+    const result = await runSessionGate({ policy: resolveGatePolicy(wt, { command }), sessionId, ledgerPath, edited: true, sealOrder: order(sessionId) });
+    assert.equal((result as { outcome: string }).outcome, "success", verdict(sessionId).verification_output ?? "");
+    assert.equal(readFileSync(counter, "utf8"), "run\n");
+
+    // The session's end: the restored file is committed with the rest, and the seal then validates on the commits too.
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "session end");
+    const after = await verifySeals({ cwd: wt, env: env() });
+    assert.equal(after.ok, true, after.output);
   });
+
+  it("a sealed edit committed and never seen by the guard is restored by the order itself, and verification runs", async () => {
+    const { ledger, sessionId } = session();
+    ledger.close();
+    NODE.overwrite(wt, SEALED, "// weakened\n");
+    git(wt, "commit", "-q", "-am", "weaken");
+    const result = await runSessionGate({ policy: resolveGatePolicy(wt, { command: "node -e 0" }), sessionId, ledgerPath, edited: true, sealOrder: order(sessionId) });
+    assert.equal((result as { outcome: string }).outcome, "success", verdict(sessionId).verification_output ?? "");
+    assert.equal(read(SEALED), FAILING);
+    assert.equal(events("restored").length, 1);
+  });
+
+  it("a committed edit the tree still carries is still refused", async () => {
+    const { ledger, sessionId } = session();
+    ledger.close();
+    NODE.overwrite(wt, SEALED, "// weakened\n");
+    git(wt, "commit", "-q", "-am", "weaken");
+    // Git refuses the restore while the index is locked, so the edit stays in the tree.
+    writeFileSync(resolve(wt, git(wt, "rev-parse", "--git-path", "index.lock")), "");
+    const marker = join(root, "ran-locked.txt");
+    const command = `node "${script("mark3.mjs", "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], 'ran');")}" "${marker.replace(/\\/g, "/")}"`;
+    const result = await runSessionGate({ policy: resolveGatePolicy(wt, { command }), sessionId, ledgerPath, edited: true, sealOrder: order(sessionId) });
+    assert.equal((result as { outcome: string }).outcome, "fail");
+    assert.equal(existsSync(marker), false, "the command did not run");
+    assert.match(verdict(sessionId).verification_output ?? "", /SEALED-EDIT/);
+    assert.match(verdict(sessionId).verification_output ?? "", /could not be restored/);
+  });
+
+  /** A ledger that opens but refuses a seal event, as a full or locked database does. */
+  function refuseSealEvents(): () => void {
+    const ledger = Ledger.open(ledgerPath);
+    ledger.db.exec("CREATE TRIGGER refuse_seal_events BEFORE INSERT ON seal_events BEGIN SELECT RAISE(ABORT, 'ledger refuses'); END");
+    ledger.close();
+    return () => {
+      const l = Ledger.open(ledgerPath);
+      l.db.exec("DROP TRIGGER refuse_seal_events");
+      l.close();
+    };
+  }
+
+  it("a restore the ledger cannot record refuses verification instead of passing silently", async () => {
+    const { ledger, sessionId } = session();
+    ledger.close();
+    refuseSealEvents();
+    NODE.overwrite(wt, SEALED, "// weakened\n");
+    const marker = join(root, "ran-unrecorded.txt");
+    const command = `node "${script("mark4.mjs", "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], 'ran');")}" "${marker.replace(/\\/g, "/")}"`;
+    const result = await runSessionGate({ policy: resolveGatePolicy(wt, { command }), sessionId, ledgerPath, edited: true, sealOrder: order(sessionId) });
+    assert.equal((result as { outcome: string }).outcome, "fail");
+    assert.equal(existsSync(marker), false, "the command did not run");
+    assert.match(verdict(sessionId).verification_output ?? "", /SEALED-EDIT.*could not be recorded/);
+  });
+
+  it("the guard says so to the model when a restore cannot be recorded, and records it once the ledger accepts it", async () => {
+    const h = host("implementer");
+    const accept = refuseSealEvents();
+    NODE.overwrite(wt, SEALED, "// weakened\n");
+    const notes = await h.runToolResult("bash", { command: "x" }, false);
+    assert.match(notes[0] ?? "", /SEALED-EDIT/);
+    assert.match(notes[0] ?? "", /could not be recorded/);
+    assert.equal(events("restored").length, 0);
+    accept();
+    assert.deepEqual(await h.runToolResult("read", { path: SEALED }, false), []);
+    assert.equal(events("restored").length, 1, "the restore reached the ledger on the next call");
+  });
+
+  it("a comparison git cannot make is a failed restore of every sealed path, not a clean tree", () => {
+    const seals = activeSeals({ cwd: wt, env: env() });
+    const notARepo = join(root, "not-a-repo");
+    mkdirSync(notARepo);
+    const outcome = restoreSealed(notARepo, seals, env());
+    assert.deepEqual(outcome.restored, []);
+    assert.deepEqual(outcome.failed, [SEALED]);
+    assert.match(outcome.error ?? "", /could not be compared/);
+  });
+
 });

@@ -591,50 +591,67 @@ export function register(api: LykosExtensionApi): void {
     return getSeals();
   }
 
+  // A restore the ledger refused is kept and written again with the next one, so the coordinator is told in the end.
+  const unrecordedRestores: Array<Parameters<typeof recordSealEvent>[1]> = [];
+
+  /** Records a restore with any earlier one the ledger refused; returns why a record is still missing. */
+  async function recordRestore(ledgerPath: string, event?: Parameters<typeof recordSealEvent>[1]): Promise<string | undefined> {
+    const pending = [...unrecordedRestores.splice(0), ...(event !== undefined ? [event] : [])];
+    let failure: string | undefined;
+    for (const e of pending) {
+      try {
+        await recordSealEvent(ledgerPath, e);
+      } catch (err) {
+        unrecordedRestores.push(e);
+        failure = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return failure;
+  }
+
   /** Restores drifted sealed paths; returns the note for the model, or undefined when nothing had changed. */
   async function guardSealed(source: "tool_result" | "job_end", what: string): Promise<string | undefined> {
     const specialist = api.specialist ?? DEFAULT_SPECIALIST;
     if (!isEnforced(specialist)) return undefined;
     const seals = freshSeals();
     if (seals.length === 0) return undefined;
-    let outcome;
-    try {
-      outcome = restoreSealed(cwd, seals);
-    } catch {
+    const outcome = restoreSealed(cwd, seals);
+    if (outcome.restored.length === 0 && outcome.failed.length === 0 && outcome.error === undefined) {
+      if (unrecordedRestores.length > 0) await recordRestore(resolveLedgerPath(cwd, config.telemetry.ledger, api.ledgerPath));
       return undefined;
     }
-    if (outcome.restored.length === 0 && outcome.failed.length === 0) return undefined;
     const sessionId = api.getSessionId?.() ?? null;
     const ledgerPath = resolveLedgerPath(cwd, config.telemetry.ledger, api.ledgerPath);
     const paths = [...outcome.restored.map((d) => d.path), ...outcome.failed];
-    try {
-      await recordSealEvent(ledgerPath, {
-        branch: outcome.restored[0]?.branch ?? seals[0]!.seal.branch,
-        sessionId,
-        creator: sessionId ?? "cli",
-        specialist,
-        kind: "restored",
-        paths,
-        detail: JSON.stringify({
-          flag: "SEALED-EDIT",
-          source,
-          by: what,
-          restored: outcome.restored.map((d) => ({ path: d.path, where: d.where })),
-          ...(outcome.failed.length > 0 ? { failed: outcome.failed } : {}),
-        }),
-      });
-    } catch {
-      // Ignore ledger recording error
-    }
+    // A restore that failed, or a comparison git could not make, is raised exactly like a restore: never silent.
+    const unrecorded = await recordRestore(ledgerPath, {
+      branch: outcome.restored[0]?.branch ?? seals[0]!.seal.branch,
+      sessionId,
+      creator: sessionId ?? "cli",
+      specialist,
+      kind: "restored",
+      paths,
+      detail: JSON.stringify({
+        flag: "SEALED-EDIT",
+        source,
+        by: what,
+        restored: outcome.restored.map((d) => ({ path: d.path, where: d.where })),
+        ...(outcome.failed.length > 0 ? { failed: outcome.failed } : {}),
+        ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+      }),
+    });
     const parts: string[] = [];
     if (outcome.restored.length > 0) {
       parts.push(
         `${outcome.restored.map((d) => `"${d.path}"`).join(", ")} ${outcome.restored.length === 1 ? "was" : "were"} changed by ${what} and has been restored to the sealed version.`,
       );
     }
-    if (outcome.failed.length > 0) {
+    if (outcome.error !== undefined) {
+      parts.push(`After ${what}, ${outcome.error}; none of ${outcome.failed.map((p) => `"${p}"`).join(", ")} is known to be intact.`);
+    } else if (outcome.failed.length > 0) {
       parts.push(`${outcome.failed.map((p) => `"${p}"`).join(", ")} changed by ${what} and could not be restored.`);
     }
+    if (unrecorded !== undefined) parts.push(`The restore could not be recorded for the coordinator (${unrecorded}); it is retried at the next call.`);
     return `[lykos-seal] SEALED-EDIT: ${parts.join(" ")} Sealed tests cannot be edited; if a test is wrong, call dispute_test.`;
   }
 

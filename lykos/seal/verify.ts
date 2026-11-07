@@ -4,7 +4,7 @@ import { detectDefaultBase, loadConfig } from "../config/load.js";
 import { parseYaml } from "../config/yaml-file.js";
 import { defaultLedgerPath, recordSealEvent } from "../ledger/use.js";
 import { activeSeals } from "./active.js";
-import { sealedDrift } from "./guard.js";
+import { explicitSealedPaths, sealedDrift } from "./guard.js";
 import {
   getFileAtCommit,
   getModifiedFilesSince,
@@ -159,7 +159,14 @@ export async function verifySeals(opts: VerifySealsOptions = {}): Promise<Verify
     }
 
     const nonSealPaths = seal.sealed_paths.filter((p) => p !== relPath);
-    const modified = getModifiedFilesSince(sealCommit, nonSealPaths, cwd, env, head);
+    // The working-tree comparison is of what the session's end commit will hold. A sealed path that HEAD changed (a
+    // commit the guard has since undone in the tree) but the tree and index match to the seal again is not a change:
+    // the restored file is committed at the session's end. A path HEAD changed that the tree still differs on is.
+    const treeMode = opts.workingTree === true && opts.commit === undefined;
+    const drift = treeMode ? sealedDrift(cwd, [item], env) : [];
+    const driftPaths = new Set(drift.map((d) => d.path));
+    const explicit = new Set(explicitSealedPaths(item));
+    const modified = getModifiedFilesSince(sealCommit, nonSealPaths, cwd, env, head).filter((p) => !treeMode || !explicit.has(p) || driftPaths.has(p));
     if (modified.length > 0) {
       const deleted = modified.filter((p) => getFileAtCommit(head, p, cwd, env) === null);
       if (deleted.length > 0) {
@@ -168,7 +175,6 @@ export async function verifySeals(opts: VerifySealsOptions = {}): Promise<Verify
       causes.push(`changed sealed paths: ${modified.join(", ")}`);
     }
 
-    const drift = opts.workingTree === true && opts.commit === undefined ? sealedDrift(cwd, [item], env) : [];
     for (const d of drift) {
       if (!modified.includes(d.path)) modified.push(d.path);
       causes.push(`sealed path differs from the seal in the ${d.where.map((w) => (w === "worktree" ? "working tree" : "index")).join(" and ")}: ${d.path}`);

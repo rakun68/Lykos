@@ -1716,6 +1716,11 @@ export async function writeInteractiveBootRow(
   }
 }
 
+/** Whether the session can change files now: its posture (a plan the human accepted lifts it), else the config. */
+export function sessionIsReadOnly(booted: Pick<BootedStandaloneSession, "readOnlyPosture">, config: Pick<ResolvedConfig, "readOnly">): boolean {
+  return booted.readOnlyPosture !== undefined ? booted.readOnlyPosture.readOnly : config.readOnly === true;
+}
+
 export async function finishInteractiveSession(opts: {
   booted: BootedStandaloneSession;
   session: InteractiveSession;
@@ -1856,6 +1861,7 @@ export async function finishInteractiveSession(opts: {
         ledgerPath,
         sessionId,
         specialist: booted.extensionHost.getSpecialist(),
+        readOnly: sessionIsReadOnly(booted, config),
         closeWriters: () => booted.jobs.close(),
       }),
       onStart: (cmd) => opts.outcomeWrite(renderGateStart(cmd, gatePolicy.timeoutMs)),

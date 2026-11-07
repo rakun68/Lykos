@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { createSealTestCommandAllowance, wrapApprovalGateWithSealAllowance } from "./delegated.js";
+import { canSealAllowanceEverAllow, createSealTestCommandAllowance, wrapApprovalGateWithSealAllowance } from "./delegated.js";
 import { DenyAllGate, type ApprovalRequest } from "./approval.js";
 import { loadConfig } from "../config/load.js";
 import { generateEd25519KeyPair, signPayload } from "../seal/crypto.js";
@@ -135,6 +135,24 @@ describe("T208 ACCEPTANCE: dispute_test is allowed for an enforced specialist", 
       assert.equal(await gate.request(extensionCall("dispute_test", "lykos-seal")), "allow");
       assert.notEqual(await gate.request(extensionCall("dispute_test", "some-other-extension")), "allow");
       assert.notEqual(await gate.request(extensionCall("rewrite_tests", "lykos-seal")), "allow");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("T232 review: a read-only session gets no seal allowance", () => {
+  it("dispute_test passes the gate for a writable implementer and not for the same specialist in a read-only session", async () => {
+    const { dir, cleanup } = workspace(true);
+    try {
+      const { resolved: config } = loadConfig({ cwd: dir });
+      const writable = createSealTestCommandAllowance({ cwd: dir, config, specialist: "implementer", readOnly: false });
+      const readOnly = createSealTestCommandAllowance({ cwd: dir, config, specialist: "implementer", readOnly: true });
+      assert.equal(writable.canEverAllow, true);
+      assert.equal(canSealAllowanceEverAllow({ cwd: dir, config, specialist: "implementer", readOnly: true }), false);
+      assert.equal(readOnly.canEverAllow, false);
+      const gate = wrapApprovalGateWithSealAllowance(new DenyAllGate(), readOnly);
+      assert.notEqual(await gate.request(extensionCall("dispute_test", "lykos-seal")), "allow");
     } finally {
       cleanup();
     }

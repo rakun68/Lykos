@@ -1464,11 +1464,12 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
     gate = resolveApprovalGate({ autoApprove });
   }
 
-  if (canSealAllowanceEverAllow({ cwd: toolCwd, config, specialist })) {
+  if (canSealAllowanceEverAllow({ cwd: toolCwd, config, specialist, readOnly })) {
     const allowance = createSealTestCommandAllowance({
       cwd: toolCwd,
       config,
       specialist,
+      readOnly,
     });
     gate = wrapApprovalGateWithSealAllowance(gate, allowance);
   }
