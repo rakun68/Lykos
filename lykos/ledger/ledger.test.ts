@@ -27,6 +27,8 @@ describe("Ledger", () => {
       // for the semantic repeats T66's exact-match signal cannot see.
       // sqlite_sequence is SQLite's own, created by the AUTOINCREMENT on it.
       [
+        // baselines joined on T249: the verification command's run on a base commit, keyed by base, command, lockfile and platform.
+        "baselines",
         "calls",
         // commits joined on T179: each commit a session made through `commit`.
         "commits",
@@ -56,6 +58,8 @@ describe("Ledger", () => {
         "rediscovery_annotations",
         // seal_events joined on T195: sealed TDD events.
         "seal_events",
+        // session_baselines joined on T249: the baseline each delegated session was given, and whether it was reused.
+        "session_baselines",
         "sessions",
         "sqlite_sequence",
         "tasks",

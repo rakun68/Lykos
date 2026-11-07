@@ -693,6 +693,22 @@ The pack is recorded in `context_packs` (telemetry §2) before the model runs, a
 as `context_pack` (`base`, `root`, `bytes`, and one `{kind, path}` per entry). A continuation keeps the
 pack it began with. No config key sets it: the task decides.
 
+**Baseline of known failures (T249, spec decision 9).** A new session whose task has a verification command
+gets the command's run on its base commit (`--base`, else the caller's `HEAD`), run in a temporary worktree of
+the base, never the session's tree. The run is keyed by the base sha, the command, the hash of the base's
+lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `go.sum` and the like, by path and
+content; `none` when it has none) and the platform. A second session on the same key reuses the recorded run
+and does not run the command; a changed lockfile, command or platform is a new key and so a new run. The run
+is recorded before the model runs (`baselines` and `session_baselines`, telemetry §2), and `lykos status`
+shows it as `baseline`: `status`, `reused`, the key (`base`, `command`, `lockfile_hash`, `platform`) and, when
+`measured`, `kind`, `exit_code`, `failing` and `tests_total`. For `node --test` and `cargo test` commands
+`failing` lists the failing tests by name (`file > describe > name`); for any other command `kind` is
+`exit-only` and `failing` is empty because the runner reports no tests, so read `kind` before reading an
+empty list as "nothing failed". A run that could not happen (no such command, a timeout of 15 minutes, no base
+commit to check out) is `unmeasured` with a `reason` and no `failing` at all; the next session retries it. The
+run delays the first session on a key until the command ends. No config key sets it: the verification command
+decides.
+
 ### 3.2 Sealed TDD configuration (T195)
 
 Configured under the `seal:` key in `config.yaml`:

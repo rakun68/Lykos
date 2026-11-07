@@ -742,6 +742,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateProcessRecords(db);
   migrateOwners(db);
   migrateContextPacks(db);
+  migrateBaselines(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -970,6 +971,40 @@ function migrateContextPacks(db: Database.Database): void {
       bytes         INTEGER NOT NULL,
       entries_json  TEXT NOT NULL,
       text          TEXT NOT NULL
+    );
+  `);
+}
+
+/**
+ * T249: create `baselines` and `session_baselines` on a ledger that predates them. A baseline is the verification
+ * command's run on a base commit, one row per (base, command, lockfile hash, platform); a session points at the row it
+ * was given. A baseline that did not run is `unmeasured` with its reason, never an empty list.
+ */
+function migrateBaselines(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS baselines (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      base_commit        TEXT NOT NULL,
+      command            TEXT NOT NULL,
+      lockfile_hash      TEXT NOT NULL,
+      platform           TEXT NOT NULL,
+      status             TEXT NOT NULL,
+      adapter            TEXT,
+      kind               TEXT,
+      exit_code          INTEGER,
+      failing_json       TEXT,
+      tests_total        INTEGER,
+      signature          TEXT,
+      unmeasured_reason  TEXT,
+      duration_ms        INTEGER,
+      recorded_at        TEXT NOT NULL,
+      UNIQUE (base_commit, command, lockfile_hash, platform)
+    );
+    CREATE TABLE IF NOT EXISTS session_baselines (
+      session_id   TEXT PRIMARY KEY,
+      baseline_id  INTEGER NOT NULL,
+      reused       INTEGER NOT NULL,
+      recorded_at  TEXT NOT NULL
     );
   `);
 }

@@ -232,6 +232,13 @@ glossary terms the task uses, the docs that name the files, their recent history
 the verification command. Every path in it is absolute. It is recorded in the ledger with the session.
 _Avoid_: briefing, preamble, context file (a file in the tree)
 
+**Baseline**:
+The task's verification command run once on the base commit, recorded with the failing test names so a
+session and its reviewers can tell a failure the task caused from one the base already had. It is keyed by
+the base, the command, the lockfile hash and the platform, and reused by every session on that key. A
+baseline that did not run is _unmeasured_, never an empty list.
+_Avoid_: known failures list, pre-existing failures, reference run
+
 **Task file**:
 The Markdown file a coordinator hands Lykos for one task, in Boxie's format: frontmatter naming its
 files, sealed tests, verification command, scope and issue, and a body that is the brief.

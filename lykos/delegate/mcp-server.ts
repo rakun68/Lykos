@@ -27,6 +27,7 @@ import {
   specialistToolName,
   type SpecialistLocation,
 } from "../config/specialists.js";
+import { baselineSummary } from "./baseline.js";
 import { contextPackSummary } from "./context-pack.js";
 import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
@@ -1459,7 +1460,8 @@ export function ledgerViews(workspace: string, ids?: readonly string[]): Session
     ownerRows(ledger, ids).map((row) => {
       const view = viewOf(row, ownerLiveness, () => ownerRow(ledger, row.session_id));
       const pack = contextPackSummary(ledger, row.session_id);
-      return pack === undefined ? view : { ...view, context_pack: pack };
+      const baseline = baselineSummary(ledger, row.session_id);
+      return { ...view, ...(pack !== undefined ? { context_pack: pack } : {}), ...(baseline !== undefined ? { baseline } : {}) };
     }),
   );
 }

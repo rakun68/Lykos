@@ -35,6 +35,7 @@ import { resolveSpecialist, DEFAULT_SPECIALIST } from "../config/specialists.js"
 import { activeSeals, type ActiveSeal } from "../seal/active.js";
 import { getBranchOrNull, resolveRef } from "../seal/git.js";
 import { resealAt, sealFromSpec } from "../seal/spec.js";
+import { baselineKey, ensureBaseline, recordSessionBaseline } from "../delegate/baseline.js";
 import { buildContextPack, recordContextPack } from "../delegate/context-pack.js";
 import { findSealedPathMatch } from "../extensions/defaults/lykos-seal.js";
 import { commandPathAccesses } from "../gate/bash-paths.js";
@@ -378,6 +379,36 @@ async function withContextPack(
 ${pack.text}`;
 }
 
+/**
+ * T249: the baseline of a new session with a verification command: the command's run on the base commit, reused when
+ * an earlier session ran it on the same base, command, lockfile and platform, and recorded against this session before
+ * the model runs. A run that could not happen is recorded as unmeasured, with why; it never stops the session.
+ */
+async function recordBaselineFor(
+  request: SessionRequest,
+  ledgerPath: string,
+  sessionId: string,
+  env: NodeJS.ProcessEnv,
+  progress: (message: string) => void,
+): Promise<void> {
+  const command = request.context?.test;
+  if (request.sessionId !== undefined || command === undefined) return;
+  const key = baselineKey(request.workspace, request.base ?? "HEAD", command);
+  if (key === undefined) {
+    progress("baseline: skipped, the project has no base commit to run the verification command on");
+    return;
+  }
+  progress("baseline: checking for a recorded run of the verification command on the base");
+  const result = await ensureBaseline(ledgerPath, { repo: request.workspace, key, env });
+  await withLedger(ledgerPath, async (ledger) => recordSessionBaseline(ledger, sessionId, result));
+  const b = result.baseline;
+  progress(
+    b.status === "unmeasured"
+      ? `baseline: unmeasured, ${b.reason}`
+      : `baseline: ${result.reused ? "reused" : "measured"}, ${b.kind === "names" ? `${b.failing.length} failing of ${b.tests_total ?? "?"} tests` : `exit ${b.exit_code}`}`,
+  );
+}
+
 function progressIntervalFromEnv(env: NodeJS.ProcessEnv): number {
   const raw = Number(env.LYKOS_SESSION_PROGRESS_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROGRESS_INTERVAL_MS;
@@ -435,6 +466,7 @@ async function runRequest(
       const sealed = await sealBeforeModel(request, target.workTree?.path, ledgerPath, sessionId, env, progress);
       if (sealed !== undefined) return { spec: sealed };
       const prompt = await withContextPack(request, target.workTree?.path ?? request.workspace, ledgerPath, sessionId, progress);
+      await recordBaselineFor(request, ledgerPath, sessionId, env, progress);
       const existingCreateSession = deps.sessionExtras?.bootDeps?.createSession;
       const wrappedCreateSession: typeof createAgentSession = async (bootOpts) => {
         const create = existingCreateSession ?? createAgentSession;

@@ -4,7 +4,7 @@ import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
 import type { SealAdapter, SealRedTest } from "./types.js";
 import { failureSignature, isCargoTestCommand, parseCargoTestOutput, type FailureSignature } from "./failing-names.js";
 
-const REPORTER_CJS = `
+export const REPORTER_CJS = `
 module.exports = async function* reporter(source) {
   for await (const event of source) {
     yield JSON.stringify(event) + "\\n";
