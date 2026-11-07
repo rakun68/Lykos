@@ -128,21 +128,24 @@ export interface DiffStat {
   deletions: number;
 }
 
-export type NextToken =
-  | "review_or_accept"
-  | "inspect_flags"
-  | "inspect_seal"
-  | "answer_question"
-  | "resolve_test_dispute"
-  | "continue_with_failure"
-  | "run_verification"
-  | "fix_environment"
-  | "approve"
-  | "answer_spec"
-  | "triage"
-  | "decide"
-  | "resume"
-  | "recover";
+/** The closed set of `next` tokens (spec decisions 13 and 16). */
+export const NEXT_TOKENS = [
+  "review_or_accept",
+  "inspect_flags",
+  "inspect_seal",
+  "answer_question",
+  "resolve_test_dispute",
+  "continue_with_failure",
+  "run_verification",
+  "fix_environment",
+  "approve",
+  "answer_spec",
+  "triage",
+  "decide",
+  "resume",
+  "recover",
+] as const;
+export type NextToken = (typeof NEXT_TOKENS)[number];
 
 export type ResultFlagKind =
   | "OUT-OF-SCOPE"

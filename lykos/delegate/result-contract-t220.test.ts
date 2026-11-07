@@ -109,7 +109,7 @@ interface StoreFixture {
   /** The session file's assistant messages, in order. */
   said: string[];
   /** seal_events the session's gate or seal extension wrote. */
-  sealEvents?: Array<{ branch: string; kind: SealEventKind; paths: string[]; detail: string | Record<string, unknown> }>;
+  sealEvents?: Array<{ branch: string; kind: SealEventKind; paths: string[] | string; detail: string | Record<string, unknown> }>;
 }
 
 /** What the real child leaves behind: a ledger row and a session file, written through their own writers. */
@@ -474,6 +474,19 @@ describe("T220 ACCEPTANCE: a denied write to a sealed path is a tamper attempt",
       assert.equal(r.seal?.status, "tamper_attempted", JSON.stringify(r));
       assert.deepEqual(r.seal?.attempts?.map((a) => [a.tool, a.paths]), [["restore", ["test/add.test.mjs"]]]);
       assert.equal(r.next, "inspect_seal");
+    });
+  });
+
+  it("T232 review: a seal event whose paths column is not a JSON array of paths is read as the text it is, not iterated", async () => {
+    const run = implementer(() => [
+      { branch: sealed, kind: "restored", paths: '{"unexpected":true}', detail: "not json: a veto's command line" },
+      { branch: sealed, kind: "tamper_attempted", paths: '[1,"test/add.test.mjs"]', detail: '"a string"' },
+    ]);
+    await withServer(ws, run, async (client) => {
+      const { r } = await call(client, { specialist: "implementer", base: sealed });
+      const edit = ((r.flags as Array<{ flag: string; files?: string[] }> | undefined) ?? []).find((f) => f.flag === "SEALED-EDIT");
+      assert.deepEqual(edit?.files, ['{"unexpected":true}'], JSON.stringify(r));
+      assert.deepEqual(r.seal?.attempts?.map((a) => [a.tool, a.paths]), [["restore", ['{"unexpected":true}']], ["bash", ["test/add.test.mjs"]]]);
     });
   });
 

@@ -29,7 +29,7 @@ import {
 } from "../config/specialists.js";
 import { baselineSummary } from "./baseline.js";
 import { contextPackSummary } from "./context-pack.js";
-import { decisionsOf, findingDecisionsOf } from "./decisions.js";
+import { CAUSES, DECISIONS, decideAt, decisionsOf, findingDecisionsOf } from "./decisions.js";
 import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger, type SealEventRow } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
 import { readTranscript, transcriptFilePath, type TranscriptEventInput, type TranscriptEventRecord } from "../session/transcript.js";
@@ -206,6 +206,14 @@ const StopInputShape = {
   session_id: z.string().min(1).describe("Session ID to stop (required)."),
 };
 
+const DecideInputShape = {
+  session_id: z.string().min(1).describe("Session ID to decide on (required)."),
+  decision: z.enum(DECISIONS).describe("accept or reject its result, record that it is merged, or discard it."),
+  reason: z.string().describe("Why (required)."),
+  cause: z.string().optional().describe(`One of: ${CAUSES.join(", ")}.`),
+  actor: z.string().optional().describe("Who decided. Default: coordinator."),
+};
+
 const SpecialistInputShape = {
   brief: z.string().min(1).describe("The task to delegate: a specific, self-contained brief."),
   constraints: z.string().optional().describe("Additional constraints, conventions, or context the session should follow."),
@@ -307,6 +315,32 @@ function buildSpecialistPrompt(brief: string, constraints: string | undefined): 
   return prompt;
 }
 
+/** A seal event's `paths`: the JSON array the ledger stores, an array already, or (an older row) one path held as text. */
+function sealEventPaths(paths: unknown): string[] {
+  if (Array.isArray(paths)) return paths.filter((p): p is string => typeof p === "string");
+  if (typeof paths !== "string") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(paths);
+  } catch {
+    return [paths];
+  }
+  return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [paths];
+}
+
+/** A seal event's `detail` as a record: a veto's detail is a command line, not JSON, and then there is no record. */
+function sealEventDetail(detail: unknown): Record<string, unknown> {
+  let parsed: unknown = detail;
+  if (typeof detail === "string") {
+    try {
+      parsed = JSON.parse(detail);
+    } catch {
+      return {};
+    }
+  }
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+}
+
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
 
 // MCP tool hints, all four set on every tool. They are fixed per tool name, so a tool
@@ -319,6 +353,9 @@ const STATUS_HINTS: ToolAnnotations = { readOnlyHint: true, destructiveHint: fal
 const STEER_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 /** Stopping leaves the session resumable; stopping it twice changes nothing more. */
 const STOP_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
+/** A decision is a row appended to the ledger: it changes no session's work, and a second call records a second decision. */
+const DECIDE_HINTS: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
 
 function taskHints(readOnly: boolean | undefined): ToolAnnotations {
   return readOnly === true ? READER_HINTS : WRITER_HINTS;
@@ -608,61 +645,26 @@ async function buildSessionOutcomeResult(
     const sealedEditPaths = new Set<string>();
     const sealedEditDetails: string[] = [];
     for (const ev of sealEventsForSession) {
+      const evPaths = sealEventPaths(ev.paths);
       if (ev.kind === "vetoed" || ev.kind === "restored") {
-        let evPaths: string[] = [];
-        if (typeof ev.paths === "string") {
-          try { evPaths = JSON.parse(ev.paths); } catch { evPaths = [ev.paths]; }
-        } else if (Array.isArray(ev.paths)) {
-          evPaths = ev.paths;
-        }
         for (const p of evPaths) sealedEditPaths.add(p);
         sealedEditDetails.push(ev.kind === "vetoed" ? `vetoed: ${typeof ev.detail === "string" ? ev.detail : evPaths.join(", ")}` : `restored: ${evPaths.join(", ")}`);
       }
       if (ev.kind === "restored") {
-        let by = "restore";
-        if (typeof ev.detail === "string") {
-          try { by = String((JSON.parse(ev.detail) as { by?: unknown }).by ?? by); } catch {}
-        }
-        let evPaths: string[] = [];
-        if (typeof ev.paths === "string") {
-          try { evPaths = JSON.parse(ev.paths); } catch { evPaths = [ev.paths]; }
-        } else if (Array.isArray(ev.paths)) {
-          evPaths = ev.paths;
-        }
+        const by = String(sealEventDetail(ev.detail)["by"] ?? "restore");
         attempts.push({ tool: "restore", detail: `${by}: ${evPaths.join(", ")}`, paths: evPaths });
       }
       if (ev.kind === "tamper_attempted") {
-        let parsedDetail: { tool?: string; detail?: string } = {};
-        if (typeof ev.detail === "string") {
-          try { parsedDetail = JSON.parse(ev.detail) as { tool?: string; detail?: string }; } catch {}
-        } else if (typeof ev.detail === "object" && ev.detail !== null) {
-          parsedDetail = ev.detail as { tool?: string; detail?: string };
-        }
-        let paths: string[] = [];
-        if (typeof ev.paths === "string") {
-          try { paths = JSON.parse(ev.paths); } catch { paths = [ev.paths]; }
-        } else if (Array.isArray(ev.paths)) {
-          paths = ev.paths;
-        }
+        const parsedDetail = sealEventDetail(ev.detail);
         attempts.push({
-          tool: parsedDetail.tool ?? "bash",
-          detail: parsedDetail.detail ?? (typeof ev.detail === "string" ? ev.detail : ""),
-          paths,
+          tool: typeof parsedDetail["tool"] === "string" ? parsedDetail["tool"] : "bash",
+          detail: typeof parsedDetail["detail"] === "string" ? parsedDetail["detail"] : typeof ev.detail === "string" ? ev.detail : "",
+          paths: evPaths,
         });
       } else if (ev.kind === "vetoed") {
         const detailStr = typeof ev.detail === "string" ? ev.detail : "";
         const tool = detailStr.trim().split(/\s+/)[0] ?? "";
-        let paths: string[] = [];
-        if (typeof ev.paths === "string") {
-          try { paths = JSON.parse(ev.paths); } catch { paths = [ev.paths]; }
-        } else if (Array.isArray(ev.paths)) {
-          paths = ev.paths;
-        }
-        attempts.push({
-          tool,
-          detail: detailStr,
-          paths,
-        });
+        attempts.push({ tool, detail: detailStr, paths: evPaths });
       }
     }
 
@@ -1985,6 +1987,19 @@ export function createMcpServer(opts: CreateMcpServerOptions): McpServer & { poo
     },
     async (args) => {
       return handleStop(opts.workspace, args, registry);
+    },
+  );
+
+  server.registerTool(
+    "lykos_decide",
+    {
+      description: "Record your decision on a session: accept, reject, merged or discard, with a reason and a cause. Same rules as lykos accept|reject|merged|discard.",
+      inputSchema: DecideInputShape,
+      annotations: DECIDE_HINTS,
+    },
+    async (args) => {
+      const decided = await decideAt(defaultLedgerPath(opts.workspace), args.decision, args.session_id, args, "reason");
+      return toResult(decided.kind === "invalid" ? { outcome: "error", message: decided.message } : decided.body);
     },
   );
 

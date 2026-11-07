@@ -9,8 +9,11 @@ import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { defaultLedgerPath, openLedgerSync } from "../ledger/use.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CAUSES, DECISIONS, recordFindingDecision } from "./decisions.js";
-import { ledgerViews } from "./mcp-server.js";
+import { createMcpServer, ledgerViews } from "./mcp-server.js";
+import { NEXT_TOKENS } from "./session-protocol.js";
 
 const saved: Record<string, string | undefined> = {};
 before(() => {
@@ -198,5 +201,86 @@ describe("T233: decisions", () => {
         { cycle_id: null, finding_id: "f1", action: "retired", reason: "fixed in round 2" },
       ],
     );
+  });
+});
+
+describe("T233 review: the next token of a decision is in the closed set", () => {
+  it("accept says decide, reject says resume, merged and discard say nothing more; none is outside the set", () => {
+    const ws = workspace();
+    const id = endedSession(ws);
+    const nexts: Record<string, string | undefined> = {};
+    for (const kind of ["accept", "reject", "merged", "discard"] as const) {
+      const r = lykos(ws, kind, id, "--why", "because");
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const out = JSON.parse(r.stdout) as { next?: string };
+      nexts[kind] = out.next;
+      if (out.next !== undefined) assert.ok((NEXT_TOKENS as readonly string[]).includes(out.next), `${kind}: ${out.next} is in the closed set`);
+    }
+    assert.deepEqual(nexts, { accept: "decide", reject: "resume", merged: undefined, discard: undefined });
+  });
+});
+
+describe("T233 review: the MCP tool decides by the same rules as the CLI", () => {
+  async function withClient<T>(ws: string, use: (call: (args: Record<string, unknown>) => Promise<{ isError: boolean; body: Record<string, unknown> }>) => Promise<T>): Promise<T> {
+    const trustPath = join(mkdtempSync(join(tmpdir(), "lykos-t233-store-")), "trust.json");
+    const server = createMcpServer({ workspace: ws, version: "0.0.1-test", trustPath, run: async () => ({ outcome: "ok", answer: "done", sessionId: "unused" }) });
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "t233", version: "0.0.1" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      return await use(async (args) => {
+        const res = (await client.callTool({ name: "lykos_decide", arguments: args })) as { isError?: boolean; content: Array<{ type: string; text: string }> };
+        return { isError: res.isError === true, body: JSON.parse(res.content[0]!.text) as Record<string, unknown> };
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+
+  it("records a decision with cause, reason and actor, and status shows it like the CLI's", async () => {
+    const ws = workspace();
+    const id = endedSession(ws);
+    await withClient(ws, async (call) => {
+      const rejected = await call({ session_id: id, decision: "reject", reason: "left a stand-in", cause: "worker_careless", actor: "ada" });
+      assert.equal(rejected.isError, false);
+      assert.equal(rejected.body.decision, "reject");
+      assert.equal(rejected.body.next, "resume");
+      const accepted = await call({ session_id: id, decision: "accept", reason: "second attempt passes" });
+      assert.equal(accepted.body.actor, "coordinator");
+    });
+    const history = ledgerViews(ws, [id])[0]!.decisions!.map(({ decision, cause, reason, actor }) => ({ decision, cause, reason, actor }));
+    assert.deepEqual(history, [
+      { decision: "reject", cause: "worker_careless", reason: "left a stand-in", actor: "ada" },
+      { decision: "accept", cause: null, reason: "second attempt passes", actor: "coordinator" },
+    ]);
+  });
+
+  it("refuses an unknown cause, a blank reason, an unknown session and a crashed session's accept, recording nothing", async () => {
+    const ws = workspace();
+    const id = endedSession(ws);
+    await withClient(ws, async (call) => {
+      const cause = await call({ session_id: id, decision: "accept", reason: "x", cause: "bad_luck" });
+      assert.equal(cause.isError, true);
+      assert.match(String(cause.body.message), /unknown cause "bad_luck"/);
+      assert.match(String(cause.body.message), /spec_vague/);
+      const blank = await call({ session_id: id, decision: "accept", reason: "  " });
+      assert.equal(blank.isError, true);
+      assert.match(String(blank.body.message), /reason is required/);
+      const unknown = await call({ session_id: "nope", decision: "accept", reason: "x" });
+      assert.equal(unknown.isError, true);
+      assert.match(String(unknown.body.message), /unknown session id: nope/);
+    });
+    assert.equal(ledgerViews(ws, [id])[0]!.decisions, undefined);
+    const ws2 = workspace();
+    const crashed = await crashedSession(ws2);
+    await withClient(ws2, async (call) => {
+      const refused = await call({ session_id: crashed, decision: "accept", reason: "x" });
+      assert.equal(refused.isError, true);
+      assert.equal(refused.body.next, "recover");
+      const discarded = await call({ session_id: crashed, decision: "discard", reason: "owner died" });
+      assert.equal(discarded.isError, false);
+      assert.equal(discarded.body.crashed_session_ended, true);
+    });
   });
 });
