@@ -39,10 +39,10 @@ describe("Ledger", () => {
         // inbox joined on T244: steers for a delegated session, from any process, delivered by its owner.
         "inbox",
         "memory_eligibility",
-        // owners joined on T243: who owns each delegated session, by pid and record time.
-        "owners",
         // owner_requests: every request id a session was admitted under, so a retried continuation finds it.
         "owner_requests",
+        // owners joined on T243: who owns each delegated session, by pid and record time.
+        "owners",
         "price_versions",
         // process_records joined on T257: each guard or process a session relies on, recorded before it runs.
         "process_records",
