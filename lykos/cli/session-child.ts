@@ -395,7 +395,7 @@ async function recordBaselineFor(
   if (request.sessionId !== undefined || command === undefined) return;
   const key = baselineKey(request.workspace, request.base ?? "HEAD", command);
   if (key === undefined) {
-    progress("baseline: skipped, the project has no base commit to run the verification command on");
+    progress("baseline: skipped, the base names no commit or its lockfiles could not be read");
     return;
   }
   progress("baseline: checking for a recorded run of the verification command on the base");

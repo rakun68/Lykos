@@ -13,6 +13,7 @@ import { runSessionChild } from "../cli/session-child.js";
 import { defaultLedgerPath, withLedgerSync } from "../ledger/use.js";
 import type { RunStandaloneTaskInput } from "../session/session.js";
 import { ensureBaseline, baselineKey, lockfileHashAt, NO_LOCKFILE, type BaselineKey } from "./baseline.js";
+import { resolveHostBash, useConfiguredShellPath } from "../process/host-bash.js";
 import { ledgerViews } from "./mcp-server.js";
 import { admit } from "./ownership.js";
 import { encodeFrame, PROTOCOL_VERSION, type SessionRequest } from "./session-protocol.js";
@@ -274,5 +275,109 @@ describe("T249: a new session is given its baseline before the model runs, and s
     assert.equal(shown?.failing, undefined);
     assert.match(shown?.reason ?? "", /exit 127/);
     assert.equal(views.find((v) => v.session_id === bare.sessionId)?.baseline, undefined);
+  });
+});
+
+describe("T249 review: what could not be measured is never recorded as measured", () => {
+  it("is unmeasured, not a failing run, when no bash resolves and the shell would be cmd.exe", async () => {
+    const { repo, base, ledgerPath } = project();
+    useConfiguredShellPath(join(home, "no-such-dir", "bash.exe"));
+    try {
+      assert.equal(resolveHostBash().ok, false, "the configured bash does not exist");
+      const { baseline } = await ensureBaseline(ledgerPath, { repo, key: keyOf(repo, base, "lykos-t249-no-such-command-anywhere") });
+      assert.equal(baseline.status, "unmeasured");
+      assert.ok(baseline.status === "unmeasured");
+      assert.match(baseline.reason, /no bash resolves/);
+    } finally {
+      useConfiguredShellPath(undefined);
+    }
+  });
+
+  it("records a test file that crashes at import as a failing entry, never an empty list", async () => {
+    const { repo, base, ledgerPath } = project();
+    put(repo, "broken.test.js", `require("./no-such-module-t249");\nrequire("node:test").test("never reached", () => {});\n`);
+    put(repo, "fine.test.js", `require("node:test").test("fine", () => {});\n`);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "a file that cannot be loaded");
+    const command = "node --test broken.test.js fine.test.js";
+    const { baseline } = await ensureBaseline(ledgerPath, { repo, key: keyOf(repo, "HEAD", command) });
+    assert.ok(baseline.status === "measured");
+    assert.equal(baseline.kind, "names");
+    assert.notEqual(baseline.exit_code, 0);
+    assert.deepEqual(baseline.failing, ["broken.test.js"]);
+  });
+
+  it("kills the whole process tree on a timeout, so nothing outlives the run", async () => {
+    const { repo, base, ledgerPath } = project();
+    const pidFile = join(home, "grandchild.pid");
+    rmSync(pidFile, { force: true });
+    put(repo, "grand.js", `require("node:fs").writeFileSync(process.env.T249_PID, String(process.pid));\nsetTimeout(() => {}, 120000);\n`);
+    put(repo, "hang.js", `require("node:child_process").spawn(process.execPath, ["grand.js"], { stdio: "ignore" });\nsetTimeout(() => {}, 120000);\n`);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "a command that leaves a grandchild");
+    const { baseline } = await ensureBaseline(ledgerPath, {
+      repo,
+      key: keyOf(repo, "HEAD", "node hang.js"),
+      env: { ...process.env, T249_PID: pidFile },
+      timeoutMs: 4000,
+    });
+    assert.ok(baseline.status === "unmeasured");
+    assert.match(baseline.reason, /did not finish in/);
+    assert.ok(existsSync(pidFile), "the grandchild started");
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    const alive = (): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 20 && alive(); i += 1) await new Promise((r) => setTimeout(r, 100));
+    const survived = alive();
+    if (survived) process.kill(pid, "SIGKILL");
+    assert.equal(survived, false, "the grandchild is gone when the baseline returns");
+  });
+
+  it("gives a ledger row with no exit code or duration no made-up number", async () => {
+    const { repo, base, ledgerPath } = project();
+    const key = keyOf(repo, base);
+    withLedgerSync(ledgerPath, (ledger) => {
+      ledger.db
+        .prepare(
+          `INSERT INTO baselines (base_commit, command, lockfile_hash, platform, status, adapter, kind, exit_code, failing_json, tests_total, signature, unmeasured_reason, duration_ms, recorded_at)
+           VALUES (?, ?, ?, ?, 'measured', 'node:test', 'names', NULL, '[]', NULL, NULL, NULL, NULL, 'then')`,
+        )
+        .run(key.base, key.command, key.lockfileHash, key.platform);
+    });
+    const { baseline } = await ensureBaseline(ledgerPath, { repo, key });
+    assert.ok(baseline.status === "measured");
+    assert.equal("exit_code" in baseline, false);
+    assert.equal("duration_ms" in baseline, false);
+  });
+
+  it("has no lockfile hash when git cannot say, rather than reporting none", () => {
+    const { repo } = project();
+    assert.equal(lockfileHashAt(repo, "0".repeat(40)), undefined);
+    assert.equal(baselineKey(repo, "0".repeat(40), COMMAND), undefined);
+  });
+});
+
+describe("T249 review: the key follows the install the run uses", () => {
+  it("a changed node_modules install is a new key and a new run; an unchanged one is reused", async () => {
+    const { repo, base, ledgerPath } = project();
+    rmSync(counter, { force: true });
+    put(repo, "node_modules/.package-lock.json", '{"packages":{"node_modules/a":{"version":"1.0.0"}}}\n');
+    const first = await ensureBaseline(ledgerPath, { repo, key: keyOf(repo, base) });
+    assert.equal(first.reused, false);
+    assert.equal(runs(), 1);
+    assert.equal((await ensureBaseline(ledgerPath, { repo, key: keyOf(repo, base) })).reused, true);
+    assert.equal(runs(), 1);
+    put(repo, "node_modules/.package-lock.json", '{"packages":{"node_modules/a":{"version":"1.0.1"}}}\n');
+    const key = keyOf(repo, base);
+    assert.notEqual(key.lockfileHash, first.baseline.key.lockfileHash);
+    const next = await ensureBaseline(ledgerPath, { repo, key });
+    assert.equal(next.reused, false);
+    assert.equal(runs(), 2, "the changed install ran the command again");
   });
 });

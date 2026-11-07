@@ -540,6 +540,146 @@ async function runVitestMode(
   }
 }
 
+/** What node:test's reporter events say, per file: the tests, the file-level errors (a file that crashed at import), the stderr. */
+export interface NodeTestStream {
+  testsByFile: Map<string, SealedTestResult[]>;
+  fileErrors: Map<string, string>;
+  fileStderr: Map<string, string[]>;
+  parsedAnyEvent: boolean;
+}
+
+/** The one parser of node:test's reporter events (the sealed runner and the baseline both read through it). `mapFile` names a reported file as the caller names it. */
+export function parseNodeTestStream(stdout: string, mapFile: (rawFile: string) => string): NodeTestStream {
+  const lines = stdout.split("\n");
+  const suiteParents = new Map<string, { name: string; parentId: number }>();
+  const testsByFile = new Map<string, SealedTestResult[]>();
+  const fileErrors = new Map<string, string>();
+  const fileStderr = new Map<string, string[]>();
+  const startStacks = new Map<string, string[]>();
+
+  let parsedAnyEvent = false;
+
+  for (const line of lines) {
+    let event: NodeTestEvent | undefined;
+    try {
+      event = JSON.parse(line) as NodeTestEvent;
+    } catch {
+      continue;
+    }
+    const data = event?.data;
+    if (!data) continue;
+    parsedAnyEvent = true;
+
+    const rawFile = data.file || data.entryFile || "";
+    const file = mapFile(rawFile);
+
+    if (event.type === "test:stderr") {
+      if (file) {
+        const arr = fileStderr.get(file) ?? [];
+        arr.push(data.message || "");
+        fileStderr.set(file, arr);
+      }
+      continue;
+    }
+
+    if (event.type === "test:enqueue" || event.type === "test:start") {
+      if (data.type === "suite") {
+        suiteParents.set(`${file}:${data.testId}`, { name: data.name ?? "", parentId: data.parentId ?? 0 });
+      }
+    }
+
+    // Node versions without testId/parentId: test:start events arrive in order per file,
+    // so the names at lower nesting levels are the ancestors.
+    if (event.type === "test:start" && typeof data.nesting === "number") {
+      const stack = startStacks.get(file) ?? [];
+      stack.length = data.nesting;
+      stack.push(data.name ?? "");
+      startStacks.set(file, stack);
+    }
+
+    if (event.type === "test:fail") {
+      if (data.details?.type === "suite") {
+        continue;
+      }
+
+      const isFileLevel =
+        data.name === data.file ||
+        ((data.parentId === 0 || (data.parentId === undefined && data.nesting === 0)) &&
+          rawFile &&
+          data.name &&
+          String(rawFile).replace(/\\/g, "/").endsWith(`/${data.name}`));
+
+      if (isFileLevel) {
+        const stderrText = (fileStderr.get(file) ?? []).join("");
+        const errDetail =
+          data.details?.error?.message ||
+          stderrText.trim().split("\n").pop() ||
+          data.details?.error?.code ||
+          "test execution error";
+        fileErrors.set(file, errDetail);
+        continue;
+      }
+
+      const describe: string[] = [];
+      let curr = data.parentId;
+      while (curr && suiteParents.has(`${file}:${curr}`)) {
+        const s = suiteParents.get(`${file}:${curr}`)!;
+        describe.unshift(s.name);
+        curr = s.parentId;
+      }
+      if (describe.length === 0 && data.parentId === undefined && typeof data.nesting === "number" && data.nesting > 0) {
+        describe.push(...(startStacks.get(file) ?? []).slice(0, data.nesting));
+      }
+
+      const isAssert = isAssertionFailure(data.details?.error);
+      const list = testsByFile.get(file) ?? [];
+      list.push({
+        file,
+        name: data.name ?? "",
+        describe,
+        status: isAssert ? "assertion" : "error",
+        errorDetail: isAssert ? undefined : data.details?.error?.message || "error",
+      });
+      testsByFile.set(file, list);
+    }
+
+    if (event.type === "test:pass") {
+      if (data.details?.type === "suite") continue;
+
+      const isFileLevel =
+        data.name === data.file ||
+        ((data.parentId === 0 || (data.parentId === undefined && data.nesting === 0)) &&
+          rawFile &&
+          data.name &&
+          String(rawFile).replace(/\\/g, "/").endsWith(`/${data.name}`));
+      if (isFileLevel) continue;
+
+      const describe: string[] = [];
+      let curr = data.parentId;
+      while (curr && suiteParents.has(`${file}:${curr}`)) {
+        const s = suiteParents.get(`${file}:${curr}`)!;
+        describe.unshift(s.name);
+        curr = s.parentId;
+      }
+      if (describe.length === 0 && data.parentId === undefined && typeof data.nesting === "number" && data.nesting > 0) {
+        describe.push(...(startStacks.get(file) ?? []).slice(0, data.nesting));
+      }
+
+      const isSkip = Boolean(data.skip || data.details?.skip || data.todo);
+      const list = testsByFile.get(file) ?? [];
+      list.push({
+        file,
+        name: data.name ?? "",
+        describe,
+        status: isSkip ? "skip" : "pass",
+      });
+      testsByFile.set(file, list);
+    }
+  }
+
+  return { testsByFile, fileErrors, fileStderr, parsedAnyEvent };
+}
+
 async function runNodeTestMode(
   opts: RunSealedTestsOptions,
   testEnv: NodeJS.ProcessEnv,
@@ -576,137 +716,11 @@ async function runNodeTestMode(
       child.once("close", () => resolve());
     });
 
-    const lines = stdout.split("\n");
-    const suiteParents = new Map<string, { name: string; parentId: number }>();
-    const testsByFile = new Map<string, SealedTestResult[]>();
-    const fileErrors = new Map<string, string>();
-    const fileStderr = new Map<string, string[]>();
-    const startStacks = new Map<string, string[]>();
-
     let realDir = opts.dir;
     try {
       realDir = realpathSync(opts.dir);
     } catch {}
-
-    let parsedAnyEvent = false;
-
-    for (const line of lines) {
-      let event: NodeTestEvent | undefined;
-      try {
-        event = JSON.parse(line) as NodeTestEvent;
-      } catch {
-        continue;
-      }
-      const data = event?.data;
-      if (!data) continue;
-      parsedAnyEvent = true;
-
-      const rawFile = data.file || data.entryFile || "";
-      const file = mapReportedPath(rawFile, opts.files, opts.dir, realDir);
-
-      if (event.type === "test:stderr") {
-        if (file) {
-          const arr = fileStderr.get(file) ?? [];
-          arr.push(data.message || "");
-          fileStderr.set(file, arr);
-        }
-        continue;
-      }
-
-      if (event.type === "test:enqueue" || event.type === "test:start") {
-        if (data.type === "suite") {
-          suiteParents.set(`${file}:${data.testId}`, { name: data.name ?? "", parentId: data.parentId ?? 0 });
-        }
-      }
-
-      // Node versions without testId/parentId: test:start events arrive in order per file,
-      // so the names at lower nesting levels are the ancestors.
-      if (event.type === "test:start" && typeof data.nesting === "number") {
-        const stack = startStacks.get(file) ?? [];
-        stack.length = data.nesting;
-        stack.push(data.name ?? "");
-        startStacks.set(file, stack);
-      }
-
-      if (event.type === "test:fail") {
-        if (data.details?.type === "suite") {
-          continue;
-        }
-
-        const isFileLevel =
-          data.name === data.file ||
-          ((data.parentId === 0 || (data.parentId === undefined && data.nesting === 0)) &&
-            rawFile &&
-            data.name &&
-            String(rawFile).replace(/\\/g, "/").endsWith(`/${data.name}`));
-
-        if (isFileLevel) {
-          const stderrText = (fileStderr.get(file) ?? []).join("");
-          const errDetail =
-            data.details?.error?.message ||
-            stderrText.trim().split("\n").pop() ||
-            data.details?.error?.code ||
-            "test execution error";
-          fileErrors.set(file, errDetail);
-          continue;
-        }
-
-        const describe: string[] = [];
-        let curr = data.parentId;
-        while (curr && suiteParents.has(`${file}:${curr}`)) {
-          const s = suiteParents.get(`${file}:${curr}`)!;
-          describe.unshift(s.name);
-          curr = s.parentId;
-        }
-        if (describe.length === 0 && data.parentId === undefined && typeof data.nesting === "number" && data.nesting > 0) {
-          describe.push(...(startStacks.get(file) ?? []).slice(0, data.nesting));
-        }
-
-        const isAssert = isAssertionFailure(data.details?.error);
-        const list = testsByFile.get(file) ?? [];
-        list.push({
-          file,
-          name: data.name ?? "",
-          describe,
-          status: isAssert ? "assertion" : "error",
-          errorDetail: isAssert ? undefined : data.details?.error?.message || "error",
-        });
-        testsByFile.set(file, list);
-      }
-
-      if (event.type === "test:pass") {
-        if (data.details?.type === "suite") continue;
-
-        const isFileLevel =
-          data.name === data.file ||
-          ((data.parentId === 0 || (data.parentId === undefined && data.nesting === 0)) &&
-            rawFile &&
-            data.name &&
-            String(rawFile).replace(/\\/g, "/").endsWith(`/${data.name}`));
-        if (isFileLevel) continue;
-
-        const describe: string[] = [];
-        let curr = data.parentId;
-        while (curr && suiteParents.has(`${file}:${curr}`)) {
-          const s = suiteParents.get(`${file}:${curr}`)!;
-          describe.unshift(s.name);
-          curr = s.parentId;
-        }
-        if (describe.length === 0 && data.parentId === undefined && typeof data.nesting === "number" && data.nesting > 0) {
-          describe.push(...(startStacks.get(file) ?? []).slice(0, data.nesting));
-        }
-
-        const isSkip = Boolean(data.skip || data.details?.skip || data.todo);
-        const list = testsByFile.get(file) ?? [];
-        list.push({
-          file,
-          name: data.name ?? "",
-          describe,
-          status: isSkip ? "skip" : "pass",
-        });
-        testsByFile.set(file, list);
-      }
-    }
+    const { testsByFile, fileErrors, fileStderr, parsedAnyEvent } = parseNodeTestStream(stdout, (rawFile) => mapReportedPath(rawFile, opts.files, opts.dir, realDir));
 
     if (!parsedAnyEvent) {
       return {

@@ -10,14 +10,16 @@
 // The command runs in a temporary worktree of the base, never in the session's tree.
 
 import { createHash } from "node:crypto";
-import { unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { hostGit } from "../git/host-git.js";
 import { createTemporaryWorktree } from "../seal/git.js";
 import { failureSignature, parseCargoTestOutput } from "../seal/failing-names.js";
-import { detectAdapter, REPORTER_CJS } from "../seal/runner.js";
+import { detectAdapter, parseNodeTestStream, REPORTER_CJS } from "../seal/runner.js";
+import { resolveHostBash, noBashMessage } from "../process/host-bash.js";
 import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
-import { withLedger, withLedgerSync, type Ledger } from "../ledger/use.js";
+import { TREE_KILL_SPAWN_OPTIONS, killExecChild } from "../tools/job-runner.js";
+import { withLedger, type Ledger } from "../ledger/use.js";
 
 /** The lockfiles whose content decides the dependencies a verification run saw. */
 const LOCKFILES = new Set([
@@ -35,6 +37,12 @@ const LOCKFILES = new Set([
   "Gemfile.lock",
   "composer.lock",
 ]);
+
+/**
+ * The files an install leaves in `node_modules` that say which packages it holds. The run uses the main checkout's
+ * `node_modules` through a junction, so a changed install changes what the baseline measured.
+ */
+const INSTALL_STATE_FILES = [".package-lock.json", ".yarn-state.yml", ".modules.yaml"];
 
 /** What the lockfile hash says when the base has no lockfile: a fact about the base, not a missing value. */
 export const NO_LOCKFILE = "none";
@@ -60,14 +68,16 @@ export interface MeasuredBaseline {
   key: BaselineKey;
   adapter: string;
   kind: BaselineKind;
-  exit_code: number;
+  /** Absent when the ledger row holds none: it is never made up. */
+  exit_code?: number;
   /** The tests that failed, as `file > describe > name`. Empty with `kind: "names"` means a run that failed none. */
   failing: string[];
   /** `names` only: how many tests ran. */
   tests_total?: number;
   /** `exit-only` and exit non-zero: the failure's signature. */
   signature?: string;
-  duration_ms: number;
+  /** Absent when the ledger row holds none. */
+  duration_ms?: number;
   recorded_at: string;
 }
 
@@ -87,72 +97,73 @@ export interface BaselineResult {
   reused: boolean;
 }
 
-/** Hash of every lockfile in the base commit, by path and content; `none` when it has none. */
-export function lockfileHashAt(repo: string, base: string): string {
+/** Hash of every lockfile in the base commit, by path and content; `none` when it has none. Undefined when git could not say: unknown is not "no lockfile". */
+export function lockfileHashAt(repo: string, base: string): string | undefined {
   const tree = hostGit(["ls-tree", "-r", "--name-only", base], repo, { maxBuffer: 64 * 1024 * 1024 });
-  const paths = (tree.ok ? tree.stdout.split("\n") : []).map((l) => l.trim()).filter((l) => l !== "" && LOCKFILES.has(basename(l))).sort();
+  if (!tree.ok) return undefined;
+  const paths = tree.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "" && LOCKFILES.has(basename(l))).sort();
   if (paths.length === 0) return NO_LOCKFILE;
   const hash = createHash("sha256");
   for (const p of paths) {
     const blob = hostGit(["show", `${base}:${p}`], repo, { raw: true, maxBuffer: 256 * 1024 * 1024 });
-    hash.update(`${p}\0`).update(blob.ok ? blob.stdout : `unreadable:${blob.stderr}`).update("\0");
+    if (!blob.ok) return undefined;
+    hash.update(`${p}\0`).update(blob.stdout).update("\0");
   }
   return hash.digest("hex");
 }
 
-/** The key a run of `command` on `base` has: undefined when `base` names no commit. `platform` defaults to this machine's. */
+/** Hash of what the checkout's install says it holds (the `node_modules` the run reaches through its junction); undefined when it leaves no such file. */
+export function installedStateHash(repo: string): string | undefined {
+  const hash = createHash("sha256");
+  let found = false;
+  for (const name of INSTALL_STATE_FILES) {
+    const file = join(repo, "node_modules", name);
+    if (!existsSync(file)) continue;
+    try {
+      hash.update(`${name}\0`).update(readFileSync(file)).update("\0");
+      found = true;
+    } catch {
+      return undefined;
+    }
+  }
+  return found ? hash.digest("hex") : undefined;
+}
+
+/**
+ * The key a run of `command` on `base` has: undefined when `base` names no commit or its lockfiles cannot be read.
+ * The lockfile part is the base's lockfiles and, when the checkout has an install, what that install holds. `platform`
+ * defaults to this machine's.
+ */
 export function baselineKey(repo: string, base: string, command: string, platform: string = process.platform): BaselineKey | undefined {
   const resolved = hostGit(["rev-parse", "--verify", `${base}^{commit}`], repo);
   if (!resolved.ok) return undefined;
-  return { base: resolved.stdout, command, lockfileHash: lockfileHashAt(repo, resolved.stdout), platform };
+  const lockfiles = lockfileHashAt(repo, resolved.stdout);
+  if (lockfiles === undefined) return undefined;
+  const installed = installedStateHash(repo);
+  return { base: resolved.stdout, command, lockfileHash: installed === undefined ? lockfiles : `${lockfiles}+installed-${installed}`, platform };
 }
 
-interface NodeTestEvent {
-  type?: string;
-  data?: { name?: string; file?: string; nesting?: number; details?: { type?: string } };
-}
-
-/** node:test's reporter events to the tests that failed, and how many ran. Suites and the file's own entry are not tests. */
+/** node:test's reporter events to the tests that failed, and how many ran. A file that failed to run is one failing entry, the file's path. */
 export function parseNodeTestFailures(stdout: string, dir: string): { failing: string[]; total: number } | undefined {
-  const stack: string[] = [];
-  const failing: string[] = [];
-  let total = 0;
-  let sawEvent = false;
   const norm = (p: string): string => p.replace(/\\/g, "/");
-  const rel = (file: string | undefined): string => {
-    if (file === undefined || file === "") return "";
+  const d = norm(dir).replace(/\/+$/, "");
+  const rel = (file: string): string => {
     const f = norm(file);
-    const d = norm(dir).replace(/\/+$/, "");
     return f.startsWith(`${d}/`) ? f.slice(d.length + 1) : f;
   };
-  for (const line of stdout.split("\n")) {
-    let event: NodeTestEvent;
-    try {
-      event = JSON.parse(line) as NodeTestEvent;
-    } catch {
-      continue;
-    }
-    const data = event.data;
-    if (data === undefined || typeof event.type !== "string" || !event.type.startsWith("test:")) continue;
-    sawEvent = true;
-    if (event.type === "test:start" && typeof data.nesting === "number") {
-      stack.length = data.nesting;
-      stack.push(data.name ?? "");
-      continue;
-    }
-    if (event.type !== "test:pass" && event.type !== "test:fail") continue;
-    if (data.details?.type === "suite") continue;
-    const name = data.name ?? "";
-    const file = rel(data.file);
-    const fileEntry = (data.nesting ?? 0) === 0 && file !== "" && (file === name || file.endsWith(`/${name}`));
-    if (name === "" || fileEntry) continue;
-    total += 1;
-    if (event.type === "test:fail") {
-      const path = typeof data.nesting === "number" && stack.length > data.nesting ? stack.slice(0, data.nesting + 1) : [name];
-      failing.push([file, ...path].filter((s) => s !== "").join(" > "));
+  const parsed = parseNodeTestStream(stdout, rel);
+  if (!parsed.parsedAnyEvent) return undefined;
+  const failing: string[] = [];
+  let total = 0;
+  for (const [file, tests] of parsed.testsByFile) {
+    for (const t of tests) {
+      if (t.status === "skip") continue;
+      total += 1;
+      if (t.status !== "pass") failing.push([file, ...t.describe, t.name].filter((x) => x !== "").join(" > "));
     }
   }
-  return sawEvent ? { failing, total } : undefined;
+  for (const file of parsed.fileErrors.keys()) failing.push(file);
+  return { failing, total };
 }
 
 export interface RunBaselineInput {
@@ -179,6 +190,15 @@ export async function measureBaseline(input: RunBaselineInput): Promise<Measurem
   } catch (err) {
     return { status: "unmeasured", reason: `could not check out the base commit: ${err instanceof Error ? err.message : String(err)}` };
   }
+  // The shell line runs in the bash Pi resolves (T247). Without one the local executor falls back to cmd.exe, whose
+  // "command not found" is exit 1 and cannot be told from a failing run, so nothing is measured.
+  if (executor === localExecutor) {
+    const bash = resolveHostBash();
+    if (!bash.ok) {
+      worktree.cleanup();
+      return { status: "unmeasured", reason: noBashMessage(bash).split("\n")[0]! };
+    }
+  }
   const adapter = detectAdapter(key.command);
   const reporterRel = `.lykos-baseline-reporter-${process.pid}-${Date.now()}.cjs`;
   const reporterPath = join(worktree.dir, reporterRel);
@@ -194,7 +214,7 @@ export async function measureBaseline(input: RunBaselineInput): Promise<Measurem
     let stdout = "";
     let stderr = "";
     let merged = "";
-    const child = executor.spawn(command, [], { cwd: worktree.dir, shell: true, env, containerPaths: true });
+    const child = executor.spawn(command, [], { cwd: worktree.dir, shell: true, env, containerPaths: true, windowsHide: true, ...TREE_KILL_SPAWN_OPTIONS });
     child.stdout?.on("data", (c: Buffer | string) => {
       stdout += c.toString();
       merged += c.toString();
@@ -205,13 +225,13 @@ export async function measureBaseline(input: RunBaselineInput): Promise<Measurem
     });
     const timeoutMs = input.timeoutMs ?? DEFAULT_BASELINE_TIMEOUT_MS;
     let timedOut = false;
-    // On a timeout the run is over for the baseline's purposes: the command is killed and not waited for, since a
-    // grandchild that holds the pipes open would keep `close` from ever firing.
+    // On a timeout the run is over for the baseline's purposes: the command's whole process tree is killed (and that
+    // awaited, so nothing outlives the run into the worktree's removal) and `close` is not waited for, since a
+    // grandchild that held the pipes open would keep it from ever firing.
     const exit = await new Promise<number | null | Error>((resolve) => {
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill();
-        resolve(null);
+        void killExecChild(child).then(() => resolve(null));
       }, timeoutMs);
       child.once("error", (e) => {
         clearTimeout(timer);
@@ -281,11 +301,11 @@ function toBaseline(row: BaselineRow): Baseline {
     key,
     adapter: row.adapter ?? "exit",
     kind: row.kind === "names" ? "names" : "exit-only",
-    exit_code: row.exit_code ?? -1,
+    ...(row.exit_code !== null ? { exit_code: row.exit_code } : {}),
     failing: row.failing_json === null ? [] : (JSON.parse(row.failing_json) as string[]),
     ...(row.tests_total !== null ? { tests_total: row.tests_total } : {}),
     ...(row.signature !== null ? { signature: row.signature } : {}),
-    duration_ms: row.duration_ms ?? 0,
+    ...(row.duration_ms !== null ? { duration_ms: row.duration_ms } : {}),
     recorded_at: row.recorded_at,
   };
 }
@@ -391,13 +411,8 @@ export function baselineSummary(ledger: Ledger, sessionId: string): BaselineSumm
     status: "measured",
     ...common,
     kind: b.kind,
-    exit_code: b.exit_code,
+    ...(b.exit_code !== undefined ? { exit_code: b.exit_code } : {}),
     failing: b.failing,
     ...(b.tests_total !== undefined ? { tests_total: b.tests_total } : {}),
   };
-}
-
-/** Ties a session to its baseline for a caller that holds no ledger handle. */
-export function recordSessionBaselineAt(ledgerPath: string, sessionId: string, result: BaselineResult): void {
-  withLedgerSync(ledgerPath, (ledger) => recordSessionBaseline(ledger, sessionId, result));
 }
