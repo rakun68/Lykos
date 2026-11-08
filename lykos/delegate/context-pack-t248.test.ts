@@ -5,7 +5,8 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -127,10 +128,32 @@ describe("T248 W8: every path in the pack is absolute", () => {
     }
   });
 
+  it("counts a file's lines as the file has them: a final newline ends a line, it does not start one", () => {
+    const { repo, base } = project();
+    // src/widget.ts at the base is one line, ended by a newline.
+    const pack = buildContextPack({ root: repo, repo, base, files: ["src/widget.ts"] });
+    assert.equal(pack.entries.find((e) => e.kind === "file" && e.path === join(repo, "src", "widget.ts"))?.text, "1 line at the base");
+  });
+
+  it("a qualified glossary entry (`**Term**:` with its qualifier in the text) is quoted for a task that names it", () => {
+    const { repo } = project();
+    put(repo, "GLOSSARY.md", "# G\n\n**Block**:\nOf a finding: the BLOCK-MEANING.\n");
+    git(repo, "commit", "-qam", "block");
+    const pack = buildContextPack({ root: repo, repo, base: "HEAD", files: ["src/widget.ts"], task: "When does a finding Block?" });
+    assert.match(pack.text, /BLOCK-MEANING/);
+  });
+
+  it("the project's own GLOSSARY.md starts every entry with `**Term**:`, the one shape the pack reads", () => {
+    const glossary = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "GLOSSARY.md"), "utf8");
+    const heads = glossary.split(/\r?\n/).filter((l) => l.startsWith("**") && !l.startsWith("**Avoid"));
+    const misshapen = heads.filter((l) => !/^\*\*(.+?)\*\*:\s*(.*)$/.test(l));
+    assert.deepEqual(misshapen, []);
+  });
+
   it("takes a task file given as an absolute path in the project", () => {
     const { repo, base } = project();
     const pack = buildContextPack({ root: repo, repo, base, files: [join(repo, "src", "widget.ts")] });
-    assert.ok(pack.entries.some((e) => e.kind === "file" && e.path === join(repo, "src", "widget.ts") && /lines at the base/.test(e.text)));
+    assert.ok(pack.entries.some((e) => e.kind === "file" && e.path === join(repo, "src", "widget.ts") && /lines? at the base/.test(e.text)));
   });
 });
 

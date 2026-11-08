@@ -287,8 +287,8 @@ _Avoid_: stopped, cleaned up (without the proof)
 
 **Recover**:
 Continuing, by hand, a delegated session or a review cycle whose owner is `dead`: `lykos recover` confirms quiescence, takes the
-`owners` row over with one conditional update, and continues with the standard interrupted turn. Never automatic,
-never a kill.
+`owners` row over (a cycle's `cycles` row) with one conditional update, and continues with the standard interrupted turn. A session that is a running cycle's step is recovered with its cycle.
+Never automatic, never a kill.
 _Avoid_: takeover (for anything automatic), resume (that continues an ended session)
 
 **Decision**:
@@ -304,8 +304,8 @@ a check. The check is a claim check written to hold on the branch while the defe
 reviewer, and the finding then blocks, goes to triage or is dropped. Prose in a review's answer is not a finding.
 _Avoid_: issue, comment, remark
 
-**Block** (of a finding):
-A finding whose check held on the branch and does not hold on the base or in the baseline: the defect is this change's. A
+**Block**:
+Of a finding: one whose check held on the branch and does not hold on the base or in the baseline: the defect is this change's. A
 low finding blocks only with a reproduction; a command check counts as one.
 _Avoid_: reject, fail
 
@@ -326,8 +326,8 @@ and the review ends with `next` `approve`, `resume`, `triage` or `inspect_flags`
 review with its own error; an empty list of findings never stands for a reviewer that did not review.
 _Avoid_: audit, second opinion
 
-**Review cycle** (a cycle):
-`lykos cycle`: code, not a model, drives a delegated session's change through review, fix and recheck until nothing is open
+**Review cycle**:
+A cycle, for short. `lykos cycle`: code, not a model, drives a delegated session's change through review, fix and recheck until nothing is open
 or something needs the coordinator. Round 1 is one reviewer's full review; the harness judges its findings; the
 implementer's session is continued with every open item at once; the proof suite is rerun; the same reviewer session
 rechecks the fix's diff. It stops with one of `approve`, `answer_spec`, `triage`, `answer_question`, `decide`,
@@ -350,8 +350,8 @@ The reproductions of every finding that was proven in a cycle, rerun at the head
 retires its finding; one that fails again is open again, so a fix cannot undo an earlier one unseen.
 _Avoid_: regression suite (it is the findings' own tests, not the project's)
 
-**Retired** (a finding):
-A finding decision: a fix cleared the finding. Its reproduction no longer fails at the new head, or the fixer was handed it
+**Retired**:
+Of a finding, a finding decision: a fix cleared the finding. Its reproduction no longer fails at the new head, or the fixer was handed it
 from triage and the recheck judged the fix.
 
 **Stored base**:

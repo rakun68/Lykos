@@ -179,7 +179,9 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
       entries.push({ kind: "file", path: abs(rel), text: "new: the base commit does not have it" });
     } else {
       contents.set(rel, text);
-      entries.push({ kind: "file", path: abs(rel), text: `${text.split("\n").length} lines at the base` });
+      // A final newline ends the last line; it does not start another.
+      const lines = text === "" ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+      entries.push({ kind: "file", path: abs(rel), text: `${lines} line${lines === 1 ? "" : "s"} at the base` });
     }
   }
 
