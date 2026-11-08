@@ -26,7 +26,6 @@ import { unlinkLinksUnder } from "./links.js";
 
 export const BRANCH_PREFIX = "lykos/";
 
-/** The branch a session's work is on. */
 /** The subject of the commit that saves a session's uncommitted changes when its worktree is released. */
 export const LEFTOVER_SUBJECT_PREFIX = "lykos: work left uncommitted when session ";
 
@@ -34,6 +33,7 @@ export function leftoverSubject(sessionId: string): string {
   return `${LEFTOVER_SUBJECT_PREFIX}${sessionId} ended`;
 }
 
+/** The branch a session's work is on. */
 export function branchOf(sessionId: string): string {
   return `${BRANCH_PREFIX}${sessionId}`;
 }
