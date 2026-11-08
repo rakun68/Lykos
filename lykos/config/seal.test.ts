@@ -63,6 +63,16 @@ describe("seal config (T195)", () => {
     assert.deepEqual(resolved.seal.weakening_patterns, ["CUSTOM_FLAG"]);
   });
 
+  it("a cargo test_command needs no {files}; any other runner does", () => {
+    const cwd = tmp();
+    const globalDir = tmp();
+    mkdirSync(join(cwd, ".lykos"), { recursive: true });
+    writeFileSync(join(cwd, ".lykos", "config.yaml"), ["seal:", '  test_command: "cargo test --no-fail-fast --test api"', ""].join("\n"));
+    assert.equal(loadConfig({ cwd, globalDir, env: {} }).resolved.seal.test_command, "cargo test --no-fail-fast --test api");
+    writeFileSync(join(cwd, ".lykos", "config.yaml"), ["seal:", '  test_command: "npx vitest run"', ""].join("\n"));
+    assert.throws(() => loadConfig({ cwd, globalDir, env: {} }), /seal.test_command must contain \{files\}/);
+  });
+
   it("rejects unknown sub-keys in seal:, naming the key and file", () => {
     const cwd = tmp();
     const globalDir = tmp();

@@ -15,6 +15,7 @@ import { SHIPPED_DEFAULTS } from "./defaults.js";
 import { readYamlObjectFile } from "./yaml-file.js";
 import { resolveSpecialistLayer, shippedSpecialistsDir } from "./specialists.js";
 import { gateRerunCommandProblem } from "../gate/rerun-failures.js";
+import { isCargoTestCommand } from "../seal/failing-names.js";
 import type {
   BudgetConfig,
   ContinuationConfig,
@@ -443,8 +444,9 @@ function validateSealConfig(layer: ConfigLayer): void {
     if (typeof s.test_command !== "string") {
       throw new Error(`lykos config: seal.test_command must be a string${where}`);
     }
-    if (!s.test_command.includes("{files}")) {
-      throw new Error(`lykos config: seal.test_command must contain {files}${where}`);
+    // cargo selects its tests by target and filter, so its template may leave {files} out (the runner fills it only when present).
+    if (!s.test_command.includes("{files}") && !isCargoTestCommand(s.test_command)) {
+      throw new Error(`lykos config: seal.test_command must contain {files} (every runner but cargo)${where}`);
     }
   }
   if (s.test_globs !== undefined) {
