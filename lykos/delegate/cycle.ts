@@ -479,6 +479,8 @@ async function runSession(ctx: Ctx, step: Step, args: Parameters<typeof runDeleg
       trustSource: ctx.opts.trustSource,
       decideAlone: false,
       fromCycle: true,
+      // The cycle's step cap holds for the session it recovers as for one it starts.
+      ...(ctx.stored.maxSteps !== undefined ? { maxSteps: ctx.stored.maxSteps } : {}),
       ...(ctx.opts.signal !== undefined ? { signal: ctx.opts.signal } : {}),
       ...(ctx.opts.onProgress !== undefined ? { onProgress: ctx.opts.onProgress } : {}),
       ...(ctx.opts.run !== undefined ? { run: ctx.opts.run } : {}),

@@ -223,7 +223,7 @@ describe("T236 ACCEPTANCE (G10): the cycle process killed while its fixer runs",
     const before = w.calls.length;
     w.next.fix.push({ text: FIXED });
     w.next.review.push({ findings: [] });
-    const recovered = (await recoverCycle(w.ws, cycleId, { trustSource: "stored", run: w.run })) as Cycle;
+    const recovered = (await recoverCycle(w.ws, cycleId, { trustSource: "stored", run: w.run, maxSteps: 7 })) as Cycle;
     assert.equal(recovered.stop, "approve", JSON.stringify(recovered));
     assert.deepEqual(recovered.recovered, { from_pid: ownerPid, crashes: 1 });
     const fixers = w.calls.slice(before).filter((c) => c.review !== true);
@@ -231,6 +231,8 @@ describe("T236 ACCEPTANCE (G10): the cycle process killed while its fixer runs",
     assert.equal(fixers[0]!.sessionId, w.implementer);
     assert.ok(fixers[0]!.prompt.includes(INTERRUPTED_TURN), "it continues with the standard turn");
     assert.equal(fixers[0]!.requestId, undefined, "no new request: the step's request id found the session it had started");
+    assert.equal(fixers[0]!.maxSteps, 7, "--max-steps given to the recover caps the session it recovers");
+    assert.ok(w.calls.slice(before).filter((c) => c.review === true).every((c) => c.maxSteps === 7), "and the recheck");
     // The ledger: the step's request id names one session; that session counted one crash; the fixer ran twice in all (the
     // 502 and the cut-off one, each its own step), and the recover added none.
     const ledger = openLedgerSync(defaultLedgerPath(w.ws));
@@ -275,6 +277,27 @@ describe("T236 ACCEPTANCE (G10): the cycle process killed while its fixer runs",
     assert.equal(losers.length, 1);
     assert.match(String(losers[0]!.message), /another recover took cycle/);
     assert.equal(w.calls.filter((c) => c.sessionId === w.implementer && c.review !== true).length, 2, "the 502 fixer and the one recovered fixer; the loser started none");
+  });
+
+  it("a process a cycle's session started that is still alive refuses the recover, and nothing is taken over", async () => {
+    const w = await world();
+    w.next.review.push({ findings: [] });
+    const first = (await runCycle(w.ws, w.implementer, { trustSource: "stored", run: w.run })) as Cycle;
+    assert.equal(first.stop, "approve");
+    const reviewer = withLedgerSync(defaultLedgerPath(w.ws), (l) => (l.db.prepare("SELECT session_id FROM cycle_steps WHERE cycle_id = ? AND kind = 'review'").get(first.cycle_id) as { session_id: string }).session_id);
+    withLedgerSync(defaultLedgerPath(w.ws), (l) => {
+      l.db.prepare("UPDATE cycles SET state = 'running', stop = NULL, owner_pid = 2147483000, owner_recorded_at_ms = 1, crashes = 0 WHERE id = ?").run(first.cycle_id);
+      // The reviewer's child, still alive: this test's own process.
+      l.recordProcess({ kind: "child", sessionId: reviewer, pid: process.pid, command: "session-child" });
+    });
+    const before = w.calls.length;
+    const res = (await recoverCycle(w.ws, first.cycle_id!, { trustSource: "stored", run: w.run, livenessOf: () => "dead" })) as Cycle;
+    assert.equal(res.outcome, "error", JSON.stringify(res));
+    assert.match(String(res.message), new RegExp(`session ${reviewer} started is not confirmed stopped`));
+    assert.equal(res.next, "fix_environment");
+    assert.equal(w.calls.length, before, "nothing ran");
+    const row = withLedgerSync(defaultLedgerPath(w.ws), (l) => l.db.prepare("SELECT owner_pid, crashes FROM cycles WHERE id = ?").get(first.cycle_id)) as { owner_pid: number; crashes: number };
+    assert.deepEqual(row, { owner_pid: 2147483000, crashes: 0 }, "not taken over, no crash counted");
   });
 
   it("the sixth crash stops the cycle with the reason, and lets it go", async () => {
