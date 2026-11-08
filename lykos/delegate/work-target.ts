@@ -17,7 +17,7 @@ import { existsSync } from "node:fs";
 import { gitStateReason, probeGit } from "../git/host-git.js";
 import { acquireWorktree, WorktreeError, type CommitSummary, type SavedCommit, type WorktreeLease } from "../git/worktree.js";
 import { modeWrites, type InteractionMode } from "../gate/modes.js";
-import { openLedger, recordSessionCommits } from "../ledger/use.js";
+import { openLedger, recordSessionCommits, type Ledger } from "../ledger/use.js";
 import { resolveProject } from "../session/identity.js";
 import type { WorkTree } from "../session/session.js";
 
@@ -195,18 +195,23 @@ export async function rootSessionOf(ledgerPath: string, sessionId: string): Prom
     return sessionId;
   }
   try {
-    let id = sessionId;
-    for (let hops = 0; hops < 100; hops += 1) {
-      const row = ledger.db.prepare(`SELECT resumed_from FROM sessions WHERE id = ?`).get(id) as { resumed_from: string | null } | undefined;
-      if (row?.resumed_from === undefined || row.resumed_from === null || row.resumed_from === id) return id;
-      id = row.resumed_from;
-    }
-    return id;
+    return rootSessionIn(ledger, sessionId);
   } catch {
     return sessionId;
   } finally {
     ledger.close();
   }
+}
+
+/** `rootSessionOf` over a ledger already open: the id followed back through `resumed_from`. May throw. */
+export function rootSessionIn(ledger: Ledger, sessionId: string): string {
+  let id = sessionId;
+  for (let hops = 0; hops < 100; hops += 1) {
+    const row = ledger.db.prepare(`SELECT resumed_from FROM sessions WHERE id = ?`).get(id) as { resumed_from: string | null } | undefined;
+    if (row?.resumed_from === undefined || row.resumed_from === null || row.resumed_from === id) return id;
+    id = row.resumed_from;
+  }
+  return id;
 }
 
 /** `work` on a failure is what the call left on its branch, when the body threw after the worktree was made. */

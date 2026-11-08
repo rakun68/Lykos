@@ -86,6 +86,24 @@ describe("T259: what is refused until the check is recorded", () => {
   });
 });
 
+describe("T259: a context-limit successor's id reads the check its root recorded", () => {
+  it("specCheckOf and rulingsOf follow resumed_from back to the root", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lykos-t259-chain-"));
+    const ledgerPath = join(dir, ".lykos", "ledger.db");
+    withLedgerSync(ledgerPath, (l) => {
+      const now = new Date().toISOString();
+      l.db.prepare("INSERT INTO sessions (id, started_utc, harness_commit) VALUES (?, ?, 'x')").run("root", now);
+      l.db.prepare("INSERT INTO sessions (id, started_utc, harness_commit, resumed_from) VALUES (?, ?, 'x', ?)").run("successor", now, "root");
+      l.db.prepare("INSERT INTO spec_checks (session_id, recorded_at, points_json) VALUES (?, ?, ?)").run("root", now, JSON.stringify([{ point: "p", ruling: "r" }]));
+    });
+    withLedgerSync(ledgerPath, (l) => {
+      assert.notEqual(specCheckOf(l, "successor"), undefined, "the successor is not gated again");
+      assert.deepEqual(rulingsOf(l, ["successor"]), [{ session: "successor", point: "p", ruling: "r" }]);
+      assert.equal(specCheckOf(l, "other"), undefined);
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The real child on the scripted model
 

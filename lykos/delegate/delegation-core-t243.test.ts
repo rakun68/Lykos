@@ -17,9 +17,9 @@ import { defaultLedgerPath, openLedgerSync } from "../ledger/use.js";
 import { TranscriptWriter } from "../session/transcript.js";
 import { parseFlags } from "../cli/delegation.js";
 import { unknownRunFlag } from "../cli/args.js";
-import { createMcpServer, ledgerViews, runDelegated, waitForSessions } from "./mcp-server.js";
+import { createMcpServer, ledgerViews, runDelegated, steerElsewhere, waitForSessions } from "./mcp-server.js";
 import type { SessionRunner } from "./session-protocol.js";
-import { viewOf, type OwnerRow } from "./ownership.js";
+import { admit, askQuestion, viewOf, type OwnerRow } from "./ownership.js";
 import { watchStepCap, type StepCappable } from "./step-cap.js";
 
 const saved: Record<string, string | undefined> = {};
@@ -383,5 +383,70 @@ describe("T243: an owner that ends and exits while its liveness is read is not a
     assert.equal(viewOf(running, dead, () => done).state, "done");
     assert.equal(viewOf(running, dead, () => running).state, "crashed");
     assert.equal(viewOf(running, dead).state, "crashed");
+  });
+});
+
+describe("T243/T244: status and steer read another process's session as they read this server's", () => {
+  function seed(ws: string, id: string, edit?: (l: ReturnType<typeof openLedgerSync>) => void): void {
+    const l = openLedgerSync(defaultLedgerPath(ws));
+    try {
+      const r = admit(l, { sessionId: id, owner: "run", specialist: "general", projectCap: 100 });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      edit?.(l);
+    } finally {
+      l.close();
+    }
+  }
+
+  it("a steer for a crashed session (row running, owner gone) is refused, and nothing waits in its inbox", () => {
+    const ws = workspace();
+    seed(ws, "sess-crashed", (l) => l.db.prepare("UPDATE owners SET owner_pid = ?, owner_recorded_at_ms = 1 WHERE session_id = ?").run(2147483000, "sess-crashed"));
+    const r = steerElsewhere(ws, "sess-crashed", "hello");
+    assert.deepEqual(r, { session_id: "sess-crashed", steered: false, state: "crashed" });
+    const l = openLedgerSync(defaultLedgerPath(ws));
+    try {
+      assert.equal((l.db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE session_id = ?").get("sess-crashed") as { n: number }).n, 0);
+    } finally {
+      l.close();
+    }
+  });
+
+  it("lykos_status wait_seconds returns at once for a session that is asking a question, with the documented metrics", async () => {
+    const ws = workspace();
+    seed(ws, "sess-waiting", (l) => askQuestion(l, "sess-waiting", "why?"));
+    const client = await mcpClient(ws, async () => assert.fail("no session runs"));
+    try {
+      const started = Date.now();
+      const status = json(await client.callTool({ name: "lykos_status", arguments: { session_id: "sess-waiting", wait_seconds: 5 } })) as { sessions: Array<Record<string, unknown>> };
+      assert.ok(Date.now() - started < 2500, `returned after ${Date.now() - started}ms`);
+      const s = status.sessions[0]!;
+      assert.equal(s["state"], "waiting");
+      assert.equal(s["question"], "why?");
+      for (const k of ["elapsed_seconds", "turns", "last_tool", "cost_usd", "unpriced_calls"]) assert.ok(k in s, `${k} is in ${JSON.stringify(s)}`);
+      assert.equal(typeof s["elapsed_seconds"], "number");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("lykos_status of this server's own session carries what the ledger holds of it (its spec check)", async () => {
+    const ws = workspace();
+    const m = held();
+    const client = await mcpClient(ws, m.run);
+    try {
+      const started = json(await client.callTool({ name: "lykos_start", arguments: { specialist: "general", brief: "over mcp" } }));
+      const id = started.session_id as string;
+      const l = openLedgerSync(defaultLedgerPath(ws));
+      try {
+        l.db.prepare("INSERT INTO spec_checks (session_id, recorded_at, points_json) VALUES (?, ?, ?)").run(id, new Date().toISOString(), "[]");
+      } finally {
+        l.close();
+      }
+      const status = json(await client.callTool({ name: "lykos_status", arguments: { session_id: id } })) as { sessions: Array<Record<string, unknown>> };
+      assert.deepEqual((status.sessions[0]!["spec_check"] as { points: unknown[] }).points, []);
+    } finally {
+      m.release();
+      await client.close();
+    }
   });
 });

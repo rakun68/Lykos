@@ -611,7 +611,7 @@ async function buildSessionOutcomeResult(
   headAtStart: string | undefined,
   diffBase: string | undefined,
   isEffectiveReadOnly: boolean,
-  scope: string[] | undefined,
+  taskPaths: { scope: string[] | undefined; files: string[] | undefined },
   passedTargetSessionId?: string,
   stoppedReason?: string,
   unansweredQuestions?: string[],
@@ -987,7 +987,9 @@ async function buildSessionOutcomeResult(
             changed: changedPaths,
             added: addedDiffLines,
             commits,
-            ...(scope !== undefined ? { scope } : {}),
+            ...(taskPaths.scope !== undefined ? { scope: taskPaths.scope } : {}),
+            // A new file beside one of the task's files, or a test of one, is in scope (result-flags).
+            ...(taskPaths.files !== undefined && taskPaths.files.length > 0 ? { files: taskPaths.files } : {}),
             removedLines,
           }),
         );
@@ -1432,7 +1434,7 @@ async function startTrackedSession(
         headAtStart,
         diffBase,
         isEffectiveReadOnly,
-        args.scope,
+        { scope: args.scope, files: args.files },
         targetSessionId,
         sessionEntry.stoppedReason,
         sessionEntry.unansweredQuestions,
@@ -1553,8 +1555,10 @@ export function steerElsewhere(workspace: string, sessionId: string, message: st
   return withLedgerSync(ledgerPath, (ledger) => {
     const row = ownerRow(ledger, sessionId);
     if (row === undefined) return undefined;
-    const steered = postSteer(ledger, sessionId, message);
-    return { session_id: sessionId, steered, state: viewOf(row, ownerLiveness, () => ownerRow(ledger, sessionId)).state };
+    // A row still `running` whose owner is gone is crashed: nobody would read the inbox, so the steer is refused.
+    const state = viewOf(row, ownerLiveness, () => ownerRow(ledger, sessionId)).state;
+    const steered = state !== "crashed" && postSteer(ledger, sessionId, message);
+    return { session_id: sessionId, steered, state };
   });
 }
 
@@ -1584,36 +1588,44 @@ export function ledgerViews(workspace: string, ids?: readonly string[]): Session
   const ledgerPath = defaultLedgerPath(workspace);
   if (!existsSync(ledgerPath)) return [];
   return withLedgerSync(ledgerPath, (ledger) =>
-    ownerRows(ledger, ids).map((row) => {
-      const view = viewOf(row, ownerLiveness, () => ownerRow(ledger, row.session_id));
-      const pack = contextPackSummary(ledger, row.session_id);
-      const baseline = baselineSummary(ledger, row.session_id);
-      const decisions = decisionsOf(ledger, row.session_id);
-      const findings = findingDecisionsOf(ledger, row.session_id);
-      const claims = judgedClaimsOf(ledger, row.session_id);
-      const specCheck = specCheckOf(ledger, row.session_id);
-      return {
-        ...view,
-        ...(pack !== undefined ? { context_pack: pack } : {}),
-        ...(baseline !== undefined ? { baseline } : {}),
-        ...(decisions.length > 0 ? { decisions } : {}),
-        ...(findings.length > 0 ? { finding_decisions: findings } : {}),
-        ...(claims.length > 0 ? { claims } : {}),
-        ...(specCheck !== undefined ? { spec_check: specCheck } : {}),
-      };
-    }),
+    ownerRows(ledger, ids).map((row) => ({ ...viewOf(row, ownerLiveness, () => ownerRow(ledger, row.session_id)), ...ledgerDetails(ledger, row.session_id) })),
   );
+}
+
+/** What the ledger holds of a session beyond its owner row: what `lykos_status` returns for every session. */
+function ledgerDetails(ledger: Ledger, sessionId: string) {
+  const pack = contextPackSummary(ledger, sessionId);
+  const baseline = baselineSummary(ledger, sessionId);
+  const decisions = decisionsOf(ledger, sessionId);
+  const findings = findingDecisionsOf(ledger, sessionId);
+  const claims = judgedClaimsOf(ledger, sessionId);
+  const specCheck = specCheckOf(ledger, sessionId);
+  return {
+    ...(pack !== undefined ? { context_pack: pack } : {}),
+    ...(baseline !== undefined ? { baseline } : {}),
+    ...(decisions.length > 0 ? { decisions } : {}),
+    ...(findings.length > 0 ? { finding_decisions: findings } : {}),
+    ...(claims.length > 0 ? { claims } : {}),
+    ...(specCheck !== undefined ? { spec_check: specCheck } : {}),
+  };
 }
 
 /**
  * Waits, through the ledger, until every session (or, with `any`, one) has settled: ended, or crashed with its owner
  * gone. A session that ends without a result still wakes it (R4). `timeoutMs` undefined waits as long as it takes.
+ * `ready` replaces "settled" as what ends the wait (`lykos_status` also wakes on a session that asks a question).
  */
-export async function waitForSessions(workspace: string, ids: readonly string[], any: boolean, timeoutMs?: number): Promise<SessionView[]> {
+export async function waitForSessions(
+  workspace: string,
+  ids: readonly string[],
+  any: boolean,
+  timeoutMs?: number,
+  ready: (view: SessionView) => boolean = settled,
+): Promise<SessionView[]> {
   const until = timeoutMs !== undefined ? Date.now() + timeoutMs : undefined;
   for (;;) {
     const views = ledgerViews(workspace, ids);
-    const done = views.filter(settled);
+    const done = views.filter(ready);
     if (any ? done.length > 0 : done.length === ids.length) return views;
     if (until !== undefined && Date.now() >= until) return views;
     await new Promise((r) => setTimeout(r, LEDGER_POLL_MS));
@@ -1724,8 +1736,19 @@ async function handleStatus(
     const views = ledgerViews(workspace, ids);
     if (views.length === ids.length) {
       const waitSeconds = Math.min(Math.max(args.wait_seconds ?? 0, 0), 300);
-      const settledViews = waitSeconds > 0 ? await waitForSessions(workspace, ids, args.any === true, waitSeconds * 1000) : views;
-      return { content: [{ type: "text", text: JSON.stringify({ sessions: settledViews }, null, 2) }] };
+      // As for this server's own sessions: a session that finishes or asks a question ends the wait.
+      const settledViews = waitSeconds > 0 ? await waitForSessions(workspace, ids, args.any === true, waitSeconds * 1000, (v) => v.state !== "running") : views;
+      const sessions = settledViews.map((v) => {
+        const metrics = querySessionMetrics(workspace, v.session_id);
+        const started = Date.parse(v.started_at);
+        const ended = v.ended_at !== null ? Date.parse(v.ended_at) : Date.now();
+        return {
+          ...v,
+          elapsed_seconds: Number.isFinite(started) && Number.isFinite(ended) ? Math.round((ended - started) / 1000) : null,
+          ...metrics,
+        };
+      });
+      return { content: [{ type: "text", text: JSON.stringify({ sessions }, null, 2) }] };
     }
   }
   const unknownIds = elsewhere;
@@ -1784,6 +1807,16 @@ async function handleStatus(
     });
   }
 
+  // What the ledger holds of each session beyond its state (context pack, baseline, decisions, claims, spec check).
+  const extras = new Map<string, ReturnType<typeof ledgerDetails>>();
+  try {
+    const ledgerPath = defaultLedgerPath(workspace);
+    if (existsSync(ledgerPath)) {
+      withLedgerSync(ledgerPath, (ledger) => {
+        for (const id of ids) extras.set(id, ledgerDetails(ledger, registry.get(id)!.ownedId));
+      });
+    }
+  } catch {}
   const sessions = ids.map((id) => {
     const s = registry.get(id)!;
     const metrics = querySessionMetrics(s.workspace, id);
@@ -1798,6 +1831,7 @@ async function handleStatus(
       unpriced_calls: metrics.unpriced_calls,
       question: s.state === "waiting" ? (s.pendingQuestion ?? null) : null,
       ...(s.state !== "running" && s.state !== "waiting" && s.builtResult !== undefined ? { result: s.builtResult } : {}),
+      ...extras.get(id),
     };
   });
 

@@ -11,6 +11,7 @@
 import { isFileChangingCall, resolveActualToolArgs, resolveActualToolName } from "../tools/tool-call.js";
 import { classifyCommandRisk } from "../gate/command-safety.js";
 import { withLedgerSync, type Ledger } from "../ledger/use.js";
+import { rootSessionIn } from "./work-target.js";
 
 export const SPEC_CHECKED_TOOL_NAME = "spec_checked";
 
@@ -68,12 +69,21 @@ export function recordSpecCheck(ledger: Ledger, sessionId: string, points: reado
   return { recorded_at: recordedAt, points: [...points] };
 }
 
-/** A session's recorded check, or undefined when it has not made one. */
+/**
+ * A session's recorded check, or undefined when it has not made one. A context-limit successor's id is followed back
+ * through `resumed_from`, so the check its root recorded is its own (a continuation is not gated again).
+ */
 export function specCheckOf(ledger: Ledger, sessionId: string): SpecCheckRecord | undefined {
-  const row = ledger.db.prepare("SELECT recorded_at, points_json FROM spec_checks WHERE session_id = ?").get(sessionId) as
-    | { recorded_at: string; points_json: string }
-    | undefined;
-  return row === undefined ? undefined : { recorded_at: row.recorded_at, points: JSON.parse(row.points_json) as SpecPoint[] };
+  const read = (id: string): SpecCheckRecord | undefined => {
+    const row = ledger.db.prepare("SELECT recorded_at, points_json FROM spec_checks WHERE session_id = ?").get(id) as
+      | { recorded_at: string; points_json: string }
+      | undefined;
+    return row === undefined ? undefined : { recorded_at: row.recorded_at, points: JSON.parse(row.points_json) as SpecPoint[] };
+  };
+  const own = read(sessionId);
+  if (own !== undefined) return own;
+  const root = rootSessionIn(ledger, sessionId);
+  return root === sessionId ? undefined : read(root);
 }
 
 /** The coordinator's rulings from these sessions' checks, in the order the sessions are named. */

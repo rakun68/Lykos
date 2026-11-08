@@ -226,6 +226,15 @@ describe("T221 ACCEPTANCE: OUT-OF-SCOPE", () => {
     });
   });
 
+  it("a new file beside one of the task's files is in scope: files reaches the flag (cli-and-config `files`)", async () => {
+    const ws = plainRepo();
+    const run = branchRunner(ws, { "src/a.ts": "export const a = 3;\n", "src/new.ts": "export const n = 1;\n" }, { verification: PASSED, said: ["changed a, added new"] });
+    await withServer(ws, run, async (client) => {
+      const { r } = await call(client, { scope: ["src/a.ts"], files: ["src/a.ts"] });
+      assert.equal(flagOf(r, "OUT-OF-SCOPE"), undefined, JSON.stringify(r.flags));
+    });
+  });
+
   it("a scope whose globs match every changed file raises no flag", async () => {
     const ws = plainRepo();
     const run = branchRunner(ws, SPREAD, { verification: PASSED, said: ["changed four files"] });
