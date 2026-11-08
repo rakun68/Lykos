@@ -428,17 +428,21 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
         // `isError` is checked because a failed edit changed nothing on
         // disk, so re-running the project's typecheck would report whatever
         // was already broken and blame it on an edit that never landed.
-        if (opts.postEdit !== undefined && note === undefined) {
+        //
+        // An extension's note (T232) never suppresses it: the doc puts those notes ahead of the harness's, not
+        // instead of them, and a seal restore beside an edit that breaks the build must not hide the break.
+        if (opts.postEdit !== undefined) {
           const e = event as { toolName?: string; input?: unknown; isError?: boolean; details?: unknown };
           if (isMutatingTool(e.toolName, e.input, { details: e.details }) && e.isError !== true) {
             // `undefined` here takes the parameter default, which is the
             // real `spawn`-backed runner; tests inject their own.
-            note = await runPostEditCheck(
+            const checked = await runPostEditCheck(
               opts.postEdit.policy,
               opts.postEdit.state,
               opts.postEdit.run,
               opts.postEdit.events ?? events,
             );
+            if (checked !== undefined) note = note === undefined ? checked : `${note}\n${checked}`;
           }
         }
 

@@ -5,6 +5,7 @@ import { capToolResultText, TRUNC_MARKER_PREFIX } from "./prompt-diet.js";
 import { applyTaskListUpdate, newTaskListState } from "../tools.js";
 import { newPostEditState } from "./post-edit.js";
 import { builtinHooks, HookRegistry, type Hook } from "./hooks.js";
+import type { LykosExtensionHost } from "../extensions/api.js";
 
 /** Minimal stand-in for Pi's ExtensionAPI: captures the one handler this registers. */
 function drive(maxBytes: number) {
@@ -289,14 +290,17 @@ describe("T98.4 the task-list reminder in the tail", () => {
 });
 
 describe("T99 the post-edit check in the tail", () => {
-  function driveWithPostEdit(runs: Array<{ exitCode: number | null; output?: string }>, env: NodeJS.ProcessEnv = {}) {
+  function driveWithPostEdit(runs: Array<{ exitCode: number | null; output?: string }>, env: NodeJS.ProcessEnv = {}, extensionNotes?: string[]) {
     const observation = newHarnessObservation();
     const state = newPostEditState();
     let calls = 0;
+    // Only `runToolResult` is reached on a tool_result: the notes an extension's handler (the seal guard) returns.
+    const extensionHost: Pick<LykosExtensionHost, "runToolResult"> | undefined = extensionNotes === undefined ? undefined : { runToolResult: async () => [...extensionNotes] };
     const ext = createHarnessExtension({
       maxBytes: 1_000_000,
       observation,
       env,
+      ...(extensionHost !== undefined ? { extensionHost: extensionHost as LykosExtensionHost } : {}),
       postEdit: {
         policy: {
           enabled: true,
@@ -331,6 +335,13 @@ describe("T99 the post-edit check in the tail", () => {
     assert.match(out, /did not survive the post-edit check/);
     assert.match(out, /TS1005/);
     assert.equal(state.failures, 1);
+  });
+
+  it("an extension's note on the same result does not suppress it: both are shown, the extension's first", async () => {
+    const { fire, ran } = driveWithPostEdit([{ exitCode: 2, output: "a.ts(1,1): error TS1005" }], {}, ["lykos-seal: restored tests/a.test.ts"]);
+    const out = textOf(await fire(edit));
+    assert.equal(ran(), 1);
+    assert.match(out, /restored tests\/a\.test\.ts[\s\S]*did not survive the post-edit check/);
   });
 
   it("does not run after a FAILED edit — nothing changed on disk to check", async () => {
