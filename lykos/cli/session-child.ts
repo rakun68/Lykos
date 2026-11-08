@@ -44,6 +44,7 @@ import { buildContextPack, recordContextPack } from "../delegate/context-pack.js
 import { findSealedPathMatch } from "../extensions/defaults/lykos-seal.js";
 import { commandPathAccesses } from "../gate/bash-paths.js";
 import type { BootDeps } from "../session/boot.js";
+import { markCutOff } from "../session/live-capture.js";
 import { createAgentSession, type AgentSession } from "@earendil-works/pi-coding-agent";
 
 const DEFAULT_PROGRESS_INTERVAL_MS = 15_000;
@@ -176,6 +177,8 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
   let parentGone = false;
   let createdSession: { abort?: () => Promise<void> } | undefined;
   const abortSession = (): void => {
+    // A call the abort cuts off has no known outcome: its abort error is not recorded as its result (T238).
+    if (createdSession !== undefined) markCutOff(createdSession);
     if (typeof createdSession?.abort === "function") void createdSession.abort().catch(() => {});
   };
   const onParentGone = (): void => {

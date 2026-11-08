@@ -96,10 +96,24 @@ interface AgentEventish {
  * gap: `lykos doctor` distinguishes UNHASHED (the process died) from DAMAGED
  * (a hash is recorded and no longer matches), and only the second is a fault.
  */
+/** T238: sessions whose process lost its parent; see `markCutOff`. */
+const cutOffSessions = new WeakSet<object>();
+
+/**
+ * T238: the process running `session` lost its parent and is aborting it. A tool call still running then ends with
+ * the abort's error ("Command aborted"), which says nothing true of what the call did; its result is not recorded, so
+ * the call stays started with no result and a recovery replays it as `interrupted: outcome unknown`.
+ */
+export function markCutOff(session: object): void {
+  cutOffSessions.add(session);
+}
+
 export class LiveTranscriptRecorder implements TranscriptRecorder {
   readonly captureMode: CaptureMode = "stream";
   readonly writer: TranscriptWriter;
   private toolCallNames = new Map<string, string>();
+  /** T238: the session `markCutOff` names; once it is cut off, no tool result is written. */
+  private cutOffKey: object | undefined;
   /** T146: each running call's arguments, so its result can say whether it changed a file. */
   private toolCallArgs = new Map<string, unknown>();
   /** T146: the next `turn_start`'s number — the same session-wide count the harness writes on checkpoints. */
@@ -169,6 +183,11 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
     this.append({ kind: "error", message });
   }
 
+  /** T238: ties the recorder to the session `markCutOff` is called with. */
+  watchCutOff(session: object): void {
+    this.cutOffKey = session;
+  }
+
   finalize(): { path: string; sha256: string; bytes: number } {
     return this.writer.finalize();
   }
@@ -213,6 +232,7 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
             this.toolCallNames.delete(ev.toolCallId);
             this.toolCallArgs.delete(ev.toolCallId);
           }
+          if (this.cutOffKey !== undefined && cutOffSessions.has(this.cutOffKey)) break;
           // T146: marked here, from the registry's one declaration, so
           // `lykos show` reads which turns changed files instead of working
           // it out again from tool names.

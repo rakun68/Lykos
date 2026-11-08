@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import { ingestDelegateSnapshot, writeBootRow, type DelegateSnapshot, type IngestOpts } from "../ledger/ingest.js";
 import { liveSnapshotPath, readLiveSnapshot } from "../ledger/live.js";
 import { Ledger } from "../ledger/ledger.js";
-import { LiveTranscriptRecorder, type EventSource } from "./live-capture.js";
+import { LiveTranscriptRecorder, markCutOff, type EventSource } from "./live-capture.js";
 import { buildReplay, INTERRUPTED_OUTCOME, interruptedToolCalls, type TranscriptRecord } from "./replay.js";
 import { preflightResume } from "./resume-preflight.js";
 import { readTranscript, transcriptDir, transcriptFilePath, TranscriptWriter } from "./transcript.js";
@@ -96,6 +96,23 @@ describe("T238: tool calls are on disk before they run", () => {
     source.emit({ type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: { command: "ls" } });
     source.emit({ type: "tool_execution_end", toolCallId: "call_1", toolName: "bash", result: "a.ts", isError: false });
     assert.deepEqual(interruptedToolCalls(records(ledgerPath, id)), []);
+  });
+
+  it("a call the parent-gone abort cuts off keeps no result: its abort error is not its outcome", () => {
+    const { ledgerPath } = fixture();
+    const id = "t238-cut-off";
+    const recorder = new LiveTranscriptRecorder(ledgerPath, id);
+    const session = {};
+    recorder.watchCutOff(session);
+    const source = eventSource();
+    recorder.attach(source);
+    source.emit({ type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: { command: "npm run slow-check" } });
+    markCutOff(session);
+    source.emit({ type: "tool_execution_end", toolCallId: "call_1", toolName: "bash", result: "Command aborted", isError: true });
+    const recs = records(ledgerPath, id);
+    assert.deepEqual(interruptedToolCalls(recs), [{ id: "call_1", name: "bash" }]);
+    assert.match(buildReplay(id, recs).text, /bash \(call_1\): interrupted: outcome unknown/);
+    assert.doesNotMatch(buildReplay(id, recs).text, /Command aborted/);
   });
 });
 

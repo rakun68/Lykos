@@ -1878,6 +1878,7 @@ export function startLiveCapture(opts: {
 }): { recorder: LiveTranscriptRecorder | undefined; detach: () => void } {
   const recorder = LiveTranscriptRecorder.create(opts.ledgerPath, opts.session.sessionId);
   if (!recorder) return { recorder: undefined, detach: () => {} };
+  recorder.watchCutOff(opts.session);
   const priorMeta = readSessionMeta(opts.ledgerPath, opts.session.sessionId);
   recorder.writeMeta({
     taskId: opts.taskId ?? null,
