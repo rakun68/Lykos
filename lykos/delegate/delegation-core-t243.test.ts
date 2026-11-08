@@ -346,6 +346,26 @@ describe("T243: the commands", () => {
     assert.ok(out.sessions.every((s) => s.state === "done"));
   });
 
+  it("`lykos stop` from another process stops a `lykos run` session, and its owner ends with the result", async () => {
+    const ws = workspace();
+    const child = owner(ws, join(ws, "never"));
+    let out = "";
+    child.stdout!.on("data", (d: Buffer) => (out += d.toString()));
+    const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
+    try {
+      const [id] = await untilViews(ws, 1);
+      const r = spawnSync(process.execPath, ["--import", tsx, cli, "stop", id!], { cwd: ws, encoding: "utf8", windowsHide: true, input: "", timeout: 60_000 });
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const stopped = JSON.parse(r.stdout) as { session_id: string; state: string };
+      assert.equal(stopped.session_id, id);
+      assert.notEqual(stopped.state, "running", "the owner in the other process saw the stop");
+      assert.equal(await exited, 0, "the owner ended on its own, not killed");
+      assert.equal((JSON.parse(out.trim()) as { sessionId: string }).sessionId, id);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
   it("a 200 KB prompt runs: it travels on the child's stdin, never as an argument (G19)", async () => {
     const ws = workspace();
     const brief = "x".repeat(200 * 1024);

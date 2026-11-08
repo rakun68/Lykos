@@ -317,8 +317,9 @@ describe("T235 ACCEPTANCE: the diff uses the stored base when the host's HEAD mo
     assert.doesNotMatch(brief, /host-only\.txt/, "the host's later commit is not part of the review");
     assert.doesNotMatch(brief, /project, moved on/);
     assert.match(brief, new RegExp(baseAtStart.slice(0, 12)));
-    // The reviewer's context pack is read at that base too.
+    // The reviewer's context pack is read at that base too, and built from the files the branch changed.
     assert.equal(seen[0]!.base, baseAtStart);
+    assert.deepEqual(seen[0]!.context?.files, ["src/feature.mjs"], "the pack names the changed file, not the host's later one");
   });
 
   it("with the old behaviour as the contrast: a diff against HEAD would have shown the host's commit reverted", async () => {
