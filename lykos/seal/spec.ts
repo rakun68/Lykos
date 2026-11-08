@@ -13,6 +13,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { repoPath } from "../delegate/claims.js";
 import type { ContainmentChoice } from "../delegate/session-protocol.js";
 import { sealCreate, type SealCreateResult } from "./create.js";
 import { fallbackGitIdentity, getBranchOrNull, gitExec, resolveHead, resolveRef } from "./git.js";
@@ -60,7 +61,11 @@ export async function sealFromSpec(input: SealFromSpecInput): Promise<SpecSeal> 
   const env: NodeJS.ProcessEnv = { ...(input.env ?? process.env), ...fallbackGitIdentity(input.worktree) };
   const branch = getBranchOrNull(input.worktree, env);
   if (branch === null) return { ok: false, message: "sealed: the session has no branch of its own to seal (write_in_place cannot carry sealed tests)" };
-  const paths = input.paths.map((p) => p.replace(/\\/g, "/").replace(/^\.\//, ""));
+  // A sealed path names a file in the repository: never one outside it, absolute, or in `.git`.
+  const checked = input.paths.map((p) => repoPath(p, "sealed path"));
+  const refused = checked.flatMap((c) => (c.ok ? [] : [c.message]));
+  if (refused.length > 0) return { ok: false, message: `sealed: ${refused.join("; ")}` };
+  const paths = checked.flatMap((c) => (c.ok ? [c.path] : []));
   const missing = paths.filter((p) => !existsSync(join(input.workspace, p)));
   if (missing.length > 0) return { ok: false, message: `sealed: not found in the workspace: ${missing.join(", ")}` };
   for (const p of paths) {

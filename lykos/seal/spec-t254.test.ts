@@ -112,6 +112,21 @@ describe("T254: red outcomes", () => {
 });
 
 describe("T254: the seal from `sealed:`", () => {
+  it("a sealed path outside the repository, or absolute, is refused before anything is copied or committed", async () => {
+    // The checkout one folder deeper than the workspace, so a path that climbs out of it lands somewhere else.
+    const wt = join(root, "deep", "wt");
+    git(repo, "worktree", "add", "-q", "-b", "lykos/s1", wt, "main");
+    const tip = git(wt, "rev-parse", "HEAD");
+    write(root, "escape.test.mjs", FAILING);
+    for (const p of ["../escape.test.mjs", join(root, "escape.test.mjs"), ".git/hooks/x.test.mjs"]) {
+      const sealed = await sealFromSpec({ workspace: repo, worktree: wt, paths: [p], red: true, homeDir: home, env: env() });
+      assert.equal(sealed.ok, false, p);
+      assert.match(sealed.message ?? "", /^sealed: /, p);
+      assert.equal(git(wt, "rev-parse", "HEAD"), tip, `${p}: nothing was committed`);
+    }
+    assert.equal(existsSync(join(root, "deep", "escape.test.mjs")), false, "nothing was written outside the checkout");
+  });
+
   it("commits the coordinator's sealed tests over the base as the writer commit and seals exactly them", async () => {
     const wt = sessionWorktree();
     write(repo, "test/add.test.mjs", FAILING);
