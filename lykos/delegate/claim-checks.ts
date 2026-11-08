@@ -394,6 +394,8 @@ class CheckContext {
   private async reproduce(claim: StoredClaim, c: Extract<ClaimCheck, { kind: "reproduction" }>, commit: string, label: string): Promise<Reproduced> {
     const ran = await this.execute(claim, commit, label, async ({ dir, executor }) => {
       const target = join(dir, c.file);
+      // A tracked link or the install's junction on the way would put the file, and its run, outside the worktree.
+      if (!landsInside(dir, target)) return { outside: true as const };
       // A reproduction the fixer kept as a test, unchanged, is run as it stands; any other file there is never replaced.
       if (existsSync(target)) {
         if (!sameText(readFileSync(target, "utf8"), c.content)) return { exists: true as const };
@@ -407,8 +409,9 @@ class CheckContext {
     if (!ran.ran) return { kind: "refused", reason: ran.reason };
     const mark = { uncontained: ran.uncontained };
     const v = ran.value;
-    if ("exists" in v) return { kind: "unattributable", reason: `${c.file} already exists at ${commit.slice(0, 12)} with other text: a reproduction must be a new file or the reproduction itself, unchanged, or it would replace one`, ...mark };
-    if ("timedOut" in v) return { kind: "unattributable", reason: `the reproduction did not finish in ${seconds(this.timeoutMs)}`, ...mark };
+    if ("outside" in v) return { kind: "unattributable", reason: withKept(`${c.file} resolves outside the worktree at ${commit.slice(0, 12)}: a reproduction is written only inside it`, ran.kept), ...mark };
+    if ("exists" in v) return { kind: "unattributable", reason: withKept(`${c.file} already exists at ${commit.slice(0, 12)} with other text: a reproduction must be a new file or the reproduction itself, unchanged, or it would replace one`, ran.kept), ...mark };
+    if ("timedOut" in v) return { kind: "unattributable", reason: withKept(`the reproduction did not finish in ${seconds(this.timeoutMs)}`, ran.kept), ...mark };
     const judged = judgeReproduction(c, v.result, commit);
     return { ...judged, reason: withKept(judged.reason, ran.kept), ...mark };
   }
@@ -497,6 +500,29 @@ function sameText(a: string, b: string): boolean {
 }
 
 /** A reason with the note that a worktree was kept, when it was. */
+/** Whether `target`, and the nearest folder of it that exists, are inside `root` once every link is followed. */
+function landsInside(root: string, target: string): boolean {
+  const real = realpathSync(root);
+  const inside = (p: string): boolean => p === real || p.startsWith(real + sep);
+  if (existsSync(target) || isLink(target)) return !isLink(target) && inside(realpathSync(target));
+  let at = dirname(target);
+  while (!existsSync(at)) {
+    if (isLink(at)) return false;
+    const up = dirname(at);
+    if (up === at) return false;
+    at = up;
+  }
+  return inside(realpathSync(at));
+}
+
+function isLink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 function withKept(reason: string, kept: string | undefined): string {
   return kept === undefined ? reason : `${reason}; ${kept}`;
 }

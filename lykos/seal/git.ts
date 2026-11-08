@@ -181,7 +181,13 @@ export function createTemporaryWorktree(
     baseDir = tmpdir();
   }
   const dir = mkdtempSync(join(baseDir, "seal-worktree-"));
-  gitExec(["worktree", "add", "--detach", dir, commit], cwd, env);
+  // The checkout runs no project hook (post-checkout): a worktree read by the harness runs no project code.
+  const noHooks = mkdtempSync(join(tmpdir(), "lykos-no-hooks-"));
+  try {
+    gitExec(["-c", `core.hooksPath=${noHooks}`, "worktree", "add", "--detach", dir, commit], cwd, env);
+  } finally {
+    rmSync(noHooks, { recursive: true, force: true });
+  }
 
   const nm = join(cwd, "node_modules");
   const targetNm = join(dir, "node_modules");

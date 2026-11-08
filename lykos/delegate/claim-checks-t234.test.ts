@@ -206,6 +206,15 @@ describe("T234: line and search checks are read by the harness at the final head
     assert.equal(r?.verdict, "verified", r?.reason);
   });
 
+  it("making the read worktree runs no project hook", async () => {
+    const p = project();
+    const marker = join(p.repo, "..", `hook-ran-${Date.now()}.txt`);
+    put(p.repo, ".git/hooks/post-checkout", `#!/bin/sh\necho ran > "${fwd(marker)}"\n`);
+    const [r] = await checkClaims(inputFor(p, [claim({ kind: "line", path: "README.md", line: 1, text: "# project" })], { trust: "flag" }));
+    assert.equal(r?.verdict, "verified", r?.reason);
+    assert.equal(existsSync(marker), false, "the post-checkout hook did not run");
+  });
+
   it("they run on an untrusted project with no containment: nothing is executed", async () => {
     const p = project();
     const [r] = await checkClaims(inputFor(p, [claim({ kind: "line", path: "README.md", line: 1, text: "# project" })], { trust: "flag" }));
@@ -418,6 +427,14 @@ describe("T234: a reproduction runs through seal.test_command and proves a regre
     assert.match(r?.reason ?? "", /already exists/);
   });
 
+  it("a reproduction whose path goes through the install's link is unchecked, and nothing is written outside the worktree", async () => {
+    const p = project();
+    const [r] = await checkClaims(inputFor(p, [claim({ kind: "reproduction", file: "node_modules/escape.test.mjs", content: REPRO, fails: ["adds two numbers"] })], { base: undefined }));
+    assert.equal(r?.verdict, "unchecked", r?.reason);
+    assert.match(r?.reason ?? "", /outside the worktree/);
+    assert.equal(existsSync(join(p.repo, "node_modules", "escape.test.mjs")), false, "the main checkout's install is untouched");
+  });
+
   it("a reproduction over a file the commit already has is unchecked: it would replace it", async () => {
     const p = project();
     const [r] = await checkClaims(inputFor(p, [claim({ kind: "reproduction", file: "src/math.mjs", content: REPRO, fails: ["adds two numbers"] })]));
@@ -550,6 +567,24 @@ test("hangs", () => { writeFileSync(${JSON.stringify(pidFile)}, String(process.p
     assert.equal(r?.verdict, "verified", "what the check saw still stands");
     assert.match(r?.reason ?? "", /not proven stopped/);
     assert.deepEqual(removed, [], "the worktree was not removed");
+  });
+
+  it("a reproduction that times out and keeps its worktree says both", async () => {
+    const p = project();
+    const hang = `
+import { test } from "node:test";
+test("hangs", () => new Promise(() => {}));
+`;
+    const [r] = await checkClaims(
+      inputFor(p, [claim({ kind: "reproduction", file: REPRO_FILE, content: hang, fails: ["hangs"] })], {
+        timeoutMs: 3000,
+        base: undefined,
+        deps: { quiescence: { livenessOf: () => "unknown", treeOf: () => undefined } },
+      }),
+    );
+    assert.equal(r?.verdict, "unchecked", r?.reason);
+    assert.match(r?.reason ?? "", /did not finish in 3s/);
+    assert.match(r?.reason ?? "", /worktree was kept/);
   });
 
   it("a proof of stopping that throws keeps the worktree: a throw proves nothing (fail-closed)", async () => {
