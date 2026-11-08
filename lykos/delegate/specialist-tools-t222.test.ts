@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -24,7 +24,7 @@ import { encodeFrame, parseFrame, type Frame, type SessionOutcome, type SessionR
 const FRAMED = ["lykos_implement", "lykos_refactor", "lykos_debug", "lykos_review"];
 const BUILT_IN_SUBAGENTS = ["lykos_explore", "lykos_general", "lykos_implementer", "lykos_review", "lykos_test-writer"];
 const ASYNC = ["lykos_start", "lykos_status", "lykos_steer", "lykos_stop", "lykos_decide", "lykos_review_session", "lykos_cycle"];
-const SPECIALIST_INPUTS = ["brief", "constraints", "budget", "containment", "session_id", "write_in_place", "base"];
+const SPECIALIST_INPUTS = ["brief", "constraints", "budget", "max_steps", "request_id", "sealed", "red", "reseal", "files", "test", "rulings_from", "containment", "session_id", "write_in_place", "base"];
 const MUTATING = ["edit", "write", "bash", "powershell", "commit"];
 
 afterEach(() => {
@@ -150,15 +150,22 @@ describe("T222: tools/list shows a tool per subagent specialist (AC 1)", () => {
     }
   });
 
-  it("a specialist tool takes brief, constraints, budget, containment, session_id, write_in_place and base, and no model, provider or specialist", async () => {
+  it("a specialist tool takes exactly the inputs the reference lists, and no model, provider or specialist", async () => {
     const tools = await listTools();
     for (const name of ["lykos_explore", "lykos_general", "lykos_implementer", "lykos_test-writer"]) {
       const schema = tools.get(name)?.inputSchema;
       assert.ok(schema, `${name} listed`);
       assert.deepEqual(schema.required, ["brief"], `${name}: only brief is required`);
-      for (const field of SPECIALIST_INPUTS) assert.ok(field in (schema.properties ?? {}), `${name} accepts ${field}`);
+      assert.deepEqual(Object.keys(schema.properties ?? {}).sort(), [...SPECIALIST_INPUTS].sort(), `${name}: its inputs are the listed ones`);
       for (const field of ["model", "provider", "specialist"]) assert.ok(!(field in (schema.properties ?? {})), `${name} has no ${field} input`);
     }
+  });
+
+  it("the reference names every specialist input in its list and its table", () => {
+    const doc = readFileSync(join(import.meta.dirname, "..", "..", "docs", "reference", "mcp.md"), "utf8");
+    const listed = /Specialist tools \(`lykos_<name>`\) accept \w+ inputs: ([^.]+)\./.exec(doc)?.[1] ?? "";
+    assert.deepEqual([...listed.matchAll(/`(\w+)`/g)].map((m) => m[1]).sort(), [...SPECIALIST_INPUTS].sort());
+    for (const field of SPECIALIST_INPUTS) assert.ok(doc.includes(`| \`${field}\` |`), `${field} has a row`);
   });
 
   it("lists user and project subagent specialists (role subagent or all), never a primary one, and skips a file it cannot read", async () => {
