@@ -29,7 +29,7 @@
 // that directly. Documented here rather than silently relabelling it.
 
 import type { ContainmentRecord } from "../containment/containment.js";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { dirname, join } from "node:path";
@@ -469,8 +469,8 @@ export class TranscriptWriter {
 
   /**
    * T238: a writer opened on a transcript already on disk continues it. A partial trailing record (the process
-   * was killed mid-write) is dropped, so the next line does not land on its end; the turn index and the
-   * artifact numbering continue from what is there, so no artifact is overwritten.
+   * was killed mid-write) is dropped, so the next line does not land on its end; the turn index, the
+   * artifact numbering and the artifact bytes continue from what is there, so no artifact is overwritten or uncounted.
    */
   private reopen(): void {
     if (existsSync(this.path)) {
@@ -482,7 +482,14 @@ export class TranscriptWriter {
     if (existsSync(this.artifactsDir)) {
       for (const name of readdirSync(this.artifactsDir)) {
         const seq = /^(\d+)-/.exec(name)?.[1];
-        if (seq !== undefined) this.artifactSeq = Math.max(this.artifactSeq, Number(seq));
+        if (seq === undefined) continue;
+        this.artifactSeq = Math.max(this.artifactSeq, Number(seq));
+        // The bytes spilled so far are the session's too: a continuation adds to them, never starts them at 0.
+        try {
+          this.artifactBytesTotal += statSync(join(this.artifactsDir, name)).size;
+        } catch {
+          // An artifact that cannot be read is not counted.
+        }
       }
     }
   }

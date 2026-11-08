@@ -205,6 +205,18 @@ describe("T238: reopening a transcript", () => {
     const artifacts = readdirSync(join(transcriptDir(ledgerPath, id), "artifacts")).sort();
     assert.deepEqual(artifacts, ["0001-read.json", "0002-read.json"], "the second spill did not overwrite the first");
   });
+
+  it("continues the session's artifact bytes: a resumed run never records the spill as 0", () => {
+    const { ledgerPath } = fixture();
+    const id = "t238-reopen-bytes";
+    const first = new TranscriptWriter(ledgerPath, id);
+    first.append({ kind: "tool_call", name: "read", state: "ok", tool_call_id: "c1", result: "x".repeat(20_000) });
+    assert.ok(first.artifactBytes > 0);
+    const reopened = new TranscriptWriter(ledgerPath, id);
+    assert.equal(reopened.artifactBytes, first.artifactBytes);
+    reopened.append({ kind: "tool_call", name: "read", state: "ok", tool_call_id: "c2", result: "y".repeat(20_000) });
+    assert.equal(reopened.artifactBytes, first.artifactBytes * 2);
+  });
 });
 
 describe("T238: kill, resume, kill, resume", () => {

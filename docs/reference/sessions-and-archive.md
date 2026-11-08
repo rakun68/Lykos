@@ -65,8 +65,9 @@ Invoking `lykos resume <session-id>` continues the designated session directly:
 
 **On disk first (T238).** The session's ledger row is written at boot, before anything runs (the
 *boot row*: model, flags, specialist, model path, execution shape); ingest at the end finalises it on
-the same task. A session killed before its ingest is therefore a row: findable, resumable, its usage
-`unknown` (no `calls` rows, `total_cost_usd` NULL, `live.json` cost null), never $0.
+the same task. A session killed before its ingest is therefore a row: findable, resumable once its transcript has
+its first record (one killed between the boot row and the brief has no transcript, and resume refuses
+it as `transcript file missing`), its usage `unknown` (no `calls` rows, `total_cost_usd` NULL, `live.json` cost null), never $0.
 
 A tool call's start record carries the runtime's `tool_call_id` and is written before the tool runs;
 its `tool_result` names the same id. On resume, a start with no result is replayed as
