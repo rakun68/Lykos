@@ -14,7 +14,7 @@ import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
 import { defaultLedgerPath } from "../ledger/use.js";
 import { createTemporaryWorktree } from "../seal/git.js";
 import { checkClaims, type CheckClaimsInput } from "./claim-checks.js";
-import type { ClaimCheck, StoredClaim } from "./claims.js";
+import { parseClaimCheck, type ClaimCheck, type StoredClaim } from "./claims.js";
 
 const GIT_ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
 const saved: Record<string, string | undefined> = {};
@@ -85,6 +85,13 @@ describe("math", () => {
   test("adds zero", () => assert.equal(add(5, 0), 5));
 });
 `;
+
+/** A check as the claim tool's parser leaves it. */
+function parsed(value: unknown): ClaimCheck {
+  const r = parseClaimCheck(value);
+  if (!r.ok) throw new Error(r.message);
+  return r.check;
+}
 
 let nextId = 1;
 function claim(check: ClaimCheck, text = "a claim"): StoredClaim {
@@ -169,6 +176,28 @@ describe("T234: line and search checks are read by the harness at the final head
     assert.match(wrong?.reason ?? "", /2 lines match.*expected 1/);
     assert.equal(under?.verdict, "verified", under?.reason);
     assert.equal(none?.verdict, "verified");
+  });
+
+  it("a search under a folder named with a trailing slash reads that folder", async () => {
+    const p = project();
+    const [slash, zero] = await checkClaims(
+      inputFor(p, [claim(parsed({ kind: "search", pattern: "TODO", matches: 2, paths: ["src/"] })), claim(parsed({ kind: "search", pattern: "TODO", matches: 0, paths: ["src/"] }))]),
+    );
+    assert.equal(slash?.verdict, "verified", slash?.reason);
+    assert.equal(zero?.verdict, "failed", zero?.reason);
+  });
+
+  it("a search that does not finish in the time limit is unchecked (a pattern that backtracks without end)", async () => {
+    const p = project();
+    put(p.repo, "src/long.txt", `${"a".repeat(28)}!${String.fromCharCode(10)}`);
+    git(p.repo, "add", "-A");
+    git(p.repo, "commit", "-q", "-m", "a long line");
+    const head = git(p.repo, "rev-parse", "HEAD");
+    const started = Date.now();
+    const [r] = await checkClaims(inputFor({ ...p, head }, [claim({ kind: "search", pattern: "^(a+)+$", matches: 0 })], { timeoutMs: 300 }));
+    assert.equal(r?.verdict, "unchecked", r?.reason);
+    assert.match(r?.reason ?? "", /did not finish/);
+    assert.ok(Date.now() - started < 10_000, "the limit stopped it");
   });
 
   it("a search never reads the install: node_modules is not a tracked file", async () => {
@@ -361,11 +390,32 @@ describe("T234: a reproduction runs through seal.test_command and proves a regre
     assert.deepEqual(results.map((r) => r.verdict), ["verified", "verified", "failed"], results.map((r) => r.reason).join(" | "));
   });
 
-  it("a reproduction file that does not run is failed, with the runner's error", async () => {
+  it("a reproduction file that does not run is unchecked, with the runner's error: it never ran, so it shows nothing false", async () => {
     const p = project();
     const [r] = await checkClaims(inputFor(p, [claim({ kind: "reproduction", file: REPRO_FILE, content: "this is not javascript (\n", fails: ["x"] })]));
-    assert.equal(r?.verdict, "failed", r?.reason);
+    assert.equal(r?.verdict, "unchecked", r?.reason);
     assert.match(r?.reason ?? "", /did not run/);
+  });
+
+  it("a reproduction kept at its own path with the same text is run, not refused (the fix brief keeps it as a test)", async () => {
+    const p = project();
+    put(p.repo, REPRO_FILE, REPRO.split(String.fromCharCode(10)).join(String.fromCharCode(13, 10)));
+    git(p.repo, "add", "-A");
+    git(p.repo, "commit", "-q", "-m", "keep the reproduction");
+    const head = git(p.repo, "rev-parse", "HEAD");
+    const [r] = await checkClaims(inputFor({ ...p, head }, [claim({ kind: "reproduction", file: REPRO_FILE, content: REPRO, fails: ["adds two numbers"] })], { base: undefined }));
+    assert.equal(r?.verdict, "verified", r?.reason);
+  });
+
+  it("a reproduction whose path holds other text at the commit is still unchecked: it would replace that file", async () => {
+    const p = project();
+    put(p.repo, REPRO_FILE, REPRO.replace("adds zero", "adds nothing"));
+    git(p.repo, "add", "-A");
+    git(p.repo, "commit", "-q", "-m", "a changed reproduction");
+    const head = git(p.repo, "rev-parse", "HEAD");
+    const [r] = await checkClaims(inputFor({ ...p, head }, [claim({ kind: "reproduction", file: REPRO_FILE, content: REPRO, fails: ["adds two numbers"] })], { base: undefined }));
+    assert.equal(r?.verdict, "unchecked");
+    assert.match(r?.reason ?? "", /already exists/);
   });
 
   it("a reproduction over a file the commit already has is unchecked: it would replace it", async () => {
@@ -499,6 +549,48 @@ test("hangs", () => { writeFileSync(${JSON.stringify(pidFile)}, String(process.p
     );
     assert.equal(r?.verdict, "verified", "what the check saw still stands");
     assert.match(r?.reason ?? "", /not proven stopped/);
+    assert.deepEqual(removed, [], "the worktree was not removed");
+  });
+
+  it("a proof of stopping that throws keeps the worktree: a throw proves nothing (fail-closed)", async () => {
+    const p = project();
+    const removed: string[] = [];
+    const [r] = await checkClaims(
+      inputFor(p, [claim({ kind: "command", command: "node -e \"\"", exit: 0 })], {
+        deps: {
+          quiescence: { livenessOf: () => { throw new Error("the OS lookup failed"); }, treeOf: () => undefined },
+          createWorktree: (cwd, commit, env) => {
+            const wt = createTemporaryWorktree(cwd, commit, env);
+            return { dir: wt.dir, cleanup: () => { removed.push(wt.dir); wt.cleanup(); } };
+          },
+        },
+      }),
+    );
+    assert.match(r?.reason ?? "", /could not be proven stopped.*the OS lookup failed/);
+    assert.deepEqual(removed, [], "the worktree was not removed");
+  });
+
+  it("a container that cannot be removed keeps the worktree it may still mount (fail-closed)", async () => {
+    const p = project();
+    const removed: string[] = [];
+    const [r] = await checkClaims(
+      inputFor(p, [claim({ kind: "command", command: "node -e \"\"", exit: 0 })], {
+        containment: "required",
+        deps: {
+          startContained: async () => ({
+            executor: localExecutor,
+            record: { requested: "required", used: "required", runtime: "podman" },
+            dispose: async () => { throw new Error("podman rm failed"); },
+          }),
+          createWorktree: (cwd, commit, env) => {
+            const wt = createTemporaryWorktree(cwd, commit, env);
+            return { dir: wt.dir, cleanup: () => { removed.push(wt.dir); wt.cleanup(); } };
+          },
+        },
+      }),
+    );
+    assert.equal(r?.verdict, "verified", r?.reason);
+    assert.match(r?.reason ?? "", /container could not be removed.*podman rm failed/);
     assert.deepEqual(removed, [], "the worktree was not removed");
   });
 });

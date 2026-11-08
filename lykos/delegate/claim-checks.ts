@@ -16,11 +16,13 @@
 // killed, then confirmed through the process records. A process that cannot be proven stopped keeps the worktree
 // (fail-closed) and the verdict says so.
 //
-// A check that cannot run (the command is not found, it timed out, the runner reports no test names) is `unchecked`,
+// A check that cannot run (the command is not found, it timed out, the runner reports no test names, the reproduction
+// file does not load) is `unchecked`,
 // never `failed`: `failed` is reserved for a check that ran and found the claim false.
 
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
+import { Worker } from "node:worker_threads";
 import { loadConfig } from "../config/load.js";
 import type { Containment } from "../containment/containment.js";
 import { isStoreTrusted, type TrustSource } from "../gate/trust.js";
@@ -179,26 +181,22 @@ class CheckContext {
       : { verdict: "failed", reason: `line ${c.line} of ${c.path} is ${JSON.stringify(short(actual, 200))}, which does not contain the text` };
   }
 
-  private search(c: Extract<ClaimCheck, { kind: "search" }>): Checked {
+  private async search(c: Extract<ClaimCheck, { kind: "search" }>): Promise<Checked> {
     const dir = this.tree();
     const listed = hostGit(["ls-files", "-z"], dir, { raw: true });
     if (!listed.ok) return unchecked(`could not list the files at ${this.head.slice(0, 12)}: ${listed.stderr}`);
-    const re = new RegExp(c.pattern);
-    const hits: string[] = [];
-    let total = 0;
-    let files = 0;
+    const texts: Array<[string, string]> = [];
     for (const rel of listed.stdout.split("\0").filter((f) => f !== "")) {
       if (c.paths !== undefined && !c.paths.some((p) => rel === p || rel.startsWith(`${p}/`))) continue;
       const file = this.readTracked(rel);
       if ("missing" in file || file.text.slice(0, 8192).includes("\0")) continue;
-      files += 1;
-      const lines = file.text.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (!re.test(lines[i]!.replace(/\r$/, ""))) continue;
-        total += 1;
-        if (hits.length < 5) hits.push(`${rel}:${i + 1}`);
-      }
+      texts.push([rel, file.text]);
     }
+    // The pattern is the model's: matched on a worker thread so one that backtracks without end meets the limit.
+    const counted = await countMatches(c.pattern, texts, this.timeoutMs);
+    if (counted === undefined) return unchecked(`the search did not finish in ${seconds(this.timeoutMs)}`);
+    const { total, hits } = counted;
+    const files = texts.length;
     const where = hits.length > 0 ? ` (${hits.join(", ")}${total > hits.length ? ", ..." : ""})` : "";
     const found = `${total} line${total === 1 ? "" : "s"} match${total === 1 ? "es" : ""} in ${files} file${files === 1 ? "" : "s"}${where}`;
     return total === c.matches ? { verdict: "verified", reason: found } : { verdict: "failed", reason: `${found}; expected ${c.matches}` };
@@ -254,24 +252,35 @@ class CheckContext {
       try {
         outcome = { ran: true, value: await body({ dir: worktree.dir, executor }), uncontained: contained === undefined };
       } finally {
-        await Promise.all(children.map((child) => killExecChild(child).catch(() => undefined)));
-        if (contained === undefined) {
-          const notStopped = await this.proveStopped(key);
-          if (notStopped.length > 0) {
-            removable = false;
-            kept = `a process of the check was not proven stopped (${notStopped.map(describeNotStopped).join(", ")}); its worktree was kept at ${worktree.dir}`;
-          } else if (!(await directoryFree(worktree.dir))) {
-            removable = false;
-            kept = `a process still holds the check's worktree after the check ended; the worktree was kept at ${worktree.dir}`;
+        // Fail-closed: the worktree stays unless the proof below completes. A proof that throws proves nothing.
+        removable = false;
+        try {
+          await Promise.all(children.map((child) => killExecChild(child).catch(() => undefined)));
+          if (contained === undefined) {
+            const notStopped = await this.proveStopped(key);
+            if (notStopped.length > 0) {
+              kept = `a process of the check was not proven stopped (${notStopped.map(describeNotStopped).join(", ")}); its worktree was kept at ${worktree.dir}`;
+            } else if (!(await directoryFree(worktree.dir))) {
+              kept = `a process still holds the check's worktree after the check ended; the worktree was kept at ${worktree.dir}`;
+            } else {
+              removable = true;
+            }
+          } else {
+            removable = true;
           }
+        } catch (err) {
+          kept = `the check's processes could not be proven stopped (${err instanceof Error ? err.message : String(err)}); its worktree was kept at ${worktree.dir}`;
         }
       }
     } finally {
       try {
         await contained?.dispose();
-      } finally {
-        if (removable) worktree.cleanup();
+      } catch (err) {
+        // A container that could not be removed may still have the worktree mounted.
+        removable = false;
+        kept = `the check's container could not be removed (${err instanceof Error ? err.message : String(err)}); its worktree was kept at ${worktree.dir}`;
       }
+      if (removable) worktree.cleanup();
     }
     return kept === undefined ? outcome : { ...outcome, kept };
   }
@@ -385,16 +394,20 @@ class CheckContext {
   private async reproduce(claim: StoredClaim, c: Extract<ClaimCheck, { kind: "reproduction" }>, commit: string, label: string): Promise<Reproduced> {
     const ran = await this.execute(claim, commit, label, async ({ dir, executor }) => {
       const target = join(dir, c.file);
-      if (existsSync(target)) return { exists: true as const };
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, c.content, "utf8");
+      // A reproduction the fixer kept as a test, unchanged, is run as it stands; any other file there is never replaced.
+      if (existsSync(target)) {
+        if (!sameText(readFileSync(target, "utf8"), c.content)) return { exists: true as const };
+      } else {
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, c.content, "utf8");
+      }
       const out = await this.withinLimit(runSealedTests({ executor, dir, files: [c.file], template: this.input.testCommand, mode: "green", env: this.env }));
       return "timedOut" in out ? { timedOut: true as const } : { result: out.value };
     });
     if (!ran.ran) return { kind: "refused", reason: ran.reason };
     const mark = { uncontained: ran.uncontained };
     const v = ran.value;
-    if ("exists" in v) return { kind: "unattributable", reason: `${c.file} already exists at ${commit.slice(0, 12)}: a reproduction must be a new file, or it would replace one`, ...mark };
+    if ("exists" in v) return { kind: "unattributable", reason: `${c.file} already exists at ${commit.slice(0, 12)} with other text: a reproduction must be a new file or the reproduction itself, unchanged, or it would replace one`, ...mark };
     if ("timedOut" in v) return { kind: "unattributable", reason: `the reproduction did not finish in ${seconds(this.timeoutMs)}`, ...mark };
     const judged = judgeReproduction(c, v.result, commit);
     return { ...judged, reason: withKept(judged.reason, ran.kept), ...mark };
@@ -441,6 +454,48 @@ async function directoryFree(dir: string, waitMs = 15_000): Promise<boolean> {
   }
 }
 
+const COUNT_MATCHES_WORKER = `
+const { parentPort, workerData } = require("node:worker_threads");
+const re = new RegExp(workerData.pattern);
+const hits = [];
+let total = 0;
+for (const [rel, text] of workerData.texts) {
+  const lines = text.split("\\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (!re.test(lines[i].replace(/\\r$/, ""))) continue;
+    total += 1;
+    if (hits.length < 5) hits.push(rel + ":" + (i + 1));
+  }
+}
+parentPort.postMessage({ total, hits });
+`;
+
+/** The lines of `texts` that `pattern` matches, counted on a worker thread; undefined when it overruns `timeoutMs`. */
+function countMatches(pattern: string, texts: ReadonlyArray<[string, string]>, timeoutMs: number): Promise<{ total: number; hits: string[] } | undefined> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(COUNT_MATCHES_WORKER, { eval: true, workerData: { pattern, texts } });
+    const timer = setTimeout(() => {
+      void worker.terminate();
+      resolve(undefined);
+    }, timeoutMs);
+    worker.once("message", (value: { total: number; hits: string[] }) => {
+      clearTimeout(timer);
+      void worker.terminate();
+      resolve(value);
+    });
+    worker.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+/** Two texts equal but for line endings. */
+function sameText(a: string, b: string): boolean {
+  const lf = (t: string): string => t.split("\r\n").join("\n");
+  return lf(a) === lf(b);
+}
+
 /** A reason with the note that a worktree was kept, when it was. */
 function withKept(reason: string, kept: string | undefined): string {
   return kept === undefined ? reason : `${reason}; ${kept}`;
@@ -470,13 +525,13 @@ function judgeReproduction(c: Extract<ClaimCheck, { kind: "reproduction" }>, res
   }
   if (res.fileErrors.size > 0) {
     const first = [...res.fileErrors.entries()][0]!;
-    return { kind: "not-reproduced", reason: `the reproduction did not run at ${where}: ${short(first[1], 240)}`, passed: [], failed: [], missing: c.fails };
+    return { kind: "unattributable", reason: `the reproduction did not run at ${where}: ${short(first[1], 240)}` };
   }
   // node:test reports a file that could not run (a syntax error, a missing import) as one failed test named for the file.
   const norm = (p: string): string => p.split("\\").join("/");
   const unrun = res.tests.filter((t) => t.status === "error" && t.describe.length === 0 && norm(t.name) === norm(t.file));
   if (unrun.length > 0) {
-    return { kind: "not-reproduced", reason: `the reproduction did not run at ${where}: ${short(res.errors.join(" "), 240)}`, passed: [], failed: [], missing: c.fails };
+    return { kind: "unattributable", reason: `the reproduction did not run at ${where}: ${short(res.errors.join(" "), 240)}` };
   }
   if (res.tests.length === 0) {
     return { kind: "unattributable", reason: `the test command produced no test results at ${where}: ${short(res.errors.join(" "), 240)}` };

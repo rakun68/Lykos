@@ -342,7 +342,7 @@ export function fixBrief(items: readonly Item[], rulings: ReadonlyArray<{ point:
     "## Before you finish",
     [
       proofs.length > 0
-        ? `- Keep each reproduction above as a test in your branch, at the path it names. Run them: every one must pass after your fix. They are the proof suite, and the harness reruns them at your head.`
+        ? `- Keep each reproduction above, unchanged, as a test in your branch, at the path it names (the harness runs that file as it stands, and refuses one whose text differs). Run them: every one must pass after your fix. They are the proof suite, and the harness reruns them at your head.`
         : "- No item has a reproduction. State in your answer, for each, what you changed and where.",
       "- Run the verification command and the tests beside the files you changed. They must stay green: a fix that breaks a neighbour is not a fix.",
       "- Do not weaken, skip or delete a test to make it pass, and do not special-case an input a test reads.",

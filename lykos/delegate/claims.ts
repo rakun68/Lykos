@@ -43,7 +43,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** A repository-relative path with forward slashes, or why it is not one. `.git` is never a path a check may name. */
 export function repoPath(value: unknown, label: string): { ok: true; path: string } | { ok: false; message: string } {
   if (typeof value !== "string" || value.trim() === "") return { ok: false, message: `${label} must be a non-empty path` };
-  const normal = posix.normalize(value.replace(/\\/g, "/"));
+  // A folder named with a trailing slash is the folder: `src/` and `src` are one path.
+  const normal = posix.normalize(value.replace(/\\/g, "/")).replace(/\/+$/, "");
   if (isAbsolute(value) || normal.startsWith("/") || /^[A-Za-z]:/.test(normal)) return { ok: false, message: `${label} must be relative to the repository root: ${value}` };
   if (normal === ".." || normal.startsWith("../") || normal === ".") return { ok: false, message: `${label} must stay inside the repository: ${value}` };
   if (normal.split("/").some((part) => part.toLowerCase() === ".git")) return { ok: false, message: `${label} must not name .git: ${value}` };
