@@ -62,9 +62,16 @@ const SEALED = "test/add.test.mjs";
 const FAILING = 'import { it } from "node:test";\nimport assert from "node:assert/strict";\nit("adds", () => assert.equal(1 + 1, 3));\n';
 const CORRECTED = FAILING.replace("3", "4");
 
+const savedHome: Record<string, string | undefined> = {};
+
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "lykos-t232-"));
   home = join(root, "home");
+  // Hermetic: the extension host reads the global config (~/.lykos/config.yaml), so a machine's own seal.writers or
+  // seal.enforce_for must not decide who is guarded here.
+  for (const k of ["HOME", "USERPROFILE"]) savedHome[k] = process.env[k];
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
   repo = join(root, "repo");
   ledgerPath = join(root, "ledger.db");
   mkdirSync(home);
@@ -84,6 +91,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  for (const [k, v] of Object.entries(savedHome)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -622,6 +633,25 @@ describe("T232: the verification order", () => {
     accept();
     assert.deepEqual(await h.runToolResult("read", { path: SEALED }, false), []);
     assert.equal(events("restored").length, 1, "the restore reached the ledger on the next call");
+  });
+
+  it("an edit hidden from git diff with assume-unchanged (or skip-worktree) is still restored", () => {
+    for (const flag of ["--assume-unchanged", "--skip-worktree"]) {
+      git(wt, "update-index", flag, SEALED);
+      writeFileSync(join(wt, SEALED), "// weakened\n");
+      const outcome = restoreSealed(wt, activeSeals({ cwd: wt, env: env() }), env());
+      assert.deepEqual(outcome.failed, [], flag);
+      assert.deepEqual(outcome.restored.map((d) => d.path), [SEALED], flag);
+      assert.equal(read(SEALED), FAILING, flag);
+    }
+  });
+
+  it("a seal record whose sealed_paths is not a list fails the restore, never throws, never reads as clean", () => {
+    const seals = activeSeals({ cwd: wt, env: env() }).map((s) => ({ ...s, seal: { ...s.seal, sealed_paths: null as unknown as string[] } }));
+    const outcome = restoreSealed(wt, seals, env());
+    assert.deepEqual(outcome.restored, []);
+    assert.deepEqual(outcome.failed, seals.map((s) => s.relPath));
+    assert.match(outcome.error ?? "", /no list of sealed paths/);
   });
 
   it("a comparison git cannot make is a failed restore of every sealed path, not a clean tree", () => {
