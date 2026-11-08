@@ -268,32 +268,35 @@ export async function runRecover(cwd: string, args: readonly string[]): Promise<
     }
     message = read;
   }
+  const stepsRaw = parsed.flags.get("max-steps");
+  const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
+  if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
+    stderrWrite(`lykos recover: --max-steps must be a positive integer, got "${String(stepsRaw)}"\n`);
+    return 1;
+  }
+  const add = parsed.flags.get("add");
   const trust = await trustAndShell(cwd, "recover", parsed.flags.has("trust-workspace"));
   if (trust === undefined) return 1;
   if (isCycleId(cwd, parsed.ids[0]!)) {
-    const stepsRaw = parsed.flags.get("max-steps");
-    const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
-    if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
-      stderrWrite(`lykos recover: --max-steps must be a positive integer, got "${String(stepsRaw)}"
-`);
-      return 1;
-    }
-    const add = parsed.flags.get("add");
     const recovered = await recoverCycle(cwd, parsed.ids[0]!, {
       trustSource: trust.source,
       ...(message !== undefined ? { note: message } : {}),
       ...(maxSteps !== undefined ? { maxSteps } : {}),
       ...(typeof add === "string" ? { add } : {}),
-      onProgress: (line) => stderrWrite(`lykos recover: ${line}
-`),
+      onProgress: (line) => stderrWrite(`lykos recover: ${line}\n`),
     });
     print(recovered);
     return delegatedExitCode(recovered);
+  }
+  if (add !== undefined) {
+    stderrWrite("lykos recover: --add is an item for a review cycle's fixer; a session takes -m\n");
+    return 1;
   }
   const { recoverSession } = await import("../delegate/recover.js");
   const result = await recoverSession(cwd, parsed.ids[0]!, {
     trustSource: trust.source,
     ...(message !== undefined ? { message } : {}),
+    ...(maxSteps !== undefined ? { maxSteps } : {}),
     onProgress: (line) => stderrWrite(`lykos recover: ${line}\n`),
   });
   print(result);
@@ -426,8 +429,7 @@ export async function runCycleCommand(cwd: string, args: readonly string[]): Pro
   const stepsRaw = parsed.flags.get("max-steps");
   const maxSteps = stepsRaw === undefined ? undefined : Number(stepsRaw);
   if (maxSteps !== undefined && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
-    stderrWrite(`lykos cycle: --max-steps must be a positive integer, got "${String(stepsRaw)}"
-`);
+    stderrWrite(`lykos cycle: --max-steps must be a positive integer, got "${String(stepsRaw)}"\n`);
     return 1;
   }
   const trust = await trustAndShell(cwd, "cycle", parsed.flags.has("trust-workspace"));

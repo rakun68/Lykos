@@ -127,6 +127,23 @@ describe("T57 lykos resume", () => {
     assert.equal(seen?.model, "deepseek/deepseek-v4-flash");
   });
 
+  it("resumes on the model's full path, never the bare id the session row shows (the provider stays the same)", async () => {
+    const { ledger, ledgerPath, dir } = realLedger();
+    seedOriginal(ledger, ledgerPath, "bare");
+    ledger.db.prepare("UPDATE sessions SET model = ?, model_path = ? WHERE id = ?").run("deepseek-v4-flash", "omniroute/deepseek/deepseek-v4-flash", "bare");
+    ledger.close();
+    let seen: LaunchInput | undefined;
+    await runResume(dir, ledgerPath, "bare", {
+      yes: true,
+      now: OFF_PEAK,
+      launch: async (input) => {
+        seen = input;
+        return { status: "ok" as const };
+      },
+    });
+    assert.equal(seen?.model, "omniroute/deepseek/deepseek-v4-flash");
+  });
+
   it("hands the launcher the exact bytes the preflight priced, and a non-zero estimate", async () => {
     const { ledger, ledgerPath, dir } = realLedger();
     seedOriginal(ledger, ledgerPath, "bytes");

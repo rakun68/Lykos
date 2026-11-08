@@ -9,11 +9,12 @@
 
 import { existsSync } from "node:fs";
 import type { TrustSource } from "../gate/trust.js";
-import { defaultLedgerPath, openLedgerSync } from "../ledger/use.js";
+import { defaultLedgerPath, openLedgerSync, withLedgerSync, type Ledger } from "../ledger/use.js";
 import { confirmQuiescence, type Quiescence, type QuiescenceDeps } from "../process/quiescence.js";
 import type { Liveness } from "../process/identity.js";
 import { runDelegated } from "./mcp-server.js";
-import { isLive, ownerLiveness, ownerRow, takeOver, type LivenessOf, type OwnerRow } from "./ownership.js";
+import { giveBack, isLive, ownerLiveness, ownerRow, takeOver, type LivenessOf, type OwnerRow } from "./ownership.js";
+import { REVIEW_ROLE } from "./review.js";
 import { sessionModelPath } from "./session-base.js";
 import type { SessionRunner } from "./session-protocol.js";
 
@@ -26,8 +27,12 @@ export interface RecoverOptions {
   trustSource: TrustSource;
   /** Added to the standard turn. */
   message?: string;
+  /** The step cap of the continued run (`--max-steps`). */
+  maxSteps?: number;
   /** T236: `false` for a session a review cycle owns; a question nobody answers in time then stops it. */
   decideAlone?: false;
+  /** T236: the caller is the cycle the session is a step of, recovering it in place. */
+  fromCycle?: true;
   signal?: AbortSignal;
   onProgress?: (line: string) => void;
   /** Tests pass stand-ins. */
@@ -40,7 +45,8 @@ export type RecoverRefusal = {
   outcome: "error";
   message: string;
   sessionId: string;
-  next: "fix_environment" | "wait" | "resume";
+  next: "fix_environment" | "wait" | "resume" | "recover";
+  cycle_id?: string;
   owner_pid?: number;
   owner_liveness?: Exclude<Liveness, "dead">;
   not_stopped?: Quiescence["notStopped"];
@@ -74,6 +80,14 @@ export async function recoverSession(workspace: string, sessionId: string, opts:
         { owner_pid: row.owner_pid, owner_liveness: liveness },
       );
     }
+    // A session that is the running step of a review cycle is recovered with its cycle: recovering it alone would
+    // leave the cycle crashed, and the cycle's own recover would then find the step's session ended.
+    if (opts.fromCycle !== true) {
+      const cycle = runningCycleOf(ledger, sessionId);
+      if (cycle !== undefined) {
+        return refuse(sessionId, `session ${sessionId} is the running step of review cycle ${cycle}; recover the cycle (\`lykos recover ${cycle}\`), which recovers this session in place`, "recover", { cycle_id: cycle });
+      }
+    }
     const quiet = await confirmQuiescence(ledger, sessionId, opts.quiescence ?? {});
     if (!quiet.quiet) {
       const named = quiet.notStopped.map((n) => `${n.kind}${n.pid !== undefined ? ` pid ${n.pid}` : ""}${n.container !== undefined ? ` ${n.container}` : ""} (${n.liveness})`);
@@ -98,8 +112,11 @@ export async function recoverSession(workspace: string, sessionId: string, opts:
       // The model it ran on, by its full path: the bare id the ledger shows would name the wrong provider.
       ...(modelPath !== undefined ? { model: modelPath } : {}),
       ...(row.specialist !== null ? { specialist: row.specialist } : {}),
+      // A reviewer keeps its `finding` tool: every review session (`lykos review`, a cycle's) runs as REVIEW_ROLE.
+      ...(row.specialist === REVIEW_ROLE ? { review: true as const } : {}),
       ...(row.write_in_place === 1 ? { write_in_place: true } : {}),
       ...(opts.decideAlone === false ? { decide_alone: false as const } : {}),
+      ...(opts.maxSteps !== undefined ? { max_steps: opts.maxSteps } : {}),
     },
     {
       trustSource: opts.trustSource,
@@ -109,5 +126,28 @@ export async function recoverSession(workspace: string, sessionId: string, opts:
       ...(opts.run !== undefined ? { run: opts.run } : {}),
     },
   );
+  // A run refused before it started (the project cap, say) leaves the row this process's and live: it is given back,
+  // so the refusal counts no crash and the session stays crashed, to be recovered again.
+  let givenBack = false;
+  try {
+    givenBack = withLedgerSync(ledgerPath, (l) => giveBack(l, row, crashes));
+  } catch {}
+  if (givenBack) {
+    opts.onProgress?.(`session ${sessionId} did not start; it is crashed again, owned by dead pid ${row.owner_pid}`);
+    return result;
+  }
   return { ...result, recovered: { from_pid: row.owner_pid, crashes } };
+}
+
+/** The running review cycle whose started step is this session, if any. */
+function runningCycleOf(ledger: Ledger, sessionId: string): string | undefined {
+  const row = ledger.db
+    .prepare(
+      `SELECT s.cycle_id AS id FROM cycle_steps s JOIN cycles c ON c.id = s.cycle_id
+       WHERE c.state = 'running' AND s.state = 'started'
+         AND (s.session_id = @id OR s.request_id IN (SELECT request_id FROM owner_requests WHERE session_id = @id))
+       LIMIT 1`,
+    )
+    .get({ id: sessionId }) as { id: string } | undefined;
+  return row?.id;
 }

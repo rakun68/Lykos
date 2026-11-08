@@ -478,6 +478,7 @@ async function runSession(ctx: Ctx, step: Step, args: Parameters<typeof runDeleg
     const recovered = await recoverSession(ctx.workspace, existing.session_id, {
       trustSource: ctx.opts.trustSource,
       decideAlone: false,
+      fromCycle: true,
       ...(ctx.opts.signal !== undefined ? { signal: ctx.opts.signal } : {}),
       ...(ctx.opts.onProgress !== undefined ? { onProgress: ctx.opts.onProgress } : {}),
       ...(ctx.opts.run !== undefined ? { run: ctx.opts.run } : {}),
@@ -1250,21 +1251,22 @@ export async function recoverCycle(workspace: string, cycleId: string, opts: Rec
   }
   const me = selfIdentity();
   const took = withLedgerSync(ledgerPath, (l) =>
-    l.db.transaction((): { ok: true; crashes: number } | { ok: false; message: string } => {
+    l.db.transaction((): { ok: true; crashes: number } | { ok: false; message: string; next: "wait" | "fix_environment" } => {
       const current = cycleRow(l, cycleId);
       if (current === undefined || current.state !== "running" || current.owner_pid !== row.owner_pid || current.owner_recorded_at_ms !== row.owner_recorded_at_ms) {
-        return { ok: false, message: `another recover took cycle ${cycleId} over first` };
+        return { ok: false, message: `another recover took cycle ${cycleId} over first`, next: "wait" };
       }
       if (current.crashes >= MAX_CRASHES) {
         const message = `cycle ${cycleId} crashed ${current.crashes + 1} times; it is stopped (at most ${MAX_CRASHES} are recovered)`;
         l.db.prepare("UPDATE cycles SET state = 'stopped', stop = 'fix_environment', ended_at = ?, result_json = ? WHERE id = ?").run(new Date().toISOString(), JSON.stringify(errorResult(message, { cycle_id: cycleId })), cycleId);
-        return { ok: false, message };
+        // Stopped, not taken: the result says what the stopped cycle says, never to wait for it.
+        return { ok: false, message, next: "fix_environment" };
       }
       l.db.prepare("UPDATE cycles SET owner_pid = ?, owner_recorded_at_ms = ?, crashes = crashes + 1 WHERE id = ?").run(me.pid, me.recordedAt, cycleId);
       return { ok: true, crashes: current.crashes + 1 };
     }).immediate(),
   );
-  if (!took.ok) return refuse(took.message, "wait");
+  if (!took.ok) return refuse(took.message, took.next);
 
   const stored = mergeOptions(storedOf(row), { ...opts, trustSource: opts.trustSource }, workspace);
   const ctx: Ctx = {

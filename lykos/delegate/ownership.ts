@@ -243,6 +243,24 @@ export function takeOver(ledger: Ledger, expected: Pick<OwnerRow, "session_id" |
   return run.immediate();
 }
 
+/**
+ * T246: undoes a `takeOver` whose run never started (refused at admission, say): the row names its dead owner again
+ * and the crash is not counted, so the session stays crashed and recoverable. Only while this process still owns the
+ * live row with the count the take-over left (`crashes`); false when it does not.
+ */
+export function giveBack(ledger: Ledger, previous: Pick<OwnerRow, "session_id" | "owner" | "owner_pid" | "owner_recorded_at_ms">, crashes: number): boolean {
+  const run = ledger.db.transaction(
+    (): boolean =>
+      ledger.db
+        .prepare(
+          `UPDATE owners SET owner = ?, owner_pid = ?, owner_recorded_at_ms = ?, crashes = crashes - 1
+           WHERE session_id = ? AND owner_pid = ? AND crashes = ? AND crashes > 0 AND state IN ('running', 'waiting')`,
+        )
+        .run(previous.owner, previous.owner_pid, previous.owner_recorded_at_ms, previous.session_id, process.pid, crashes).changes === 1,
+  );
+  return run.immediate();
+}
+
 /** Ends a session: its state and result, and its tree lock let go, in one transaction. */
 export function finish(ledger: Ledger, sessionId: string, state: Exclude<OwnedState, "running" | "waiting">, result: unknown): void {
   ledger.db.transaction(() => {

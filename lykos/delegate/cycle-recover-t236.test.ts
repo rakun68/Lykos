@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -24,7 +24,7 @@ import type { ClaimCheck } from "./claims.js";
 import { recordFinding } from "./findings.js";
 import { runDelegated } from "./mcp-server.js";
 import { ownerRow } from "./ownership.js";
-import { INTERRUPTED_TURN } from "./recover.js";
+import { INTERRUPTED_TURN, recoverSession } from "./recover.js";
 import type { SessionOutcome, SessionRequest, SessionRunner } from "./session-protocol.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -210,6 +210,14 @@ describe("T236 ACCEPTANCE (G10): the cycle process killed while its fixer runs",
     const resumed = (await runCycle(w.ws, cycleId, { trustSource: "stored", run: w.run })) as Cycle;
     assert.equal(resumed.next, "recover", JSON.stringify(resumed));
     assert.equal(w.calls.length, 2, "nothing was started by the refused resume");
+    // A recover of the fixer's session alone is refused, pointing at its cycle: recovering it there would leave the
+    // cycle crashed with a step whose session had ended.
+    const lone = await recoverSession(w.ws, w.implementer, { trustSource: "stored", run: w.run });
+    assert.equal(lone.outcome, "error", JSON.stringify(lone));
+    assert.equal(lone.next, "recover");
+    assert.equal(lone.cycle_id, cycleId);
+    assert.equal(w.calls.length, 2, "the refused session recover started nothing");
+    assert.equal(withLedgerSync(defaultLedgerPath(w.ws), (l) => ownerRow(l, w.implementer)!.crashes), 0, "and counted no crash");
 
     // The recover, from this process: the fixer is recovered in its own session, once; the cycle goes on and approves.
     const before = w.calls.length;
@@ -281,8 +289,10 @@ describe("T236 ACCEPTANCE (G10): the cycle process killed while its fixer runs",
     const res = (await recoverCycle(w.ws, first.cycle_id!, { trustSource: "stored", run: w.run, livenessOf: () => "dead" })) as Cycle;
     assert.equal(res.outcome, "error", JSON.stringify(res));
     assert.match(String(res.message), /crashed 6 times/);
-    assert.equal(cycleViews(w.ws, [first.cycle_id!])[0]!.state, "stopped");
-    assert.ok(existsSync(w.ws));
-    rmSync(join(w.ws, "fixture.log"), { force: true });
+    const view = cycleViews(w.ws, [first.cycle_id!])[0]!;
+    assert.equal(view.state, "stopped");
+    // The result says what the stopped cycle says: never to wait on a cycle that is stopped.
+    assert.equal(res.next, "fix_environment");
+    assert.equal(view.next, res.next);
   });
 });

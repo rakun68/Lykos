@@ -11,7 +11,8 @@ import { after, before, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { defaultLedgerPath, openLedgerSync } from "../ledger/use.js";
 import { ledgerViews } from "./mcp-server.js";
-import { ownerRow, takeOver } from "./ownership.js";
+import { admit, ownerRow, takeOver } from "./ownership.js";
+import { REVIEW_ROLE } from "./review.js";
 import { INTERRUPTED_TURN, recoverSession } from "./recover.js";
 import type { SessionRunner } from "./session-protocol.js";
 
@@ -167,6 +168,61 @@ describe("T246: lykos recover", () => {
     assert.equal(view.state, "error");
     assert.match(JSON.stringify(view.result), /crashed 6 times/);
     withLedger(ws, (l) => assert.equal((l.db.prepare("SELECT COUNT(*) AS n FROM tree_locks WHERE session_id = ?").get(id) as { n: number }).n, 0));
+  });
+
+  it("a recover refused at admission (the project cap is full) counts no crash and leaves the session crashed", async () => {
+    const ws = workspace();
+    const deadPid = 2147483000;
+    withLedger(ws, (l) => {
+      for (const id of ["sess-crashed", "live-1", "live-2", "live-3", "live-4"]) assert.equal(admit(l, { sessionId: id, owner: "run", specialist: "implement", projectCap: 100 }).ok, true);
+      l.db.prepare("UPDATE owners SET owner_pid = ?, owner_recorded_at_ms = 1 WHERE session_id = ?").run(deadPid, "sess-crashed");
+    });
+    let runs = 0;
+    const run: SessionRunner = async ({ request }) => {
+      runs += 1;
+      return { outcome: "ok", sessionId: request.sessionId!, answer: "ran", steps: 1 };
+    };
+    const res = await recoverSession(ws, "sess-crashed", { trustSource: "flag", run });
+    assert.equal(runs, 0, "the cap refused the run");
+    assert.equal(res.outcome, "blocked", JSON.stringify(res));
+    assert.equal(res.recovered, undefined, "nothing was recovered");
+    const row = withLedger(ws, (l) => ownerRow(l, "sess-crashed")!);
+    assert.equal(row.crashes, 0, "a refused recover counted no crash");
+    assert.equal(row.owner_pid, deadPid, "the row names its dead owner again");
+    assert.equal(ledgerViews(ws, ["sess-crashed"])[0]!.state, "crashed", "still listed for recover");
+  });
+
+  it("a recovered reviewer is still a review: it keeps the finding tool", async () => {
+    const ws = workspace();
+    withLedger(ws, (l) => {
+      assert.equal(admit(l, { sessionId: "sess-review", owner: "run", specialist: REVIEW_ROLE, projectCap: 100 }).ok, true);
+      l.db.prepare("UPDATE owners SET owner_pid = ?, owner_recorded_at_ms = 1 WHERE session_id = ?").run(2147483000, "sess-review");
+    });
+    let review: boolean | undefined;
+    const run: SessionRunner = async ({ request }) => {
+      review = request.review;
+      return { outcome: "ok", sessionId: request.sessionId!, answer: "reviewed", steps: 1 };
+    };
+    await recoverSession(ws, "sess-review", { trustSource: "flag", run });
+    assert.equal(review, true);
+  });
+
+  it("--max-steps reaches the recovered session's run; --add is refused for a session (it is a cycle's)", async () => {
+    const ws = workspace();
+    withLedger(ws, (l) => {
+      assert.equal(admit(l, { sessionId: "sess-cap", owner: "run", specialist: "implement", projectCap: 100 }).ok, true);
+      l.db.prepare("UPDATE owners SET owner_pid = ?, owner_recorded_at_ms = 1 WHERE session_id = ?").run(2147483000, "sess-cap");
+    });
+    let steps: number | undefined;
+    const run: SessionRunner = async ({ request }) => {
+      steps = request.maxSteps;
+      return { outcome: "ok", sessionId: request.sessionId!, answer: "done", steps: 1 };
+    };
+    await recoverSession(ws, "sess-cap", { trustSource: "flag", run, maxSteps: 7 });
+    assert.equal(steps, 7);
+    const r = lykos(ws, "recover", "sess-cap", "--add", "one more");
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--add is an item for a review cycle/);
   });
 
   it("no arguments prints the usage", () => {

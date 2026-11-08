@@ -50,6 +50,7 @@ import { existsSync } from "node:fs";
 import { AGENT_TOOL_NAME, canonicalToolName } from "../tools/tool-surface.js";
 
 import { openLedgerSync, type Ledger } from "../ledger/use.js";
+import { sessionModelPath } from "../delegate/session-base.js";
 
 import { preflightResume, formatPreflight, type ResumePreflight } from "../session/resume-preflight.js";
 import type { ResumePlan } from "../session/interactive.js";
@@ -275,7 +276,8 @@ export async function runResume(
     });
     // A substitute model is always the caller's explicit choice — the
     // preflight refuses rather than picking one.
-    model = opts?.model ?? identity.model ?? undefined;
+    // The full path (`provider/model`) when one was recorded: the row's bare id can resolve to another provider.
+    model = opts?.model ?? sessionModelPath(ledger, sessionId) ?? identity.model ?? undefined;
 
     // 2026-09-07 (UI feedback item 1): reopen the row this resume is about
     // to continue. `endSession()` refuses to end a session that has already
