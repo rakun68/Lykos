@@ -174,7 +174,10 @@ describe("T233: decisions", () => {
       }
       const r = lykos(ws, "discard", id, "--why", "x");
       assert.equal(r.status, 1);
-      assert.match((JSON.parse(r.stdout) as { message: string }).message, new RegExp(`pid ${child.pid}`));
+      const refused = JSON.parse(r.stdout) as { message: string; next?: string };
+      assert.match(refused.message, new RegExp(`pid ${child.pid} is alive`));
+      assert.equal(refused.next, "wait");
+      assert.ok((NEXT_TOKENS as readonly string[]).includes(refused.next), "wait is in the closed set");
       assert.equal(ledgerViews(ws, [id])[0]!.state, "running");
     } finally {
       child.kill("SIGKILL");

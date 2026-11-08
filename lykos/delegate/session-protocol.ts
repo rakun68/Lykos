@@ -154,6 +154,7 @@ export const NEXT_TOKENS = [
   "decide",
   "resume",
   "recover",
+  "wait",
 ] as const;
 export type NextToken = (typeof NEXT_TOKENS)[number];
 

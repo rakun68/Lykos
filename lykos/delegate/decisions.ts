@@ -89,7 +89,7 @@ export interface DecideInput {
 
 export type Decided =
   | { ok: true; decision: DecisionRow; discardedCrashed: boolean }
-  | { ok: false; message: string; next: "fix_environment" | "wait" | "recover" };
+  | { ok: false; message: string; next: Extract<NextToken, "fix_environment" | "wait" | "recover"> };
 
 export function decisionsOf(ledger: Ledger, sessionId: string): DecisionRow[] {
   return ledger.db.prepare("SELECT id, ts, session_id, decision, cause, reason, actor FROM decisions WHERE session_id = ? ORDER BY id ASC").all(sessionId) as DecisionRow[];
