@@ -1390,7 +1390,9 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
         config: config.containment,
         workspace: toolCwd,
         rules: collectPathRules(config.path_rules, isWorkspaceTrusted(toolCwd)),
-        sessionId: containedSessionId,
+        // The label is the id the container's process record is filed under: a delegated session's owner id, which a
+        // context-limit continuation keeps while its own id is new, so confirmed quiescence finds the container (T256).
+        sessionId: input.processOwnerId ?? containedSessionId,
         mount: readOnly ? "ro" : "rw",
         ...(input.workTree !== undefined ? { gitWorktree: { commonDir: input.workTree.commonDir, gitDir: input.workTree.gitDir } } : {}),
         ...(containmentFloor !== undefined ? { minimum: containmentFloor } : {}),

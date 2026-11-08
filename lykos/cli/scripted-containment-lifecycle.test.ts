@@ -71,6 +71,19 @@ describe("labels (T176)", () => {
     assert.equal(typeof id, "string");
     assert.equal(starts(runtime.operations)[0]?.spec.labels["lykos.session"], id);
   });
+
+  it("a delegated session's container is labelled with the owner id its process records are filed under (T256)", async () => {
+    // A context-limit continuation carries a new session id under the same owner id; quiescence looks the container up
+    // by the owner id, so the label must be that one.
+    const runtime = standInRuntime();
+    const s = await runScriptedSession({
+      config: required,
+      extra: { containmentDrivers: [runtime.driver], processOwnerId: "owner-of-the-call" },
+      script: [reply(call("bash", { command: "true" })), reply(say("done"))],
+    });
+    assert.equal(s.result.status, "ok", JSON.stringify(s.result));
+    assert.equal(starts(runtime.operations)[0]?.spec.labels["lykos.session"], "owner-of-the-call");
+  });
 });
 
 describe("a crashed container (T176)", () => {
