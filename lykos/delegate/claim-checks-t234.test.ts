@@ -11,10 +11,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
-import { defaultLedgerPath } from "../ledger/use.js";
+import { defaultLedgerPath, openLedgerSync } from "../ledger/use.js";
 import { createTemporaryWorktree } from "../seal/git.js";
 import { checkClaims, type CheckClaimsInput } from "./claim-checks.js";
-import { parseClaimCheck, type ClaimCheck, type StoredClaim } from "./claims.js";
+import { parseClaimCheck, recordClaim, type ClaimCheck, type StoredClaim } from "./claims.js";
+import { judgeSessionClaims } from "./session-claims.js";
 
 const GIT_ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
 const saved: Record<string, string | undefined> = {};
@@ -653,5 +654,35 @@ describe("T234: a check that throws is unchecked, never a thrown error", () => {
     const results = await checkClaims(inputFor(p, [claim({ kind: "line", path: "README.md", line: 1, text: "#" })], { head: "no-such-ref" }));
     assert.equal(results[0]?.verdict, "unchecked");
     assert.match(results[0]?.reason ?? "", /no-such-ref/);
+  });
+});
+
+describe("T234: a session that wrote in the caller's tree is checked at its commits when it left nothing uncommitted", () => {
+  function inPlaceClaim(p: Project): void {
+    const ledger = openLedgerSync(defaultLedgerPath(p.repo));
+    try {
+      recordClaim(ledger, "inplace", "README's first line is the title", { kind: "line", path: "README.md", line: 1, text: "# a title it never wrote" });
+    } finally {
+      ledger.close();
+    }
+  }
+  const judge = (p: Project) =>
+    judgeSessionClaims({ workspace: p.repo, ledgerPath: defaultLedgerPath(p.repo), sessionId: "inplace", head: "HEAD", base: p.base, wroteInPlace: true, trust: "stored", containment: "off", testCommand: "node --test {files}" });
+
+  it("committed work: a false claim is failed, so it raises MISREPORT", async () => {
+    const p = project();
+    inPlaceClaim(p);
+    const report = await judge(p);
+    assert.equal(report?.claims[0]?.verdict, "failed", report?.claims[0]?.reason);
+    assert.equal(report?.misreports.length, 1);
+  });
+
+  it("a change left uncommitted: unchecked, naming it", async () => {
+    const p = project();
+    put(p.repo, "README.md", "# a title it never wrote\n");
+    inPlaceClaim(p);
+    const report = await judge(p);
+    assert.equal(report?.claims[0]?.verdict, "unchecked");
+    assert.match(report?.claims[0]?.reason ?? "", /not committed \(README\.md\)/);
   });
 });

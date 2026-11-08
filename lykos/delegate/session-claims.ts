@@ -18,7 +18,10 @@ export interface SessionClaimsInput {
   head: string;
   /** Where the work started. */
   base?: string | undefined;
-  /** The session wrote in the caller's own tree: its changes are not a commit, so no check at a commit can see them. */
+  /**
+   * The session wrote in the caller's own tree. Its claims are checked at `head` only when that tree holds nothing
+   * uncommitted: a change left in the tree is not at any commit, so no check there can see it.
+   */
   wroteInPlace: boolean;
   trust: TrustSource | undefined;
   containment: ContainmentChoice;
@@ -38,12 +41,23 @@ function shaOf(workspace: string, ref: string): string | undefined {
   return r.ok ? r.stdout : undefined;
 }
 
+/** Why a tree written in place cannot be checked at a commit, or undefined when it holds nothing uncommitted. */
+function uncommittedIn(workspace: string): string | undefined {
+  const status = hostGit(["status", "--porcelain", "-z", "--untracked-files=normal", "--", ".", ":(exclude).lykos"], workspace, { raw: true });
+  if (!status.ok) return `the session wrote in the caller's own tree, and its status could not be read: ${status.stderr}`;
+  const paths = status.stdout.split("\0").filter((l) => l.length > 3).map((l) => l.slice(3));
+  if (paths.length === 0) return undefined;
+  const named = `${paths.slice(0, 5).join(", ")}${paths.length > 5 ? ", ..." : ""}`;
+  return `the session wrote in the caller's own tree and left changes that are not committed (${named}): no check at a commit can see them`;
+}
+
 /** Judges a session's claims. Undefined when it made none. Never throws. */
 export async function judgeSessionClaims(input: SessionClaimsInput): Promise<SessionClaimsReport | undefined> {
   const stored = await withLedger(input.ledgerPath, async (ledger) => claimsOf(ledger, input.sessionId)).catch(() => []);
   if (stored.length === 0) return undefined;
-  const claims: ClaimResult[] = input.wroteInPlace
-    ? stored.map((c) => ({ id: c.id, text: c.text, check: reportedCheck(c.check), verdict: "unchecked" as const, reason: "the session wrote in the caller's own tree: its changes are not a commit, so no check can run at them" }))
+  const notCommitted = input.wroteInPlace ? uncommittedIn(input.workspace) : undefined;
+  const claims: ClaimResult[] = notCommitted !== undefined
+    ? stored.map((c) => ({ id: c.id, text: c.text, check: reportedCheck(c.check), verdict: "unchecked" as const, reason: notCommitted }))
     : await checkClaims({
         repo: input.workspace,
         ledgerPath: input.ledgerPath,
