@@ -119,9 +119,8 @@ export function runStatus(cwd: string, args: readonly string[]): number {
         ? "recover"
         : views.length === 0
           ? (cycles.find((c) => c.state === "running")?.next ?? cycles.at(-1)!.next)
-          : cycles.some((c) => c.state === "running")
-            ? nextOf([...views, { state: "running" } as SessionView])
-            : nextOf(views);
+          : // A cycle asking a question asks it whatever the sessions beside it say, as a session's own question does.
+            nextOf([...views, ...cycles.filter((c) => c.state === "running" || c.next === "answer_question").map((c) => ({ state: c.state === "running" ? "running" : "stopped", next: c.next }) as SessionView)]);
   print({ sessions: views, ...(cycles.length > 0 ? { cycles } : {}), next });
   return 0;
 }

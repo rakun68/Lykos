@@ -6,8 +6,9 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import { runSessionChild } from "../cli/session-child.js";
 import { defaultLedgerPath, withLedgerSync } from "../ledger/use.js";
@@ -109,6 +110,36 @@ describe("T249: the baseline records the base's verification run with its failin
     assert.equal(baseline.failing.length, 1, "the base still has its failure");
   });
 
+  it("a node --test run that fails outside any test is exit-only, never names with nothing failing", async () => {
+    const { repo, ledgerPath } = project();
+    put(repo, "pass.test.js", ['const { test } = require("node:test");', 'test("passes", () => {});', ""].join("\n"));
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "passing");
+    const head = git(repo, "rev-parse", "HEAD");
+    // Every test the runner reports passes, and the command still fails (a hook or a step after the tests).
+    const { baseline } = await ensureBaseline(ledgerPath, { repo, key: keyOf(repo, head, 'node --test pass.test.js && node -e "process.exit(1)"') });
+    assert.ok(baseline.status === "measured");
+    assert.notEqual(baseline.exit_code, 0);
+    assert.equal(baseline.kind, "exit-only", JSON.stringify(baseline));
+    assert.match(baseline.signature ?? "", /^[0-9a-f]{64}$/);
+  });
+
+  it("a cargo test run records its failing tests by name (a cargo on PATH that prints libtest's output)", async () => {
+    const { repo, base, ledgerPath } = project();
+    const bin = mkdtempSync(join(tmpdir(), "lykos-t249-cargo-"));
+    const fixture = join(dirname(fileURLToPath(import.meta.url)), "..", "seal", "fixtures", "cargo-test-output.txt");
+    writeFileSync(join(bin, "cargo.js"), `process.stdout.write(require("fs").readFileSync(${JSON.stringify(fixture)}, "utf8")); process.exit(101);\n`);
+    writeFileSync(join(bin, "cargo.cmd"), '@node "%~dp0cargo.js" %*\r\n');
+    writeFileSync(join(bin, "cargo"), '#!/bin/sh\nexec node "$(dirname "$0")/cargo.js" "$@"\n', { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` };
+    const { baseline } = await ensureBaseline(ledgerPath, { repo, key: keyOf(repo, base, "cargo test"), env });
+    assert.ok(baseline.status === "measured", JSON.stringify(baseline));
+    assert.equal(baseline.adapter, "cargo");
+    assert.equal(baseline.kind, "names");
+    assert.equal(baseline.exit_code, 101);
+    assert.deepEqual([...baseline.failing].sort(), ["src/lib.rs > tests > adds_two", "src/lib.rs > tests > nested > deep_failure", "tests/api.rs > api_adds"]);
+  });
+
   it("identifies a failure by exit code and output hash when the runner reports no tests", async () => {
     const { repo, base, ledgerPath } = project();
     const { baseline } = await ensureBaseline(ledgerPath, { repo, key: keyOf(repo, base, 'node -e "console.error(7); process.exit(3)"') });
@@ -203,6 +234,26 @@ describe("T249: a baseline that did not run is unmeasured, never empty", () => {
     assert.equal(second.reused, false, "unmeasured is retried");
   });
 
+  it("an unmeasured row is replaced by the retry's measurement, which the next session then reuses", async () => {
+    const { repo, base, ledgerPath } = project();
+    const flag = join(home, "t249-runnable");
+    rmSync(flag, { force: true });
+    const key = keyOf(repo, base, `node -e "process.exit(require('fs').existsSync(process.env.T249_FLAG) ? 0 : 127)"`);
+    process.env.T249_FLAG = flag;
+    try {
+      assert.equal((await ensureBaseline(ledgerPath, { repo, key })).baseline.status, "unmeasured");
+      writeFileSync(flag, "");
+      const second = await ensureBaseline(ledgerPath, { repo, key });
+      assert.equal(second.reused, false);
+      assert.equal(second.baseline.status, "measured", "the row now holds the measurement");
+      const third = await ensureBaseline(ledgerPath, { repo, key });
+      assert.equal(third.reused, true);
+      assert.equal(third.baseline.status, "measured");
+    } finally {
+      delete process.env.T249_FLAG;
+    }
+  });
+
   it("is unmeasured when the command does not finish in time", async () => {
     const { repo, base, ledgerPath } = project();
     const key = keyOf(repo, base, 'node -e "setTimeout(() => {}, 60000)"');
@@ -219,6 +270,8 @@ describe("T249: a baseline that did not run is unmeasured, never empty", () => {
 });
 
 describe("T249: a new session is given its baseline before the model runs, and status shows it", () => {
+  /** Per drive: whether the session's baseline was in the ledger when its model would have started. */
+  const linkedAtRun: boolean[] = [];
   async function drive(workspace: string, extra: Partial<SessionRequest>): Promise<RunStandaloneTaskInput> {
     const seen: RunStandaloneTaskInput[] = [];
     const input = new PassThrough();
@@ -232,6 +285,10 @@ describe("T249: a new session is given its baseline before the model runs, and s
       worktreesRoot: mkdtempSync(join(tmpdir(), "lykos t249 child ")),
       runTask: async (task) => {
         seen.push(task);
+        // What the ledger holds when the model would start: the baseline is recorded before it.
+        linkedAtRun.push(
+          withLedgerSync(defaultLedgerPath(workspace), (l) => (l.db.prepare("SELECT COUNT(*) AS n FROM session_baselines WHERE session_id = ?").get(task.sessionId ?? "") as { n: number }).n > 0),
+        );
         return { status: "ok", sessionId: task.sessionId ?? "unset", text: "ok", snapshot: {} as never };
       },
       onParentGone: () => undefined,
@@ -250,6 +307,7 @@ describe("T249: a new session is given its baseline before the model runs, and s
     const one = await drive(repo, { base, context: { files: [], test: COMMAND } });
     const two = await drive(repo, { base, context: { files: [], test: COMMAND } });
     assert.equal(runs(), 1, "the second session did not run the command");
+    assert.deepEqual(linkedAtRun.slice(-2), [true, true], "each session's baseline was recorded before its model ran");
     const views = ledgerViews(repo);
     const first = views.find((v) => v.session_id === one.sessionId)?.baseline;
     const second = views.find((v) => v.session_id === two.sessionId)?.baseline;

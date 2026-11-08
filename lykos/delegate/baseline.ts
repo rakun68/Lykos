@@ -248,16 +248,19 @@ export async function measureBaseline(input: RunBaselineInput): Promise<Measurem
     if (exit === 126 || exit === 127) return { status: "unmeasured", reason: `the verification command could not run (exit ${exit})` };
     const duration_ms = Date.now() - started;
 
+    // Names describe the run only when they account for its exit: a failing exit with no failing test named (a hook or
+    // suite that failed outside any test), or a run of no tests, is read by its exit code, never as "nothing failed".
+    const named = (total: number, failing: readonly string[]): boolean => total > 0 && (exit === 0 ? failing.length === 0 : failing.length > 0);
     if (adapter === "cargo") {
       const tests = parseCargoTestOutput(merged);
-      if (tests.length > 0) {
-        const failing = tests.filter((t) => t.status === "assertion" || t.status === "error").map((t) => [t.file, ...t.describe, t.name].filter((s) => s !== "").join(" > "));
+      const failing = tests.filter((t) => t.status === "assertion" || t.status === "error").map((t) => [t.file, ...t.describe, t.name].filter((s) => s !== "").join(" > "));
+      if (named(tests.length, failing)) {
         return { status: "measured", adapter, kind: "names", exit_code: exit, failing, tests_total: tests.length, duration_ms };
       }
     }
     if (reporting) {
       const parsed = parseNodeTestFailures(stdout, worktree.dir);
-      if (parsed !== undefined) {
+      if (parsed !== undefined && named(parsed.total, parsed.failing)) {
         return { status: "measured", adapter, kind: "names", exit_code: exit, failing: parsed.failing, tests_total: parsed.total, duration_ms };
       }
     }

@@ -450,3 +450,24 @@ describe("T243/T244: status and steer read another process's session as they rea
     }
   });
 });
+
+describe("T236: status reads a cycle's question beside the sessions asked for", () => {
+  it("a stopped cycle waiting on answer_question decides next, even when a done session is asked for with it", () => {
+    const ws = workspace();
+    const l = openLedgerSync(defaultLedgerPath(ws));
+    try {
+      const now = new Date().toISOString();
+      l.db
+        .prepare("INSERT INTO owners (session_id, request_id, owner, owner_pid, owner_recorded_at_ms, specialist, write_in_place, state, started_at, ended_at, stop_requested, question, result_json, crashes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run("s-1", null, "run", 999999, Date.now(), null, 0, "done", now, now, 0, null, '{"outcome":"ok","next":"approve"}', 0);
+      l.db
+        .prepare("INSERT INTO cycles (id, target_session, branch, base_commit, options_json, owner_pid, owner_recorded_at_ms, state, stop, started_at, ended_at, crashes, result_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run("cycle-1", "s-1", "lykos/s-1", "abc", "{}", 999998, Date.now(), "stopped", "answer_question", now, now, 0, '{"outcome":"needs_answer","next":"answer_question"}');
+    } finally {
+      l.close();
+    }
+    const r = spawnSync(process.execPath, ["--import", tsx, resolve("lykos", "cli.ts"), "status", "s-1", "cycle-1"], { cwd: ws, encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal((JSON.parse(r.stdout) as { next: string }).next, "answer_question");
+  });
+});
