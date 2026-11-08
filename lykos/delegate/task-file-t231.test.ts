@@ -134,6 +134,11 @@ describe("T231: the test command is the task's or the project's, never guessed (
     assert.equal(resolveTestCommand({ sealed: [], files: [] }, { delegation: SHIPPED_DEFAULTS.delegation }), undefined);
   });
 
+  it("a path with a space or a shell character stays one word in {files} and {dirs}", () => {
+    assert.equal(fillTestCommand("node --test {files}", ["my test.test.ts", "a;rm -rf x.test.ts", "plain.test.ts"]), 'node --test "my test.test.ts" "a;rm -rf x.test.ts" plain.test.ts');
+    assert.equal(fillTestCommand("go test {dirs}", ["my pkg/a_test.go"]), 'go test "./my pkg"');
+  });
+
   it("{files} gets sealed tests and the test files among files; {dirs} their directories", () => {
     assert.equal(fillTestCommand("go test {dirs}", ["pkg/a/a_test.go", "pkg/a/b_test.go", "main_test.go"]), "go test ./pkg/a .");
     const r = resolveTestCommand({ sealed: ["t/x.test.ts"], files: ["src/x.ts", "src/y.test.ts"] }, config("npx tsx --test {files}"));

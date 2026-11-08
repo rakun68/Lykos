@@ -111,8 +111,13 @@ export function fillTestCommand(template: string, files: readonly string[]): str
     .filter((f) => /^src\/test\/java\/.*\.java$/.test(f))
     .map((t) => `--tests ${t.replace(/^src\/test\/java\//, "").replace(/\.java$/, "").replace(/\//g, ".")}`)
     .join(" ");
-  const dirs = [...new Set(norm.map((f) => (f.includes("/") ? `./${f.slice(0, f.lastIndexOf("/"))}` : ".")))].join(" ");
-  return template.replaceAll("{files}", norm.join(" ")).replaceAll("{tests}", tests).replaceAll("{dirs}", dirs);
+  const dirs = [...new Set(norm.map((f) => (f.includes("/") ? `./${f.slice(0, f.lastIndexOf("/"))}` : ".")))].map(shellWord).join(" ");
+  return template.replaceAll("{files}", norm.map(shellWord).join(" ")).replaceAll("{tests}", tests).replaceAll("{dirs}", dirs);
+}
+
+/** A path as one shell word: as it is when it is plain, else in double quotes (a space or `;` never splits or chains it). */
+function shellWord(path: string): string {
+  return /^[A-Za-z0-9_./@:+=,-]+$/.test(path) ? path : `"${path.replace(/["\\$`]/g, (c) => `\\${c}`)}"`;
 }
 
 export interface ResolvedTestCommand {
