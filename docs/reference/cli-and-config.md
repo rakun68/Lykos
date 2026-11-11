@@ -264,7 +264,8 @@ skills:
 # T217 (ADR-0045): output style name ("default", "minimal", etc.)
 output_style: "default"
 
-# T168 (ADR-0031): one editor, exact text replacement, and `read` numbers every line. `edit.mode` was
+# T168 (ADR-0031): one editor, exact text replacement, and `read` numbers every line. A `read` whose
+# `limit` is under 150 lines reads 150 from the same offset (Boxie's READ_MIN_LINES). `edit.mode` was
 # removed; a config that still sets it fails to load, naming the key. The one key left:
 edit:
   require_read: false         # true: `edit` and `write` to an existing file are rejected unless this

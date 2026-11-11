@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SUPERSEDED_NOTICE } from "../loop/tool-result-prune.js";
+import { READ_MIN_LINES } from "../tools/read.js";
 import { call, reply, runScriptedSession, say, toolResults, type ModelContext } from "./scripted-session.js";
 
 const BODY = "line of the file that is long enough to be worth pruning\n".repeat(20);
@@ -63,7 +64,8 @@ describe("prune: superseded reads (T188)", () => {
 
   it("a read with a selector is superseded by a later whole-file read, never the reverse", async () => {
     const run = await runScriptedSession({
-      files: FILES,
+      // Longer than READ_MIN_LINES, so the ranged read stays a part of the file once it is widened.
+      files: { ...FILES, "a.txt": "line of the file\n".repeat(READ_MIN_LINES + 20) },
       script: [
         reply(call("read", { path: "a.txt", offset: 1, limit: 10 })),
         reply(call("read", { path: "a.txt" })),

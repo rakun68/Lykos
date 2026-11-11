@@ -11,7 +11,7 @@ import { describe, it } from "node:test";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { TOOL_CATALOG } from "../ledger/tool-catalog.js";
 import { measureToolset } from "../ledger/tool-schema.js";
-import { READ_NUMBERING_GUIDELINE, READ_NUMBERING_NOTE, buildReadTool, numberReadText, numberedLine } from "./read.js";
+import { READ_MIN_LINES, READ_NUMBERING_GUIDELINE, READ_NUMBERING_NOTE, buildReadTool, numberReadText, numberedLine } from "./read.js";
 
 interface ExecResult {
   content: Array<{ type?: string; text?: string }>;
@@ -23,7 +23,7 @@ type AnyTool = { execute: (id: string, p: unknown, s?: unknown, u?: unknown, c?:
 
 function fixture(): { dir: string; read: (p: unknown) => Promise<ExecResult>; pi: (p: unknown) => Promise<ExecResult> } {
   const dir = mkdtempSync(resolve(tmpdir(), "lykos-read-"));
-  const ours = buildReadTool({ cwd: dir }) as unknown as AnyTool;
+  const ours = buildReadTool({ cwd: dir, minLines: 0 }) as unknown as AnyTool;
   const pi = createReadToolDefinition(dir) as unknown as AnyTool;
   return {
     dir,
@@ -278,5 +278,19 @@ describe("the wrapper is Pi's read otherwise", () => {
     assert.equal(TOOL_CATALOG.read!.description, wrapped.description);
     assert.equal(TOOL_CATALOG.read!.source, "lykos");
     assert.equal(measureToolset(["read"]).complete, true);
+  });
+});
+
+describe("Boxie READ_MIN_LINES: a narrow read is widened", () => {
+  it("a limit under the floor reads the floor's lines from the same offset; a wider limit is the model's own", async () => {
+    const dir = mkdtempSync(resolve(tmpdir(), "lykos-read-widen-"));
+    writeFileSync(resolve(dir, "a.txt"), `${lines(400)}\n`);
+    const read = buildReadTool({ cwd: dir }) as unknown as AnyTool;
+    const narrow = text(await read.execute("c1", { path: "a.txt", offset: 10, limit: 20 }));
+    const shown = narrow.split("\n").filter((l) => /^ {0,5}\d+\t/.test(l));
+    assert.equal(shown.length, READ_MIN_LINES);
+    assert.match(shown[0]!, /^ {4}10\tline 10$/);
+    const wide = text(await read.execute("c1", { path: "a.txt", limit: READ_MIN_LINES + 50 }));
+    assert.equal(wide.split("\n").filter((l) => /^ {0,5}\d+\t/.test(l)).length, READ_MIN_LINES + 50);
   });
 });
