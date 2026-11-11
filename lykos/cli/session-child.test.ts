@@ -20,6 +20,7 @@ import { resolveProject } from "../session/identity.js";
 import { call, lastToolResult, reply, runScriptedSession, say, SCRIPTED_MODEL, scriptedPiHost, scriptedProvider, scriptedWorld, toolResults, type ModelContext } from "./scripted-session.js";
 import { SUPERSEDED_NOTICE } from "../loop/tool-result-prune.js";
 import { describeReplayCost, resolveChildTrust, runSessionChild } from "./session-child.js";
+import { WRAP_TURNS, wrapUpNote } from "../delegate/step-cap.js";
 
 function repo(): string {
   const workspace = mkdtempSync(join(tmpdir(), "lykos-child-ws-"));
@@ -241,6 +242,42 @@ describe("the child's protocol (T181, stories 70-72)", () => {
     assert.equal(gone, 1);
     assert.equal(tornDown, true, "the session's teardown ran before the child returned");
     assert.equal(code, 1, "a child whose parent left exits non-zero");
+  });
+
+  it("Boxie WRAP_MIN: steers the session with the wrap-up note when the step cap is near", async () => {
+    const workspace = repo();
+    const input = new PassThrough();
+    const cap = 2 * WRAP_TURNS + 1;
+    input.write(encodeFrame(request(workspace, { maxSteps: cap })));
+    const steered: string[] = [];
+    let listener: ((e: { type: string }) => void) | undefined;
+    const session = {
+      abort: async () => {},
+      steer: async (m: string) => void steered.push(m),
+      subscribe: (l: (e: { type: string }) => void) => {
+        listener = l;
+        return () => (listener = undefined);
+      },
+    };
+    const runTask = async (task: RunStandaloneTaskInput): Promise<RunStandaloneTaskResult> => {
+      await task.bootDeps!.createSession!({} as never);
+      for (let i = 0; i < cap - WRAP_TURNS; i += 1) listener?.({ type: "turn_end" });
+      await new Promise((r) => setTimeout(r, 20));
+      return { status: "blocked", reason: "done" };
+    };
+    const done = runSessionChild({
+      input,
+      write: () => {},
+      env: { LYKOS_TRUST_SOURCE: "flag", LYKOS_TRUST_WORKSPACE: "1" },
+      trustPath: emptyStore(),
+      worktreesRoot: mkdtempSync(join(tmpdir(), "lykos-child-wt-")),
+      runTask,
+      sessionExtras: { bootDeps: { createSession: (async () => ({ session })) as never } },
+      onParentGone: () => {},
+    });
+    await done;
+    input.end();
+    assert.deepEqual(steered, [wrapUpNote(WRAP_TURNS)]);
   });
 });
 

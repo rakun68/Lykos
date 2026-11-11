@@ -21,7 +21,7 @@ import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { stderrWrite } from "../tui/io-mode.js";
 import { joinNotes, recordWork, rootSessionOf, withWorkTarget, workFields, type WorkReport } from "../delegate/work-target.js";
-import { stepCapNote, watchStepCap, type StepCappable } from "../delegate/step-cap.js";
+import { stepCapNote, watchStepCap, wrapUpNote, type StepCappable } from "../delegate/step-cap.js";
 import { runStandaloneTask, type RunStandaloneTaskInput, type RunStandaloneTaskResult } from "../session/session.js";
 import {
   encodeFrame,
@@ -230,7 +230,10 @@ export async function runSessionChild(deps: SessionChildDeps): Promise<number> {
     counted = true;
     createdSession = session as { abort?: () => Promise<void> };
     if (parentGone) abortSession();
-    watchStepCap(session as StepCappable, request?.maxSteps, () => { stepCapped = true; }, steps);
+    watchStepCap(session as StepCappable, request?.maxSteps, () => { stepCapped = true; }, steps, (left) => {
+      // After the queued steers: the note goes to this session, through the same channel as a coordinator's steer.
+      steerChain = steerChain.then(() => (activeAgentSession !== undefined ? deliverSteer(activeAgentSession, wrapUpNote(left)) : undefined));
+    });
     steerChain = steerChain.then(async () => {
       activeAgentSession = session as { steer: (msg: string) => Promise<void> };
       while (pendingSteers.length > 0) {
