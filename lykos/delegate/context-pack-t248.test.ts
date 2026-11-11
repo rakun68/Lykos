@@ -17,7 +17,7 @@ import { runSessionChild } from "../cli/session-child.js";
 import { encodeFrame, PROTOCOL_VERSION, type SessionRequest } from "./session-protocol.js";
 import { admit } from "./ownership.js";
 import { ledgerViews } from "./mcp-server.js";
-import { buildContextPack, recordContextPack } from "./context-pack.js";
+import { buildContextPack, PASTE_MAX, PASTE_TOTAL, recordContextPack } from "./context-pack.js";
 import type { Ledger } from "../ledger/use.js";
 
 /** The pack text a session was given, as the ledger holds it. */
@@ -105,7 +105,7 @@ describe("T248 F3: the pack reads the base commit, not the working tree", () => 
     assert.deepEqual(paths("test"), [join(repo, "src", "widget.test.ts")]);
     assert.deepEqual(paths("doc"), [join(repo, "docs", "reference", "widgets.md")]);
     assert.match(pack.entries.find((e) => e.kind === "history")?.text ?? "", /base$/);
-    assert.match(pack.text, /## Verification command\nnpm test -- widget$/);
+    assert.match(pack.text, /## Verification command\nnpm test -- widget\n\n## Task file contents at the base\n/);
   });
 });
 
@@ -267,5 +267,45 @@ describe("T248 review (W8): a file outside the project is placed against the ses
     const entry = pack.entries.find((e) => e.kind === "file" && e.text === "outside the project");
     assert.equal(entry?.path, join(worktree, "..", "notes", "outside.md"));
     assert.notEqual(entry?.path, join(process.cwd(), "..", "notes", "outside.md"));
+  });
+});
+
+describe("Boxie PASTE_MAX/PASTE_TOTAL: task files are pasted whole from the base, within their caps", () => {
+  it("pastes a task file as the base has it, under its absolute path, after the rest of the pack", () => {
+    const { repo, base } = project();
+    put(repo, "src/widget.ts", "export const widget = 'WORKTREE-EDIT';\n");
+    const pack = buildContextPack({ root: repo, repo, base, files: ["src/widget.ts"], test: "npm test" });
+    const pasted = pack.entries.filter((e) => e.kind === "content");
+    assert.deepEqual(pasted.map((e) => e.path), [join(repo, "src", "widget.ts")]);
+    assert.ok(pack.text.endsWith(`### ${join(repo, "src", "widget.ts")}\n\`\`\`\nexport const widget = 1; // a Widget\n\`\`\``));
+    assert.ok(pack.text.indexOf("## Verification command") < pack.text.indexOf("## Task file contents at the base"));
+    assert.ok(!pack.text.includes("WORKTREE-EDIT"), "the base, never the working tree");
+  });
+
+  it("skips a file over the per-file cap and stops at the total, in the order the task names them", () => {
+    const repo = mkdtempSync(join(tmpdir(), "lykos paste "));
+    git(repo, "init", "-q", "-b", "main");
+    const half = `${"x".repeat(PASTE_TOTAL / 2 - 10)}\n`;
+    put(repo, "big.ts", "y".repeat(PASTE_MAX + 1));
+    put(repo, "a.ts", half);
+    put(repo, "b.ts", half);
+    put(repo, "c.ts", half);
+    put(repo, "small.ts", "SMALL\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "base");
+    const pack = buildContextPack({ root: repo, repo, base: "HEAD", files: ["big.ts", "a.ts", "b.ts", "c.ts", "small.ts"] });
+    const pasted = pack.entries.filter((e) => e.kind === "content").map((e) => e.path);
+    assert.deepEqual(pasted, [join(repo, "a.ts"), join(repo, "b.ts"), join(repo, "small.ts")]);
+    assert.ok(!pack.text.includes("[... pack cut"), "pastes do not count against the rest of the pack");
+  });
+
+  it("does not paste a binary file", () => {
+    const repo = mkdtempSync(join(tmpdir(), "lykos paste bin "));
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(join(repo, "blob.bin"), Buffer.from([1, 0, 2]));
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "base");
+    const pack = buildContextPack({ root: repo, repo, base: "HEAD", files: ["blob.bin"] });
+    assert.equal(pack.entries.filter((e) => e.kind === "content").length, 0);
   });
 });

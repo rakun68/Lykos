@@ -698,6 +698,9 @@ file's line count at the base, or `new` when the base lacks it; the docs under `
 (at most 8 each); each file's last three commits; the test files beside a file that carry its name, and
 the task's own test files; and the verification command. Every path is absolute and rooted at the
 session's own tree, its worktree (W8). Each quotation is cut at 3,000 characters and the pack at 24,000.
+After them, outside that cap, the task's files are pasted whole as the base has them, in the order the task
+names them: a file over 24,000 characters, a binary one, or one past 48,000 in all is not pasted (Boxie's
+`PASTE_MAX` and `PASTE_TOTAL`; a pasted file saves the session a read).
 The pack is recorded in `context_packs` (telemetry §2) before the model runs, and `lykos status` shows it
 as `context_pack` (`base`, `root`, `bytes`, and one `{kind, path}` per entry). A continuation keeps the
 pack it began with. No config key sets it: the task decides.
