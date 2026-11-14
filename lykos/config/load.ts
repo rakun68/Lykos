@@ -44,6 +44,7 @@ import type {
   WebSearchConfig,
 } from "./types.js";
 import type { RawPathRules } from "../gate/path-rules.js";
+import { REVIEW_ENGINES } from "./types.js";
 import { CONTAINMENT_LEVELS } from "../containment/request.js";
 import type { ContainmentLevel } from "../containment/containment.js";
 import { defaultSearchEndpoint, defaultSearchKeyEnv } from "../tools/web-search.js";
@@ -527,7 +528,7 @@ function validateMcpConfig(layer: ConfigLayer): void {
   }
 }
 
-const VALID_DELEGATION_KEYS = new Set(["test_command", "shell_path", "powershell", "max_sessions", "spec_check", "cycle_max_rounds", "cycle_max_fixes", "cycle_stall_after"]);
+const VALID_DELEGATION_KEYS = new Set(["test_command", "shell_path", "powershell", "max_sessions", "spec_check", "cycle_max_rounds", "cycle_max_fixes", "cycle_stall_after", "review_engine"]);
 
 function validateDelegationConfig(layer: ConfigLayer): void {
   const val = layer.value as Record<string, unknown>;
@@ -566,6 +567,9 @@ function validateDelegationConfig(layer: ConfigLayer): void {
     if (v !== undefined && (typeof v !== "number" || !Number.isInteger(v) || v < 1)) {
       throw new Error(`lykos config: delegation.${key} must be a positive integer${where}`);
     }
+  }
+  if (d.review_engine !== undefined && !(REVIEW_ENGINES as readonly unknown[]).includes(d.review_engine)) {
+    throw new Error(`lykos config: delegation.review_engine must be ${REVIEW_ENGINES.join(" or ")}${where}`);
   }
 }
 

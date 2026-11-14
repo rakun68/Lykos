@@ -37,6 +37,7 @@ import type { ClaimCheck } from "./claims.js";
 import { recordFindingDecision } from "./decisions.js";
 import { findingKey, findingsOf, type JudgedFinding, type Severity, type StoredFinding } from "./findings.js";
 import { runDelegated } from "./mcp-server.js";
+import { runOcrReviewer, type OcrEndpoint } from "./ocr.js";
 import {
   closeQuestions,
   isLive,
@@ -141,6 +142,8 @@ export interface CycleOptions {
   run?: SessionRunner | undefined;
   livenessOf?: LivenessOf | undefined;
   quiescence?: QuiescenceDeps | undefined;
+  /** Tests: the model runtime and the command an OCR review uses (ADR-0062). */
+  ocr?: { endpoint?: OcrEndpoint; argv?: readonly string[] } | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -525,9 +528,39 @@ function stopOf(classified: Exclude<Classified, { kind: "ok" }>, sessionId: stri
   }
 }
 
+/**
+ * ADR-0062: a review or a recheck by open-code-review. It is no session the cycle can find by request id, so a step the
+ * process died in runs OCR again. A recheck reads only the fix's diff and files its findings under round 1's reviewer, so
+ * the judge reads them as the session reviewer's recheck.
+ */
+async function ocrStep(ctx: Ctx, step: Step, run: { brief: string; model?: string | undefined; base: string; head: string; findingsUnder?: string | undefined }): Promise<StepOutcome> {
+  const result = await runOcrReviewer({
+    workspace: ctx.workspace,
+    ledgerPath: ctx.ledgerPath,
+    config: ctx.config,
+    model: run.model,
+    base: run.base,
+    head: run.head,
+    brief: run.brief,
+    signal: ctx.opts.signal,
+    onProgress: ctx.opts.onProgress,
+    endpoint: ctx.opts.ocr?.endpoint,
+    argv: ctx.opts.ocr?.argv,
+    findingsUnder: run.findingsUnder,
+  });
+  const { classified, sessionId } = finishSessionStep(ctx, step, result);
+  if (classified.kind !== "ok") return stopOf(classified, sessionId);
+  return { stop: undefined };
+}
+
 async function stepReview(ctx: Ctx, step: Step): Promise<StepOutcome> {
   const input = step.input as { brief: string; model?: string; files?: string[]; base: string; retryOf?: string; continueSession?: string };
   const rulings = withLedgerSync(ctx.ledgerPath, (l) => cycleRulings(l, ctx.cycleId));
+  if (ctx.config.delegation.review_engine === "ocr") {
+    const head = tip(ctx);
+    if (head === undefined) return { stop: "fix_environment", message: `branch ${ctx.branch} names no commit` };
+    return ocrStep(ctx, step, { brief: rulings.length > 0 ? `${input.brief}\n\n${renderRulings(rulings)}` : input.brief, model: input.model, base: input.base, head });
+  }
   const args: Parameters<typeof runDelegated>[1] =
     input.continueSession !== undefined
       ? { brief: input.brief, session_id: input.continueSession, specialist: REVIEW_ROLE, review: true, ...(input.model !== undefined ? { model: input.model } : {}), ...(ctx.stored.maxSteps !== undefined ? { max_steps: ctx.stored.maxSteps } : {}) }
@@ -571,7 +604,11 @@ async function stepFix(ctx: Ctx, step: Step): Promise<StepOutcome> {
 }
 
 async function stepRecheck(ctx: Ctx, step: Step): Promise<StepOutcome> {
-  const input = step.input as { brief: string; reviewer: string; model?: string };
+  const input = step.input as { brief: string; reviewer: string; model?: string; fixed_from?: string; fixed_to?: string };
+  if (ctx.config.delegation.review_engine === "ocr") {
+    if (input.fixed_from === undefined || input.fixed_to === undefined) return { stop: "fix_environment", message: "the recheck has no fix diff to read" };
+    return ocrStep(ctx, step, { brief: input.brief, model: input.model, base: input.fixed_from, head: input.fixed_to, findingsUnder: input.reviewer });
+  }
   const ran = await runSession(ctx, step, {
     brief: input.brief,
     session_id: input.reviewer,

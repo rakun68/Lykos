@@ -405,7 +405,15 @@ export interface DelegationConfig {
   cycle_max_rounds?: number;
   cycle_max_fixes?: number;
   cycle_stall_after?: number;
+  /**
+   * ADR-0062: what reviews a change in `lykos review` and `lykos cycle`. `session` is the `review-both` session;
+   * `ocr` is open-code-review on the same role's model. Default `session`.
+   */
+  review_engine?: ReviewEngine;
 }
+
+export const REVIEW_ENGINES = ["session", "ocr"] as const;
+export type ReviewEngine = (typeof REVIEW_ENGINES)[number];
 
 /**
  * T105: a deterministic policy as a command rather than as prompt text.

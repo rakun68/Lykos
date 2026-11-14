@@ -349,6 +349,7 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
     cycle_max_rounds: 5,
     cycle_max_fixes: 3,
     cycle_stall_after: 2,
+    review_engine: "session",
   },
   // T210 (ADR-0042): path rules default to empty sets of read and write rules per layer.
   path_rules: {

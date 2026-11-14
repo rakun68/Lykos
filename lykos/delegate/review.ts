@@ -25,6 +25,7 @@ import type { ClaimResult } from "./claims.js";
 import { recordFindingDecision } from "./decisions.js";
 import { dispose, judged, findingsOf, nextOfFindings, recordFindingJudgements, type JudgedFinding, type StoredFinding } from "./findings.js";
 import { runDelegated } from "./mcp-server.js";
+import { runOcrReviewer, type OcrEndpoint } from "./ocr.js";
 import { changeFlags, parseNameStatus, addedLines, type ChangedPath } from "./result-flags.js";
 import { commitOf, sessionBaseOf } from "./session-base.js";
 import type { ContainmentChoice, SessionFlag, SessionRunner } from "./session-protocol.js";
@@ -222,6 +223,8 @@ export interface ReviewOptions {
   onProgress?: ((message: string) => void) | undefined;
   /** Tests: the session runner. Absent: a real session child. */
   run?: SessionRunner | undefined;
+  /** Tests: the model runtime and the command an OCR review uses (ADR-0062). */
+  ocr?: { endpoint?: OcrEndpoint; argv?: readonly string[] } | undefined;
 }
 
 interface SessionFacts {
@@ -424,30 +427,45 @@ export async function runReview(workspace: string, targetArg: string, opts: Revi
   const { config, task, target, implementerModel, choice, sameFamily, facts, testCommand, brief, packFiles } = planned.plan;
 
   opts.onProgress?.(`reviewer: ${choice.role}${choice.model !== undefined ? ` on ${choice.model}` : ""}${choice.reason !== undefined ? ` (the alternate: ${choice.reason})` : ""}`);
-  const reviewed = await runDelegated(
-    workspace,
-    {
-      brief,
-      specialist: REVIEW_ROLE,
-      ...(choice.model !== undefined ? { model: choice.model } : {}),
-      base: target.base,
-      review: true,
-      ...(target.session !== undefined ? { rulings_from: [target.session] } : {}),
-      ...(packFiles.length > 0 ? { files: packFiles } : {}),
-      ...(testCommand !== undefined ? { test: testCommand } : {}),
-      ...(opts.maxSteps !== undefined ? { max_steps: opts.maxSteps } : {}),
-      ...(opts.requestId !== undefined ? { request_id: opts.requestId } : {}),
-    },
-    {
-      trustSource: opts.trustSource,
-      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-      ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
-      ...(opts.run !== undefined ? { run: opts.run } : {}),
-    },
-  );
+  const reviewed =
+    config.delegation.review_engine === "ocr"
+      ? await runOcrReviewer({
+          workspace,
+          ledgerPath,
+          config,
+          model: choice.model,
+          base: target.base,
+          head: target.head,
+          brief,
+          signal: opts.signal,
+          onProgress: opts.onProgress,
+          endpoint: opts.ocr?.endpoint,
+          argv: opts.ocr?.argv,
+        })
+      : await runDelegated(
+          workspace,
+          {
+            brief,
+            specialist: REVIEW_ROLE,
+            ...(choice.model !== undefined ? { model: choice.model } : {}),
+            base: target.base,
+            review: true,
+            ...(target.session !== undefined ? { rulings_from: [target.session] } : {}),
+            ...(packFiles.length > 0 ? { files: packFiles } : {}),
+            ...(testCommand !== undefined ? { test: testCommand } : {}),
+            ...(opts.maxSteps !== undefined ? { max_steps: opts.maxSteps } : {}),
+            ...(opts.requestId !== undefined ? { request_id: opts.requestId } : {}),
+          },
+          {
+            trustSource: opts.trustSource,
+            ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+            ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
+            ...(opts.run !== undefined ? { run: opts.run } : {}),
+          },
+        );
 
   const reviewerId = typeof reviewed["sessionId"] === "string" ? reviewed["sessionId"] : undefined;
-  const reviewer = { ...(reviewerId !== undefined ? { session_id: reviewerId } : {}), role: choice.role, ...(choice.model !== undefined ? { model: choice.model } : {}), ...(choice.reason !== undefined ? { swapped: choice.reason } : {}) };
+  const reviewer = { ...(reviewerId !== undefined ? { session_id: reviewerId } : {}), role: choice.role, engine: config.delegation.review_engine, ...(choice.model !== undefined ? { model: choice.model } : {}), ...(choice.reason !== undefined ? { swapped: choice.reason } : {}) };
   // R14: a reviewer that did not review stops the review with what it said. An empty list of findings would read as
   // "nothing wrong", which nobody has said.
   if (reviewed["outcome"] !== "ok" && reviewed["outcome"] !== "unverified") {

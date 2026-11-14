@@ -922,3 +922,61 @@ async function waitFor<T>(read: () => T | undefined, ms = 30_000): Promise<T> {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// ADR-0062: the cycle with open-code-review as its reviewer
+
+/** A stand-in for OCR that answers each run with the next of `results`, and records each run's arguments. */
+function fakeOcr(results: unknown[]): { argv: string[]; runs: () => string[][] } {
+  const dir = mkdtempSync(join(tmpdir(), "lykos-t236-ocr-"));
+  const script = join(dir, "ocr.mjs");
+  writeFileSync(join(dir, "results.json"), JSON.stringify(results));
+  writeFileSync(
+    script,
+    `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const dir = ${JSON.stringify(dir)};
+const args = process.argv.slice(2);
+const runsPath = dir + "/runs.json";
+const runs = existsSync(runsPath) ? JSON.parse(readFileSync(runsPath, "utf8")) : [];
+runs.push(args);
+writeFileSync(runsPath, JSON.stringify(runs));
+const results = JSON.parse(readFileSync(dir + "/results.json", "utf8"));
+writeFileSync(args[args.indexOf("--output") + 1], JSON.stringify(results[runs.length - 1] ?? { status: "complete", comments: [] }));
+`,
+  );
+  return { argv: [process.execPath, script], runs: () => JSON.parse(readFileSync(join(dir, "runs.json"), "utf8")) as string[][] };
+}
+
+const OCR_ENDPOINT = { url: "http://127.0.0.1:9/v1", token: "sk-test", model: "deepseek-v4-flash", protocol: "openai", provider: "deepseek" };
+
+describe("ADR-0062: a cycle reviews and rechecks with open-code-review", () => {
+  it("round 1 reads base..head, the recheck reads only the fix's diff and files its findings under round 1's reviewer", async () => {
+    const r = await rig({ fixes: [{ files: FIXED_CLAMP }] });
+    setConfig(r.ws, `${BASE_CONFIG.replace("delegation:\n", "delegation:\n  review_engine: ocr\n")}`);
+    const ocr = fakeOcr([
+      { status: "complete", comments: [{ path: "src/pricing.js", start_line: 3, content: "clampPercent allows 1000, so a price can go negative.", severity: "high", category: "bug" }], summary: { input_tokens: 10, output_tokens: 5 } },
+      { status: "complete", comments: [], summary: { input_tokens: 4, output_tokens: 1 } },
+    ]);
+    const extra = { ocr: { endpoint: OCR_ENDPOINT, argv: ocr.argv } };
+    const first = await cycle(r, r.implementer, extra);
+    assert.equal(first.stop, "triage", JSON.stringify(first));
+    const id = first.triage![0]!.finding_id;
+    const reviewed = git(r.ws, "rev-parse", `lykos/${r.implementer}`);
+
+    const second = await cycle(r, first.cycle_id!, { ...extra, forward: [id] });
+    assert.equal(second.stop, "approve", JSON.stringify(second));
+    assert.deepEqual(kinds(second), ["review:done", "judge:done", "triage:done", "fix:done", "recheck:done", "judge:done"]);
+    assert.ok(r.calls.every((c) => c.review !== true), "no reviewer session was started: OCR reviewed");
+
+    const [round1, recheck] = ocr.runs();
+    const at = (args: string[], flag: string): string => args[args.indexOf(flag) + 1]!;
+    assert.equal(at(round1!, "--to"), reviewed);
+    assert.equal(at(recheck!, "--from"), reviewed, "the recheck starts where round 1 read");
+    assert.equal(at(recheck!, "--to"), git(r.ws, "rev-parse", `lykos/${r.implementer}`));
+    const reviewer = second.steps!.find((s) => s.kind === "review")!.session_id!;
+    const recheckRun = second.steps!.find((s) => s.kind === "recheck")!.session_id!;
+    assert.notEqual(recheckRun, reviewer, "the recheck run is a ledger session of its own, for its tokens and transcript");
+    const findings = ledgerRows<{ session_id: string }>(r.ws, "SELECT session_id FROM findings");
+    assert.ok(findings.every((f) => f.session_id === reviewer), "every finding is round 1's reviewer's");
+  });
+});

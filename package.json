@@ -41,5 +41,8 @@
     "typescript": "^5.7.3",
     "typescript-language-server": "6.0.0",
     "vitest": "5.0.3"
+  },
+  "optionalDependencies": {
+    "@alibaba-group/open-code-review": "1.13.9"
   }
 }
