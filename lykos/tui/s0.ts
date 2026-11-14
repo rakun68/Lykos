@@ -55,6 +55,8 @@ export type ParsedInput =
   | { kind: "help" }
   | { kind: "session" }
   | { kind: "copy" }
+  /** T267: the session as Markdown. `file` is empty when none was typed, which means the clipboard. */
+  | { kind: "export"; file: string }
   | { kind: "verbose" }
   | { kind: "thinking" }
   | { kind: "compact"; hint: string }
@@ -161,6 +163,7 @@ export function parseInteractiveInput(line: string): ParsedInput {
   // session and starts a new one through the ordinary CLI path.
   if (name === "__new") return { kind: "new-session" };
   if (name === "copy") return { kind: "copy" };
+  if (name === "export") return { kind: "export", file: arg };
   if (name === "verbose") return { kind: "verbose" };
   if (name === "thinking") return { kind: "thinking" };
   if (name === "effort") return { kind: "effort", level: arg.toLowerCase() };

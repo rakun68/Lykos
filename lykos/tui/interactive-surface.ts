@@ -663,15 +663,25 @@ export async function runFullscreenInteractive(shared: StandaloneBootInputs, fin
       pipelineRef?.pushBlock({ id: FOOTER_LEGEND_BLOCK_ID, kind: "system", text: legend.text, parts: legend.parts });
       pipelineRef?.flush();
     } else if (action.kind === "copyText") {
-      // Round thirteen, item 3. OSC 52 through the same stdout the frames
-      // use — the terminal owns the clipboard, Lykos only asks — with the
-      // platform's own copy tool as the fallback `tui/clipboard.ts` already
-      // implements for the composer's Ctrl-C.
-      copyToClipboard(action.text, { write: (t) => stdoutWrite(t) });
-      const chars = action.text.length;
-      uiRef?.writeSystem(`lykos: copied the ${action.label} to the clipboard (${chars} character${chars === 1 ? "" : "s"})`);
-      pipelineRef?.flush();
+      copyText(action.text, action.label);
     }
+  }
+
+  /**
+   * Round thirteen, item 3. OSC 52 through the same stdout the frames use —
+   * the terminal owns the clipboard, Lykos only asks. T267: false when the
+   * text is too large to send safely, and then no copy is claimed.
+   */
+  function copyText(text: string, label: string): boolean {
+    const chars = text.length;
+    const copied = copyToClipboard(text, { write: (t) => stdoutWrite(t) });
+    uiRef?.writeSystem(
+      copied
+        ? `lykos: copied the ${label} to the clipboard (${chars} character${chars === 1 ? "" : "s"})`
+        : `lykos: the ${label} is too large for the terminal's clipboard (${chars} characters) — nothing was copied`,
+    );
+    pipelineRef?.flush();
+    return copied;
   }
 
   // Nothing may write to the terminal except the frame writer while the
@@ -1550,7 +1560,7 @@ Start carrying this plan out?`,
         // Ctrl-C uses, and the same message a click-to-copy produces, so
         // `/copy` and clicking an answer's hint are one behaviour reached
         // two ways.
-        onCopyText: (text, label) => handleClickAction({ kind: "copyText", text, label }),
+        onCopyText: copyText,
         // Item 2: the name is visible immediately — in the browser's row for
         // this session, and in the ledger the moment the session ends.
         onRename: (name) => {

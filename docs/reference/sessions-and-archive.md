@@ -114,6 +114,17 @@ Historical transcripts are compressed to `.gz` in place after passing the config
 period. Compression preserves the uncompressed SHA-256 byte hash in the ledger to guarantee
 tamper-evident auditability. A compressed session is decompressed transparently on read.
 
+### 2.4 Export as Markdown (`lykos export <session>`, `/export`)
+`lykos export <session> [file]` and `/export [file]` render a session's conversation as Markdown,
+read from its transcript, so an ended, killed or archived session exports the same as a live one.
+The export holds the prompts, steers and follow-ups, the answers, every tool call with its
+arguments and its result, errors, and a resume marker. Usage lines, turn markers, compaction,
+prune and shake records and the model's reasoning are left out; `lykos show` reads those.
+Prompts and answers go in as written. Tool arguments (as JSON) and results are fenced, each fence
+one backtick longer than the longest backtick run inside it, so content holding its own fence
+cannot close the export's. With no file, `lykos export` prints to stdout and `/export` copies to
+the clipboard. The session is found by id or unique id prefix, as `lykos resume` finds it.
+
 ---
 
 ## 3. Standalone Execution Shape

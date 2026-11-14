@@ -53,7 +53,7 @@ import { isWorkspaceTrusted } from "../gate/trust.js";
 import { resolveContainmentRequest } from "../containment/request.js";
 import type { ContainerRuntimeDriver } from "../containment/runtime.js";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import {
   DEFAULT_INTERACTION_MODE,
   INTERACTION_MODES,
@@ -67,7 +67,7 @@ import { loadPermissions, rememberAllow, rememberMode, type PermissionsOptions }
 import { runPermissionsCommand } from "../gate/permissions-command.js";
 import { setSkillCommands, skillPrompt } from "../tui/commands.js";
 import { nestSessions, type SessionListRow } from "./listing.js";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { ResolvedConfig } from "../config/types.js";
 import { loadConfig } from "../config/load.js";
@@ -79,6 +79,7 @@ export const PLAN_CONTINUE_AUTO = "yes — continue in Auto";
 export const PLAN_CONTINUE_MANUAL = "yes — continue in Manual, approving each step";
 export const PLAN_STAY = "no — keep planning";
 import { transcriptDir, type RecoveryEvent } from "./transcript.js";
+import { sessionMarkdown } from "./export-markdown.js";
 import { builtinProviderDecls, cacheModelsPath, generateProviderConfig, specialistModelSpec, resolveBootModel } from "../config/providers.js";
 import { assertHostProviderUsable, assertSpecialistProviderUsable } from "../config/specialist-credentials.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
@@ -406,9 +407,9 @@ export interface RunInteractiveLoopOpts {
    * `/copy`, and anything else that wants text on the system clipboard
    * (round thirteen, item 3). Omitted means no clipboard is reachable, and
    * `/copy` falls back to printing the text — which is all it ever did
-   * before this round.
+   * before this round. T267: false means nothing reached the clipboard.
    */
-  onCopyText?: (text: string, label: string) => void;
+  onCopyText?: (text: string, label: string) => boolean | void;
   /**
    * 2026-09-07 (UI feedback item 2): a name the user just chose, so the
    * surface that draws the session can show it immediately instead of
@@ -777,6 +778,36 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // it remains the only thing that can be done and still is.
         if (opts.onCopyText) opts.onCopyText(text, "last answer");
         else chrome(text);
+        return "ok";
+      }
+      case "export": {
+        // T267: from the transcript on disk, the same reader `lykos export` uses.
+        let markdown: string;
+        try {
+          markdown = sessionMarkdown(ledgerPath, session.sessionId);
+        } catch (err) {
+          chrome(`lykos: cannot export this session: ${(err as Error).message}`);
+          return "ok";
+        }
+        if (parsed.file.length > 0) {
+          const path = resolve(process.cwd(), parsed.file);
+          try {
+            writeFileSync(path, markdown, "utf8");
+          } catch (err) {
+            chrome(`lykos: cannot write ${path}: ${(err as Error).message}`);
+            return "ok";
+          }
+          chrome(`exported this session to ${path}`);
+          return "ok";
+        }
+        // Printing a whole session into the transcript would help nobody, so with no clipboard the file form is named instead.
+        if (!opts.onCopyText) {
+          chrome("lykos: no clipboard on this surface — /export <file> writes the session to a file");
+          return "ok";
+        }
+        if (opts.onCopyText(markdown, "session as Markdown") === false) {
+          chrome("lykos: /export <file> writes the session to a file instead");
+        }
         return "ok";
       }
       case "verbose": {

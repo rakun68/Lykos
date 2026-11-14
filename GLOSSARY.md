@@ -214,6 +214,11 @@ One continuous run of the agent. A resume continues the session it names rather 
 one.
 _Avoid_: conversation, run, thread
 
+**Export**:
+A session's conversation taken out of Lykos as Markdown: prompts, answers, and tool calls with their
+results. The archive keeps the session; an export is a copy for reading elsewhere.
+_Avoid_: dump, share, transcript (the transcript is the archive's own record)
+
 **Seal**:
 The record that freezes a test writer's failing tests, plus the test harness, against later change on
 a branch. It lives in the branch's signed seal file under `.lykos/seals/`, and it holds only if the

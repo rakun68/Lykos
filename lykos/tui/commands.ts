@@ -90,6 +90,8 @@ export const BUILTIN_COMMANDS: readonly CommandSpec[] = [
   { name: "/hotkeys", costClass: "local", description: "this list", source: "builtin" },
   { name: "/session", costClass: "local", description: "id, model, turns, tokens", source: "builtin" },
   { name: "/copy", costClass: "local", description: "last assistant message", source: "builtin" },
+  // T267: read from the transcript, so it costs nothing.
+  { name: "/export", costClass: "local", description: "this session as Markdown — to a file, or the clipboard", source: "builtin" },
   { name: "/verbose", costClass: "local", description: "expand/collapse tool results", source: "builtin" },
   { name: "/thinking", costClass: "local", description: "show/hide reasoning blocks", source: "builtin" },
   // Reasoning effort is a per-request parameter, not part of the frozen

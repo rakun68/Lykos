@@ -237,15 +237,21 @@ export const COMMANDS: readonly Command[] = [
     name: "export",
     help: [
       "  export    export agents for other harnesses: `lykos export claude [--global]`",
+      "            or a session as Markdown: `lykos export <session> [file]` (stdout with no file)",
     ],
     run: async (rest, { cwd }) => {
-      const { runExportClaude } = await import("./export-claude.js");
-      const [sub] = positionals(rest, []);
+      const [sub, file] = positionals(rest, []);
       if (sub === "claude") {
+        const { runExportClaude } = await import("./export-claude.js");
         return runExportClaude(cwd, { global: rest.includes("--global") });
       }
-      process.stderr.write(`lykos export: unknown subcommand "${sub}". Use "claude".\n`);
-      return 1;
+      if (sub === undefined) {
+        process.stderr.write("lykos export: expected `claude` or a session id, e.g. `lykos export 1a2b3c4d [file]`\n");
+        return 1;
+      }
+      // T267: anything else names a session.
+      const { runExportSession } = await import("./export-session.js");
+      return runExportSession(cwd, await resolveLedgerPath(cwd), sub, file);
     },
   },
   {

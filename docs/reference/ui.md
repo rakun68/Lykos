@@ -68,6 +68,7 @@ Commands are dispatched locally without incurring LLM turns:
 - `/model <provider/model>`: Switch active model for the remainder of the session (advisory: next turn may pay for cold prefix).
 - `/effort <off|low|mid|max>`: Adjust reasoning effort level and composer border hue.
 - `/session`: Display current session ID, token totals, and running cost.
+- `/export [file]`: Write this session's conversation as Markdown to `file` (relative to the working directory), or with no file put it on the clipboard through OSC 52. Read from the transcript (sessions-and-archive §2.4). A session too large for the terminal's clipboard is refused with a message, never claimed as copied; the file form still works.
 - `/output-style [name]`: List available output styles (bare) or switch active output style in stream (`<name>`).
 - `/close-session`: Mark current session closed and exit.
 - `/new`: Start a fresh session.

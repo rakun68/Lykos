@@ -89,6 +89,7 @@ export const S0_HELP = [
   "  /help /hotkeys     this list",
   "  /session           id, model, turns, tokens",
   "  /copy              copy the last answer to the clipboard",
+  "  /export [file]     this session as Markdown, to the file or the clipboard (free)",
   "  /compact [hint]    compact context now",
   "  /followup <text>   queue a follow-up (delivered when idle)",
   "  /verbose           expand folded blocks, and show each tool's raw result",

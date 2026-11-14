@@ -88,9 +88,15 @@ export interface LaunchInput {
 /**
  * Resolves a session id or unique prefix, the same way `lykos show` does.
  * Kept here rather than shared because the failure messages differ: `show`
- * lists recent sessions to pick from, and so should this.
+ * lists recent sessions to pick from, and so should this. T267: `lykos
+ * export` resolves through this too, naming itself in the refusal.
  */
-function resolveSessionId(ledger: Ledger, idOrPrefix: string, refuse: (message: string) => void): string | null {
+export function resolveSessionId(
+  ledger: Ledger,
+  idOrPrefix: string,
+  refuse: (message: string) => void,
+  command = "resume",
+): string | null {
   const exact = ledger.db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(idOrPrefix) as
     | { id: string }
     | undefined;
@@ -100,10 +106,10 @@ function resolveSessionId(ledger: Ledger, idOrPrefix: string, refuse: (message: 
     .all(`${idOrPrefix}%`) as Array<{ id: string }>;
   if (matches.length === 1) return matches[0]!.id;
   if (matches.length > 1) {
-    refuse(`lykos resume: ambiguous session prefix — ${matches.length} sessions match "${idOrPrefix}"\n`);
+    refuse(`lykos ${command}: ambiguous session prefix — ${matches.length} sessions match "${idOrPrefix}"\n`);
     return null;
   }
-  refuse(`lykos resume: no session matches "${idOrPrefix}"\n`);
+  refuse(`lykos ${command}: no session matches "${idOrPrefix}"\n`);
   return null;
 }
 
