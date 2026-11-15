@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { LiveTranscriptRecorder } from "./live-capture.js";
 import { sessionMarkdown } from "./export-markdown.js";
+import { TranscriptWriter } from "./transcript.js";
 
 function tempLedgerPath(): string {
   return join(mkdtempSync(join(tmpdir(), "lykos-export-md-")), "ledger.db");
@@ -70,5 +71,53 @@ describe("sessionMarkdown", () => {
     assert.ok(result > call, md);
     assert.ok(answer > result, md);
     assert.doesNotMatch(md, /private reasoning/);
+  });
+});
+
+describe("sessionMarkdown after a rewind (review finding 2)", () => {
+  function rewound(restore: "conversation" | "summarize"): string {
+    const ledgerPath = tempLedgerPath();
+    const w = new TranscriptWriter(ledgerPath, "sess-rw");
+    w.append({ kind: "user_message", text: "first prompt" });
+    w.append({ kind: "turn_start", turn: 0 });
+    w.append({ kind: "assistant_message", text: "first answer", final: false });
+    w.append({ kind: "user_message", text: "undone prompt" });
+    w.append({ kind: "turn_start", turn: 1 });
+    w.append({ kind: "assistant_message", text: "undone answer", final: false });
+    w.append({
+      kind: "rewind",
+      restore,
+      prompt: "undone prompt",
+      to_turn: 1,
+      ...(restore === "summarize" ? { summarized_turns: [1, 1] as [number, number], summary: "the summary the model has" } : { undone_turns: [1, 1] as [number, number] }),
+    });
+    w.append({ kind: "user_message", text: "new prompt" });
+    w.finalize();
+    return sessionMarkdown(ledgerPath, "sess-rw");
+  }
+
+  it("exports the active branch: a rewound turn is left out", () => {
+    const md = rewound("conversation");
+    assert.match(md, /first answer/);
+    assert.match(md, /new prompt/);
+    assert.doesNotMatch(md, /undone/);
+  });
+
+  it("a summarized stretch exports as its summary", () => {
+    const md = rewound("summarize");
+    assert.doesNotMatch(md, /undone/);
+    assert.match(md, /## Summary\n\nthe summary the model has\n/);
+  });
+});
+
+describe("sessionMarkdown fences (review finding 5)", () => {
+  it("a stream result (uncapped) with more backtick runs than a spread takes still exports, fenced past its longest run", () => {
+    const ledgerPath = tempLedgerPath();
+    const w = new TranscriptWriter(ledgerPath, "sess-ticks");
+    w.append({ kind: "user_message", text: "go" });
+    w.append({ kind: "tool_result", name: "bash", state: "ok", result: "` ".repeat(200_000) + "````" });
+    w.finalize();
+    const md = sessionMarkdown(ledgerPath, "sess-ticks");
+    assert.match(md, /\n`````\n/);
   });
 });

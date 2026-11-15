@@ -1224,6 +1224,12 @@ export function sessionEditedPaths(toolCalls: readonly HitQualityToolCall[], cha
  * T39.1: when `parentSessionId` is set, this run is a Lykos-spawned child —
  * same lifecycle, `execution_shape=subagent`, resumable=1.
  */
+/** T268: why `model` cannot be sent `images`, or undefined when it can (or there are none). */
+export function refuseImages(model: { provider: string; id: string; input: readonly string[] }, images: readonly ImageAttachment[] | undefined): string | undefined {
+  if (images === undefined || images.length === 0 || model.input.includes("image")) return undefined;
+  return `${model.provider}/${model.id} takes no image input, so ${images.map((i) => i.path).join(", ")} cannot be attached`;
+}
+
 export async function runStandaloneTask(input: RunStandaloneTaskInput): Promise<RunStandaloneTaskResult> {
   // T183: the caller is told what was skipped on every outcome, not only a finished session. A delegated session
   // always ends in a result (a throw becomes an `error`), so that does not depend on whether anything was skipped.
@@ -1398,12 +1404,8 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   });
   const model = await resolveHostModel(modelSpec, modelRuntime);
   // T268: an attached image goes to a model that declares image input, or the session does not start.
-  if (input.images !== undefined && input.images.length > 0 && !model.input.includes("image")) {
-    return {
-      status: "error",
-      message: `${model.provider}/${model.id} takes no image input, so ${input.images.map((i) => i.path).join(", ")} cannot be attached; choose a model that takes images with --model`,
-    };
-  }
+  const imageRefusal = refuseImages(model, input.images);
+  if (imageRefusal !== undefined) return { status: "error", message: `${imageRefusal}; choose a model that takes images with --model` };
   const promptImages = input.images?.map((i) => ({ type: "image" as const, mimeType: i.mimeType, data: i.data }));
   // T184: the interaction mode, when the caller named one, decides whether this session writes and whether it asks.
   const readOnly = input.readOnly === true || config.readOnly === true || (input.interactionMode !== undefined && !modeWrites(input.interactionMode));
@@ -1768,6 +1770,9 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
 ${decision.note}
 `);
         const altModel = await resolveHostModel(decision.to, modelRuntime);
+        // T268: the prompt is sent again with its images, so the fallback must take images too.
+        const altRefusal = refuseImages(altModel, input.images);
+        if (altRefusal !== undefined) throw new Error(altRefusal);
         // `persist: false` — session-only. Writing the user's global model
         // default because their provider had a bad minute would be the same
         // boundary violation T83 refused for the retry policy.

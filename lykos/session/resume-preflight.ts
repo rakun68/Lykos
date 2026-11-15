@@ -381,13 +381,14 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   let cost: RebuildCost | undefined;
   // T238: the earlier run did not end cleanly, so say what the working tree looks like now. Nothing reruns.
   let recovery: Omit<RecoveryEvent, "kind"> | undefined;
-  const interrupted = interruptedToolCalls(records).map((c) => c.id);
+  // Review finding 4: only the active branch is resumed, so a call a rewind undid is not reported.
+  const kept = activeBranch(records);
+  const interrupted = interruptedToolCalls(kept).map((c) => c.id);
   if (records.length > 0 && (row.ended_utc === null || interrupted.length > 0)) {
     recovery = recoveryState(workspace, interrupted);
   }
   let branch: ResumePreflight["branch"];
   if (records.length > 0) {
-    const kept = activeBranch(records);
     let turn: number | undefined;
     for (const r of kept) if (r.kind === "turn_start") turn = r.turn;
     branch = { records: kept, ...(turn !== undefined ? { turn } : {}) };

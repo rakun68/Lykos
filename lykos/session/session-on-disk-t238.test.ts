@@ -67,6 +67,24 @@ describe("T238: tool calls are on disk before they run", () => {
     ledger.close();
   });
 
+  it("review finding 4: a call left unfinished on a branch a rewind undid is not reported as interrupted", () => {
+    const { dir, ledgerPath, ledger } = fixture();
+    const id = "t238-rewound-past";
+    const recorder = new LiveTranscriptRecorder(ledgerPath, id);
+    const source = eventSource();
+    recorder.attach(source);
+    writeBootRow(ledger, bootSnapshot(id), { workspace: dir, executionShape: "standalone", runtime: "host", liveTranscript: recorder, registryPath: join(dir, "projects.json") });
+    recorder.userMessage("run the tests");
+    recorder.writer.append({ kind: "turn_start", turn: 0 });
+    source.emit({ type: "tool_execution_start", toolCallId: "call_1", toolName: "bash", args: { command: "npm test" } });
+    recorder.writer.append({ kind: "rewind", restore: "conversation", prompt: "run the tests", to_turn: 0, undone_turns: [0, 0] });
+    recorder.userMessage("just list the files");
+
+    const pre = preflightResume({ ledger, sessionId: id, workspace: dir });
+    assert.deepEqual(pre.recovery?.interrupted ?? [], [], "the undone call is not on the conversation being resumed");
+    ledger.close();
+  });
+
   it("two parallel tool calls cut off together are both reported with their own ids", () => {
     const { ledgerPath } = fixture();
     const id = "t238-parallel";

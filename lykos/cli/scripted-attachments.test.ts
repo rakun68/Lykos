@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { crc32, deflateSync } from "node:zlib";
 import { parseRunBriefArgs, resolveRunBrief } from "./brief.js";
+import { refuseImages } from "../session/session.js";
 import { reply, runScriptedSession, say, type ModelContext } from "./scripted-session.js";
 
 /** The first user message the model was sent, as its content parts. */
@@ -72,5 +73,15 @@ describe("@path attachments reach the model (T268)", () => {
     assert.equal(run.result.status, "error");
     assert.match(run.result.status === "error" ? run.result.message : "", /faux\/scripted-1 takes no image input.*shot\.png/);
     assert.equal(run.modelCalls, 0);
+  });
+});
+
+describe("the image guard a model fallback goes through too (review finding 3)", () => {
+  const image = { path: "shot.png", mimeType: "image/png", data: "" };
+  it("refuses a model without image input, naming it and the image, and passes one with it or no images", () => {
+    assert.equal(refuseImages({ provider: "p", id: "text-only", input: ["text"] }, [image]), "p/text-only takes no image input, so shot.png cannot be attached");
+    assert.equal(refuseImages({ provider: "p", id: "seer", input: ["text", "image"] }, [image]), undefined);
+    assert.equal(refuseImages({ provider: "p", id: "text-only", input: ["text"] }, undefined), undefined);
+    assert.equal(refuseImages({ provider: "p", id: "text-only", input: ["text"] }, []), undefined);
   });
 });

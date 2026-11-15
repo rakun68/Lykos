@@ -3,7 +3,7 @@
 //
 // It reads the transcript, never the live process, so a session that ended
 // (or was killed) exports the same way a running one does. What it renders is
-// the conversation a person had: prompts, steers, answers, tool calls with
+// the conversation on its active branch: prompts, steers, answers, tool calls with
 // their results, and errors. Bookkeeping lines (usage, turn markers,
 // compaction, prune) and the model's reasoning are left out: `lykos show` is
 // the reader for those.
@@ -13,6 +13,7 @@
 // fence is one backtick longer than the longest run inside it, so a result
 // that itself contains a fence cannot close the export's fence early.
 
+import { activeBranch } from "./active-branch.js";
 import {
   readSessionMeta,
   readTranscript,
@@ -22,7 +23,8 @@ import {
 
 /** A fence that outlasts every backtick run in `body`. */
 function fenced(body: string, info = ""): string {
-  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+  let longest = 0;
+  for (const run of body.match(/`+/g) ?? []) if (run.length > longest) longest = run.length;
   const fence = "`".repeat(Math.max(3, longest + 1));
   const text = body.endsWith("\n") ? body : `${body}\n`;
   return `${fence}${info}\n${text}${fence}\n`;
@@ -67,6 +69,9 @@ function eventMarkdown(event: TranscriptEventInput): string | null {
       return `> **Error:** ${event.message}\n`;
     case "resume":
       return `*Resumed from session ${event.from}.*\n`;
+    case "rewind":
+      // Only a summarize stays on the active branch with text: the model has its summary in place of the turns.
+      return event.restore === "summarize" && event.summary !== undefined ? `## Summary\n\n${event.summary}\n` : null;
     default:
       return null;
   }
@@ -88,6 +93,7 @@ export function sessionMarkdown(
   if (meta?.model) header.push(`- Model: ${meta.model}`);
   if (meta?.startedUtc) header.push(`- Started: ${meta.startedUtc}`);
   if (header.length > 2) header.push("");
-  const blocks = events.map(eventMarkdown).filter((block): block is string => block !== null);
+  // Review finding 2: the conversation as the model has it now. A rewound turn stays in the file, never in the export.
+  const blocks = activeBranch(events).map(eventMarkdown).filter((block): block is string => block !== null);
   return `${header.join("\n")}\n${blocks.join("\n")}`;
 }
