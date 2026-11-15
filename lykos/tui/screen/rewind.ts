@@ -3,20 +3,29 @@
 // Enter on one offers what to restore. It owns no git and no session logic:
 // it resolves with the choice and `session/rewind.ts` carries it out, so
 // rewind stays a human action and never reaches the agent's tool surface.
+// T265: summarize from here takes an optional note, typed on a third stage.
 
 import { KeyDecoder, type FeedOptions, type KeyEvent } from "./input.js";
 import { style, withBackground, type ResolvedTheme } from "../theme/resolve.js";
 import { visibleWidth } from "./frame.js";
-import { REWIND_RESTORES, rewindPointLabel, type RewindChoice, type RewindPoint } from "../../session/rewind.js";
+import {
+  REWIND_RESTORES,
+  rewindPointLabel,
+  SUMMARIZE_NOTE_PROMPT,
+  type RewindChoice,
+  type RewindPoint,
+} from "../../session/rewind.js";
 
 export interface RewindState {
   points: readonly RewindPoint[];
   /** The highlighted prompt. */
   cursor: number;
-  /** Choosing a prompt, then what to restore from before it. */
-  stage: "prompt" | "restore";
+  /** Choosing a prompt, then what to restore from before it; for a summarize, then its note. */
+  stage: "prompt" | "restore" | "note";
   /** The highlighted restore, into `REWIND_RESTORES`. */
   restoreCursor: number;
+  /** T265: the summarize note typed so far. */
+  note: string;
 }
 
 export interface RewindOverlayOptions {
@@ -43,7 +52,7 @@ export class RewindOverlay {
   open(height: number, points: readonly RewindPoint[]): Promise<RewindChoice | undefined> {
     this.finish(undefined);
     this.height = Math.max(6, height);
-    this.state = { points, cursor: Math.max(0, points.length - 1), stage: "prompt", restoreCursor: 0 };
+    this.state = { points, cursor: Math.max(0, points.length - 1), stage: "prompt", restoreCursor: 0, note: "" };
     const chosen = new Promise<RewindChoice | undefined>((resolve) => {
       this.resolve = resolve;
     });
@@ -82,6 +91,10 @@ export class RewindOverlay {
   private handleKey(event: KeyEvent): void {
     const state = this.state;
     if (!state) return;
+    if (state.stage === "note") {
+      this.handleNoteKey(state, event);
+      return;
+    }
     if (event.type === "escape") {
       if (state.stage === "restore") {
         this.state = { ...state, stage: "prompt" };
@@ -105,8 +118,8 @@ export class RewindOverlay {
       return;
     }
     if (event.type === "char" && state.stage === "restore" && /^[1-9]$/.test(event.value)) {
-      const restore = REWIND_RESTORES[Number(event.value) - 1]?.restore;
-      if (restore !== undefined) this.finish({ index: state.cursor, restore });
+      const index = Number(event.value) - 1;
+      if (REWIND_RESTORES[index] !== undefined) this.choose({ ...state, restoreCursor: index });
       return;
     }
     if (event.type === "enter" && !event.alt && !event.ctrl && !event.shift) {
@@ -115,8 +128,35 @@ export class RewindOverlay {
         this.state = { ...state, stage: "restore", restoreCursor: 0 };
         this.render();
       } else {
-        this.finish({ index: state.cursor, restore: REWIND_RESTORES[state.restoreCursor]!.restore });
+        this.choose(state);
       }
+    }
+  }
+
+  /** The highlighted restore: done, or for a summarize, on to its note. */
+  private choose(state: RewindState): void {
+    const restore = REWIND_RESTORES[state.restoreCursor]!.restore;
+    if (restore === "summarize") {
+      this.state = { ...state, stage: "note", note: "" };
+      this.render();
+    } else this.finish({ index: state.cursor, restore });
+  }
+
+  /** T265: the note is one line of text; Enter sends it (empty is no note), Esc goes back to the restores. */
+  private handleNoteKey(state: RewindState, event: KeyEvent): void {
+    if (event.type === "escape") {
+      this.state = { ...state, stage: "restore", note: "" };
+      this.render();
+    } else if (event.type === "enter" && !event.alt && !event.ctrl && !event.shift) {
+      const note = state.note.trim();
+      this.finish({ index: state.cursor, restore: "summarize", ...(note !== "" ? { note } : {}) });
+    } else if (event.type === "backspace") {
+      this.state = { ...state, note: [...state.note].slice(0, -1).join("") };
+      this.render();
+    } else if (event.type === "char" || event.type === "paste") {
+      const text = event.type === "char" ? event.value : event.text;
+      this.state = { ...state, note: state.note + text.replace(/[\r\n]+/g, " ") };
+      this.render();
     }
   }
 
@@ -138,9 +178,22 @@ export function renderRewind(state: RewindState, opts: { width: number; height: 
       const line = `${index === state.cursor ? "› " : "  "}${index + 1}  ${rewindPointLabel(point, Math.max(20, opts.width - 24))}`;
       lines.push(index === state.cursor ? highlight(line) : line);
     }
+  } else if (state.stage === "note") {
+    const point = state.points[state.cursor];
+    lines.push(style("type a note, or none · Enter summarize · Esc back", "dim", opts.theme));
+    if (point !== undefined) lines.push(`from: ${rewindPointLabel(point, Math.max(20, opts.width - 30))}`);
+    lines.push(`${SUMMARIZE_NOTE_PROMPT}: ${state.note}█`);
+    lines.push("");
+    lines.push(
+      style(
+        "That prompt and every turn after it become one summary the model is sent instead; the turns stay in the transcript, and the files are not touched.",
+        "dim",
+        opts.theme,
+      ),
+    );
   } else {
     const point = state.points[state.cursor];
-    lines.push(style("↑/↓ or 1-3 choose · Enter restore · Esc back", "dim", opts.theme));
+    lines.push(style(`↑/↓ or 1-${REWIND_RESTORES.length} choose · Enter restore · Esc back`, "dim", opts.theme));
     if (point !== undefined) lines.push(`before: ${rewindPointLabel(point, Math.max(20, opts.width - 30))}`);
     for (const [index, r] of REWIND_RESTORES.entries()) {
       const line = `${index === state.restoreCursor ? "› " : "  "}${index + 1}  ${r.label}`;

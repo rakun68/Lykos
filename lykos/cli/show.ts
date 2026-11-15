@@ -44,6 +44,7 @@ import {
   transcriptDir,
   transcriptFilePath,
   verifyTranscriptHash,
+  type RewindEvent,
   type SessionMeta,
   type TranscriptEventInput,
   type TranscriptEventRecord,
@@ -303,10 +304,12 @@ export function fileChangingTurns(
 
 /** T263: one rewind of the live session, with the branch it undid. */
 export interface SessionRewind {
-  restore: "both" | "conversation" | "code";
+  restore: RewindEvent["restore"];
   to_turn?: number;
   /** The undone branch: its first and last turn, and the prompts that started them. Absent when only code was restored. */
   undone?: { turns: [number, number]; prompts: string[] };
+  /** T265: a summarize's turns, now one summary in context, the prompts that started them, and the person's note. */
+  summarized?: { turns: [number, number]; prompts: string[]; note?: string };
 }
 
 /**
@@ -325,11 +328,14 @@ export function sessionRewinds(events: ReadonlyArray<TranscriptEventInput>): Ses
       pending = undefined;
     } else if (e.kind === "rewind") {
       const range = e.undone_turns;
+      const summarized = e.summarized_turns;
+      const promptsIn = (r: [number, number]) => promptTurns.filter((p) => p.turn >= r[0] && p.turn <= r[1]).map((p) => p.text);
       out.push({
         restore: e.restore,
         ...(e.to_turn !== undefined ? { to_turn: e.to_turn } : {}),
-        ...(range !== undefined
-          ? { undone: { turns: range, prompts: promptTurns.filter((p) => p.turn >= range[0] && p.turn <= range[1]).map((p) => p.text) } }
+        ...(range !== undefined ? { undone: { turns: range, prompts: promptsIn(range) } } : {}),
+        ...(summarized !== undefined
+          ? { summarized: { turns: summarized, prompts: promptsIn(summarized), ...(e.note !== undefined ? { note: e.note } : {}) } }
           : {}),
       });
     }
@@ -340,11 +346,25 @@ export function sessionRewinds(events: ReadonlyArray<TranscriptEventInput>): Ses
 /** T263: each rewind, and the undone branch it left in the transcript. Nothing when there was none. */
 function writeRewinds(rewinds: readonly SessionRewind[]): void {
   for (const r of rewinds) {
-    const what = r.restore === "both" ? "code and conversation" : r.restore === "code" ? "code only" : "conversation only";
-    stdoutWrite(` rewind     ${what}${r.to_turn !== undefined ? ` to before turn ${r.to_turn}` : ""}\n`);
+    const what =
+      r.restore === "both"
+        ? "code and conversation"
+        : r.restore === "code"
+          ? "code only"
+          : r.restore === "summarize"
+            ? "summarized"
+            : "conversation only";
+    const where = r.restore === "summarize" ? ` from turn ${r.to_turn}` : ` to before turn ${r.to_turn}`;
+    stdoutWrite(` rewind     ${what}${r.to_turn !== undefined ? where : ""}\n`);
     if (r.undone !== undefined) {
       stdoutWrite(`            undone branch: turns ${r.undone.turns[0]}-${r.undone.turns[1]}, kept in the transcript and the cost\n`);
       for (const p of r.undone.prompts) stdoutWrite(`              ${p.split("\n")[0]}\n`);
+    }
+    if (r.summarized !== undefined) {
+      const [first, last] = r.summarized.turns;
+      stdoutWrite(`            summarized: turns ${first}-${last}, one summary in context, kept in the transcript and the cost\n`);
+      if (r.summarized.note !== undefined) stdoutWrite(`            note: ${r.summarized.note}\n`);
+      for (const p of r.summarized.prompts) stdoutWrite(`              ${p.split("\n")[0]}\n`);
     }
   }
 }
@@ -652,6 +672,12 @@ function formatEventBlock(record: TranscriptEventRecord & TranscriptEventInput):
       lines.push(`${head}  ${record.restore}${record.to_turn !== undefined ? `  to turn ${record.to_turn}` : ""}`);
       lines.push(`    prompt: ${record.prompt}`);
       if (record.undone_turns !== undefined) lines.push(`    undone: turns ${record.undone_turns[0]}-${record.undone_turns[1]}`);
+      // T265: the summarized turns stay above it too; the model is sent the summary in their place.
+      if (record.summarized_turns !== undefined) {
+        lines.push(`    summarized: turns ${record.summarized_turns[0]}-${record.summarized_turns[1]}`);
+      }
+      if (record.note !== undefined) lines.push(`    note: ${record.note}`);
+      if (record.summary !== undefined) lines.push(`    summary: ${record.summary.split("\n")[0]}`);
       if (record.checkpoint !== undefined) lines.push(`    code from checkpoint ${shortHash(record.checkpoint)}`);
       if (record.safety_checkpoint !== undefined) lines.push(`    the tree before it: checkpoint ${shortHash(record.safety_checkpoint)}`);
       break;

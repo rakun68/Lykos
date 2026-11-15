@@ -90,7 +90,7 @@ export const S0_HELP = [
   "  /session           id, model, turns, tokens",
   "  /copy              copy the last answer to the clipboard",
   "  /export [file]     this session as Markdown, to the file or the clipboard (free)",
-  "  /rewind            go back to an earlier prompt: code, conversation, or both (free)",
+  "  /rewind            go back to an earlier prompt: code, conversation, both (free), or summarize from it (a model call)",
   "  /compact [hint]    compact context now",
   "  /followup <text>   queue a follow-up (delivered when idle)",
   "  /verbose           expand folded blocks, and show each tool's raw result",

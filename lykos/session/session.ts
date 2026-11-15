@@ -726,8 +726,17 @@ export function subscribeStandaloneUsage(
         break;
     }
   });
+  // T265: a summarize's summarizer call raises no session event; the rewind reports it, and it is a compaction's call.
+  // Optional chaining because a hand-built test session has no rewind.
+  const stopSummaries = booted.rewind?.onSummarizerCall((c) => addCompactionCall(c.usage, c.latencyMs));
 
-  return { state, unsubscribe };
+  return {
+    state,
+    unsubscribe: () => {
+      unsubscribe();
+      stopSummaries?.();
+    },
+  };
 }
 
 /** Builds the same `DelegateSnapshot` shape the one-shot and interactive paths both feed to `ingestDelegateSnapshot()`. */

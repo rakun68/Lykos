@@ -64,3 +64,34 @@ test("T263: Esc on the restores goes back to the prompts; Esc there cancels and 
   assert.equal(await chosen, undefined);
   assert.equal(p.o.isOpen, false);
 });
+
+test("T265: summarize from here asks for an optional note; Enter sends it with the choice", async () => {
+  const p = overlay();
+  const chosen = p.o.open(12, points);
+  p.keys("\x1b[A");
+  p.keys("\r");
+  assert.match(p.rendered(), /summarize from here/);
+  p.keys("4");
+  assert.match(p.rendered(), /add context for the summary \(optional\)/);
+  p.keys("keep b");
+  p.keys("\x7f");
+  p.keys("B");
+  assert.match(p.rendered(), /keep B/);
+  p.keys("\r");
+  assert.deepEqual(await chosen, { index: 1, restore: "summarize", note: "keep B" });
+});
+
+test("T265: an empty note is no note; Esc on the note goes back to the restores", async () => {
+  const p = overlay();
+  const chosen = p.o.open(12, points);
+  p.keys("\r");
+  p.keys("4");
+  assert.match(p.rendered(), /add context/);
+  p.keys("x");
+  p.keys("\x1b");
+  assert.match(p.rendered(), /conversation only/);
+  p.keys("4");
+  assert.doesNotMatch(p.rendered(), /: x/, "the note starts empty again");
+  p.keys("\r");
+  assert.deepEqual(await chosen, { index: 2, restore: "summarize" });
+});

@@ -137,7 +137,7 @@ checkpoint's index.
 ### 2.2.1 Rewinding a Live Session (`/rewind`, Esc Esc)
 In an interactive session, `/rewind` (or Esc Esc on an empty input, on the full-screen surface)
 lists the session's earlier prompts. The chosen one offers: code and conversation, conversation
-only, code only, or cancel. Only the person can rewind; there is no tool for it.
+only, code only, summarize from here, or cancel. Only the person can rewind; there is no tool for it.
 
 - **Conversation** moves Pi's session tree back to before that prompt (`navigateTree`), and the
   prompt goes back in the input box (the append-only surface, which has no input box, prints it).
@@ -146,11 +146,22 @@ only, code only, or cancel. Only the person can rewind; there is no tool for it.
   prompt's first turn started from: the one taken then, or the ref's tip when nothing had changed.
   The current tree is checkpointed first (`before rewind to <hash>`, listed by `lykos rewind`), and
   a file the checkpoint did not have is reported and left in place, as `lykos rewind` does.
+- **Summarize from here** (T265) asks for an optional note, then replaces that prompt and every
+  turn after it, in context, with one summary: the next request carries the turns before the
+  prompt verbatim, then the summary. The summary is Pi's branch summary (`navigateTree` with
+  `summarize`, from the entry just before the prompt so the prompt itself is summarized), and the
+  note is its `customInstructions` (Pi adds it as "Additional focus"). Lykos's own compaction is not
+  used: it keeps the newest turns and summarizes the oldest, with no prompt to cut at. The
+  summarizer's call is a `calls` row of phase `compact`, as a compaction's is, and in the session's
+  cost; it writes no `compactions` row. The prompt goes back in the input box, as Claude Code does,
+  and the files are not touched. A summarizer that fails changes nothing.
 - **Nothing is deleted and there is no redo.** The transcript gets a `rewind` event (what was
-  restored, the prompt, `to_turn`, `undone_turns`, `checkpoint`, `safety_checkpoint`); the undone
-  turns stay in the transcript before it and their calls stay in the ledger and in the session's
-  cost. `lykos show` prints each rewind and the undone branch's turns and prompts (`--json`:
-  `rewinds`). The session keeps its id and its row.
+  restored, the prompt, `to_turn`, `undone_turns`, `checkpoint`, `safety_checkpoint`; for a
+  summarize, `restore: "summarize"`, `summarized_turns`, `note` and `summary`); the undone or
+  summarized turns stay in the transcript before it and their calls stay in the ledger and in the
+  session's cost. `lykos show` prints each rewind and the undone branch's, or the summarized turns',
+  turns and prompts (`--json`: `rewinds`, with `undone` or `summarized`). The session keeps its id
+  and its row.
 
 Only prompts sent by the running process are offered; a resumed session's replayed turns are not
 (T264). Resuming a session replays its whole transcript, undone turns included.

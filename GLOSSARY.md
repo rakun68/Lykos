@@ -234,6 +234,12 @@ A new session that continues a copy of another session's active branch, on the s
 session it was copied from is left as it was. A fork is a new session; a resume is not.
 _Avoid_: clone, branch, copy, duplicate
 
+**Summarize from here**:
+A rewind that keeps the conversation up to an earlier prompt and replaces that prompt and every
+turn after it with one summary, written by the model, steered by an optional note from the person.
+The summarized turns stay in the transcript; the files are not touched.
+_Avoid_: partial compaction, collapse, squash
+
 **Export**:
 A session's conversation taken out of Lykos as Markdown: prompts, answers, and tool calls with their
 results. The archive keeps the session; an export is a copy for reading elsewhere.

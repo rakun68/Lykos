@@ -85,6 +85,14 @@ async function run(typed: string[], tail: ScriptStep[]) {
     const abs = join(world.workspace, rel);
     return existsSync(abs) ? readFileSync(abs, "utf8").replace(/\r\n/g, "\n") : undefined;
   };
+  const count = (sql: string): number => {
+    const ledger = openLedgerSync(world.ledgerPath);
+    try {
+      return (ledger.db.prepare(sql).get(sessionId) as { n: number }).n;
+    } finally {
+      ledger.close();
+    }
+  };
   return {
     out,
     lines,
@@ -94,14 +102,8 @@ async function run(typed: string[], tail: ScriptStep[]) {
     modelCalls: world.modelCalls(),
     show: () => captureStdout("lykos show", () => runShow(world.ledgerPath, sessionId, {})),
     rewindList: () => captureStdout("lykos rewind", () => runRewindCli(world.workspace, {})),
-    calls: () => {
-      const ledger = openLedgerSync(world.ledgerPath);
-      try {
-        return (ledger.db.prepare("SELECT COUNT(*) AS n FROM calls WHERE session_id = ?").get(sessionId) as { n: number }).n;
-      } finally {
-        ledger.close();
-      }
-    },
+    calls: () => count("SELECT COUNT(*) AS n FROM calls WHERE session_id = ?"),
+    compactCalls: () => count("SELECT COUNT(*) AS n FROM calls WHERE session_id = ? AND phase = 'compact'"),
   };
 }
 
@@ -165,5 +167,63 @@ describe("rewind a live session (T263)", () => {
     assert.deepEqual([r.file("a.txt"), r.file("b.txt"), r.file("c.txt")], ["a1\n", "b2\n", "c3\n"]);
     assert.deepEqual(r.lines.prefilled, []);
     assert.equal(r.unusedSteps, 0);
+  });
+});
+
+describe("summarize from here (T265)", () => {
+  /** What the summarizer was sent, and the summary it writes. */
+  const summarizer = (seen: { ctx?: ModelContext }) => (ctx: ModelContext) => {
+    seen.ctx = ctx;
+    return reply(say("SUMMARY: b and c were changed"));
+  };
+
+  it("at turn two: turn one verbatim, turns two onward one summary in the next request, the files untouched", async () => {
+    const seen: { ctx?: ModelContext } = {};
+    let next: ModelContext | undefined;
+    const r = await run(["/rewind", "2", "4", "", "fourth: something else"], [
+      summarizer(seen),
+      (ctx) => {
+        next = ctx;
+        return reply(say("fresh"));
+      },
+    ]);
+    assert.equal(r.unusedSteps, 0, r.out);
+    assert.deepEqual([r.file("a.txt"), r.file("b.txt"), r.file("c.txt")], ["a1\n", "b2\n", "c3\n"], "files are not touched");
+    assert.deepEqual(r.lines.prefilled, ["second: change b"], "the prompt goes back in the input box");
+
+    const sent = JSON.stringify(next!.messages);
+    const said = userTexts(next!);
+    assert.ok(said.some((t) => t.includes("first: change a")), "turn one is sent verbatim");
+    assert.match(sent, /a1/, "with its tool call");
+    assert.ok(!said.some((t) => t.includes("second: change b") || t.includes("third: change c")), JSON.stringify(said));
+    assert.doesNotMatch(sent, /echo b2|c3/, "nor are their tool calls");
+    assert.equal(said.filter((t) => t.includes("SUMMARY: b and c were changed")).length, 1, "turns two onward are one summary");
+    assert.ok(said.some((t) => t.includes("fourth: something else")));
+
+    const summarized = JSON.stringify(seen.ctx!.messages);
+    assert.match(summarized, /second: change b/, "the summarizer was sent turn two");
+    assert.match(summarized, /third: change c/, "and turn three");
+    assert.doesNotMatch(summarized, /first: change a/, "but not turn one");
+  });
+
+  it("the note reaches the summarizer's instructions", async () => {
+    const seen: { ctx?: ModelContext } = {};
+    const r = await run(["/rewind", "2", "4", "keep the shell edit in mind"], [summarizer(seen)]);
+    assert.equal(r.unusedSteps, 0, r.out);
+    assert.deepEqual(r.lines.prefilled, ["second: change b"]);
+    assert.equal(seen.ctx!.messages.length, 1, "a summarizer request: the turns and the instructions in one message");
+    const asked = JSON.stringify(seen.ctx!.messages);
+    assert.match(asked, /third: change c/);
+    assert.match(asked, /keep the shell edit in mind/);
+  });
+
+  it("the summarizer's usage is a calls row of phase compact; the summarized turns stay in the transcript", async () => {
+    const r = await run(["/rewind", "2", "4", ""], [summarizer({})]);
+    assert.equal(r.calls(), 7, "six turns' calls and the summarizer's");
+    assert.equal(r.compactCalls(), 1);
+    const show = r.show();
+    assert.match(show, /second: change b/);
+    assert.match(show, /third: change c/);
+    assert.match(show, /summariz/i);
   });
 });

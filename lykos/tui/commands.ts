@@ -92,8 +92,8 @@ export const BUILTIN_COMMANDS: readonly CommandSpec[] = [
   { name: "/copy", costClass: "local", description: "last assistant message", source: "builtin" },
   // T267: read from the transcript, so it costs nothing.
   { name: "/export", costClass: "local", description: "this session as Markdown — to a file, or the clipboard", source: "builtin" },
-  // T263: also Esc Esc on an empty input. Local: no model call.
-  { name: "/rewind", costClass: "local", description: "go back to an earlier prompt — code, conversation, or both", source: "builtin" },
+  // T263: also Esc Esc on an empty input. Local: no model call, but for a summarize (T265).
+  { name: "/rewind", costClass: "local", description: "go back to an earlier prompt — code, conversation, both (free), or summarize from it (a model call)", source: "builtin" },
   { name: "/verbose", costClass: "local", description: "expand/collapse tool results", source: "builtin" },
   { name: "/thinking", costClass: "local", description: "show/hide reasoning blocks", source: "builtin" },
   // Reasoning effort is a per-request parameter, not part of the frozen

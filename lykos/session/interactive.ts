@@ -128,7 +128,7 @@ import { setStderrSink, stdoutWrite, stderrWrite } from "../tui/io-mode.js";
 import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
-import { REWIND_RESTORES, rewindPointLabel, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
+import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
 import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type SystemPart } from "../tui/s0.js";
 import { runInteractiveSurface } from "../tui/interactive-surface.js";
 import { effortToken } from "../tui/effort.js";
@@ -741,7 +741,12 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     chrome(["restore what? (Enter cancels)", ...REWIND_RESTORES.map((r, i) => `  ${i + 1}  ${r.label}`)].join("\n"));
     const which = await ask();
     const restore = which !== undefined ? REWIND_RESTORES[which]?.restore : undefined;
-    return restore === undefined ? undefined : { index, restore };
+    if (restore !== "summarize") return restore === undefined ? undefined : { index, restore };
+    // T265: the note is optional, so an empty line here is no note rather than a cancel.
+    chrome(`${SUMMARIZE_NOTE_PROMPT}; Enter for none`);
+    const note = (await nextLine())?.trim();
+    consumeLine();
+    return { index, restore, ...(note ? { note } : {}) };
   }
 
   async function handleOwned(
@@ -877,7 +882,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
           chrome("rewind cancelled; nothing was changed");
           return "ok";
         }
-        const report = await opts.rewind.rewind(session, choice.index, choice.restore, opts.recorder);
+        const report = await opts.rewind.rewind(session, choice.index, choice.restore, opts.recorder, choice.note);
         chrome(report.lines.join("\n"));
         if (report.inputText !== undefined) {
           if (lineSource.prefill) lineSource.prefill(report.inputText);

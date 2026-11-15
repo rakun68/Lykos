@@ -262,14 +262,20 @@ export interface RecoveryEvent {
  */
 export interface RewindEvent {
   kind: "rewind";
-  /** What was put back. */
-  restore: "both" | "conversation" | "code";
+  /** What was put back. T265: `summarize` is the conversation, with the turns from the prompt on as one summary. */
+  restore: "both" | "conversation" | "code" | "summarize";
   /** The prompt rewound to, as typed. */
   prompt: string;
   /** The session-wide turn that prompt started: the turn rewound to. Absent when it started none. */
   to_turn?: number;
-  /** The undone branch, first and last turn. Absent when the conversation was not rewound. */
+  /** The undone branch, first and last turn. Absent when the conversation was not rewound, or was summarized. */
   undone_turns?: [number, number];
+  /** T265: the turns a summarize replaced in context with `summary`, first and last. They stay above this event. */
+  summarized_turns?: [number, number];
+  /** T265: the person's note to the summarizer. Absent when none was typed. */
+  note?: string;
+  /** T265: the summary the model is sent in place of `summarized_turns`. */
+  summary?: string;
   /** The checkpoint the tree was restored from. Absent when the code was not rewound. */
   checkpoint?: string;
   /** The checkpoint holding the tree as it was just before the restore. Absent when the code was not rewound. */
