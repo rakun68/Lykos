@@ -128,7 +128,7 @@ import { setStderrSink, stdoutWrite, stderrWrite } from "../tui/io-mode.js";
 import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
-import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
+import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
 import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type SystemPart } from "../tui/s0.js";
 import { runInteractiveSurface } from "../tui/interactive-surface.js";
 import { effortToken } from "../tui/effort.js";
@@ -306,6 +306,11 @@ export interface InteractiveLoopResult {
   resumeSessionId?: string;
   /** T266: `/fork` was typed. The loop ends this session; the caller continues in a copy of it, a new session. */
   forkRequested?: boolean;
+  /**
+   * T264: a rewind went back past this process's own prompts. The loop ends this session as `/exit` does; the
+   * caller rebuilds it from its transcript, which the rewind event has cut, with `inputText` in the input box.
+   */
+  rewindRebuild?: { inputText: string };
   /** T130: explicit browser action, not the refused `/new` command. */
   newRequested?: boolean;
   /** T129: close the current session after flushing its transcript. */
@@ -460,6 +465,8 @@ export interface RunInteractiveLoopOpts {
   credential?: (arg: string) => string;
   /** T263: this session's rewind (`booted.rewind`). Absent, `/rewind` says it is not available. */
   rewind?: LiveRewind;
+  /** T264: put in the input box before the first line is read (`ResumePlan.inputText`). */
+  inputText?: string;
   /**
    * T263: the surface's own picker — the full-screen overlay. Absent, the loop
    * asks on its line source: a numbered prompt, then a numbered restore.
@@ -507,6 +514,7 @@ export async function runInteractiveLoop(opts: RunInteractiveLoopOpts): Promise<
   /** T114: set when the session browser chose the row, so the caller does not ask again. */
   let resumeSessionId: string | undefined;
   let forkRequested = false;
+  let rewindRebuild: { inputText: string } | undefined;
   let newRequested = false;
   let closeRequested = false;
   /**
@@ -575,6 +583,12 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
   }
   function consumeLine(): void {
     pendingRead = undefined;
+  }
+
+  /** T263: a prompt back in the input box; the append-only surface, which has none, prints it. */
+  function putBack(text: string): void {
+    if (lineSource.prefill) lineSource.prefill(text);
+    else chrome(`your prompt, to send again or change:\n${text}`);
   }
 
   function sessionInfo(): string {
@@ -884,10 +898,12 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         }
         const report = await opts.rewind.rewind(session, choice.index, choice.restore, opts.recorder, choice.note);
         chrome(report.lines.join("\n"));
-        if (report.inputText !== undefined) {
-          if (lineSource.prefill) lineSource.prefill(report.inputText);
-          else chrome(`your prompt, to send again or change:\n${report.inputText}`);
+        // T264: the conversation is the transcript's now; the session that continues it puts the prompt back.
+        if (report.rebuild === true && report.inputText !== undefined) {
+          rewindRebuild = { inputText: report.inputText };
+          return "exit";
         }
+        if (report.inputText !== undefined) putBack(report.inputText);
         return "ok";
       }
       case "verbose": {
@@ -1136,7 +1152,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     // T53: recorded after the budget guard, because a blocked turn is not a
     // turn — nothing was sent, and a transcript that claimed otherwise would
     // replay a prompt the model never saw.
-    opts.recorder?.userMessage(text);
+    opts.recorder?.userMessage(text, rawText);
     // T263: the prompt as typed, so a rewind can put it back in the input box.
     opts.rewind?.promptSent(session, rawText);
     turnRunning = true;
@@ -1150,6 +1166,9 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       return false;
     }
   }
+
+  // T264: a session rebuilt by a rewind past a resume starts with the prompt it went back to.
+  if (opts.inputText !== undefined) putBack(opts.inputText);
 
   while (true) {
     const line = initialPrompt ?? (await nextLine());
@@ -1302,6 +1321,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     ...(resumeRequested ? { resumeRequested: true } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
     ...(forkRequested ? { forkRequested: true } : {}),
+    ...(rewindRebuild !== undefined ? { rewindRebuild } : {}),
     ...(humanName !== undefined
       ? { sessionName: humanName, nameIsHuman: true }
       : derivedName !== undefined
@@ -1356,6 +1376,15 @@ export interface ResumePlan {
    * `fork?.sessionId ?? fromSessionId`.
    */
   fork?: { sessionId: string; turn?: number; records: readonly TranscriptRecord[] };
+  /**
+   * T264: the turn this process starts at, one past the highest in the transcript it continues, so a turn
+   * number names one turn across the session's processes. Absent, it starts at 0, as before T264.
+   */
+  firstTurn?: number;
+  /** T264: the prompts on the active branch before this process, which the rewind picker offers too. */
+  earlierPrompts?: readonly EarlierPrompt[];
+  /** T264: what goes back in the input box when the session starts: a rewind past a resume's prompt. */
+  inputText?: string;
 }
 
 export interface RunInteractiveStandaloneSessionInput {
@@ -1452,6 +1481,8 @@ export type RunInteractiveStandaloneSessionResult =
       resumeSessionId?: string;
       /** T266: the session ended because `/fork` was typed. The caller forks it. */
       forkRequested?: boolean;
+      /** T264: a rewind went back past this process's prompts. The caller resumes the session, `inputText` in its input box. */
+      rewindRebuild?: { inputText: string };
       newRequested?: boolean;
       closeRequested?: boolean;
       /** T109: the context threshold requested a disk-rebuilt successor. */
@@ -1552,6 +1583,7 @@ export async function bootInteractiveSession(
           // T152: an unfinished self-compact handoff finishes in the resumed session.
           resumeHandoffFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           sessionIdOverride: input.resume.fork?.sessionId ?? input.resume.fromSessionId,
+          ...(input.resume.firstTurn !== undefined ? { firstTurn: input.resume.firstTurn } : {}),
         }
       : shared.containment !== undefined && shared.containment.record.used !== "off" && shared.containedSessionId !== undefined
         ? { sessionIdOverride: shared.containedSessionId }
@@ -1732,8 +1764,11 @@ export async function injectReplay(
   session: InteractiveSession,
   recorder: LiveTranscriptRecorder | undefined,
   plan: ResumePlan,
+  rewind?: LiveRewind,
 ): Promise<void> {
   recorder?.continues(plan);
+  // T264: the prompts before this process, so the rewind picker reaches them too.
+  rewind?.continues(plan);
   await session.sendCustomMessage?.(
     { customType: "lykos_resume", content: plan.replayText, display: false },
     { triggerTurn: false },
@@ -2102,6 +2137,7 @@ export async function finishInteractiveSession(opts: {
     ...(loopResult.resumeRequested ? { resumeRequested: true } : {}),
     ...(loopResult.resumeSessionId !== undefined ? { resumeSessionId: loopResult.resumeSessionId } : {}),
     ...(loopResult.forkRequested ? { forkRequested: true } : {}),
+    ...(loopResult.rewindRebuild !== undefined ? { rewindRebuild: loopResult.rewindRebuild } : {}),
     ...(loopResult.newRequested ? { newRequested: true } : {}),
     ...(loopResult.closeRequested ? { closeRequested: true } : {}),
   };

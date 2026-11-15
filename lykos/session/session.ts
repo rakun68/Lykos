@@ -1574,6 +1574,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
           resumeTaskListFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           resumeHandoffFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           sessionIdOverride: input.resume.fork?.sessionId ?? input.resume.fromSessionId,
+          ...(input.resume.firstTurn !== undefined ? { firstTurn: input.resume.firstTurn } : {}),
         }
       : (containment !== undefined && containment.record.used !== "off") ||
           ((input.workTree !== undefined || input.sessionId !== undefined) && input.continuation === undefined)

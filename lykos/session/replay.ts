@@ -25,6 +25,8 @@
 //  - a tool result `lykos-prune` overwrote, as the notice the model was sent
 //    in its place (T188), and one a `lykos-shake` dropped, as the shake's
 //    notice (T193),
+//  - a summarize's summary (T265), where it stands on the active branch, in
+//    place of the turns it summarized,
 //  - `compaction` markers, because everything before one was already
 //    summarised once and a reader that does not know that will
 //    over-interpret the earlier turns.
@@ -190,6 +192,13 @@ export function buildReplay(
         // T152: never clipped — the note is what the agent chose to keep.
         lines.push(`[note to self, returned after compaction] ${record.note}`);
         events += 1;
+        break;
+      case "rewind":
+        // T265/T264: on an active branch, a summarize stands where the turns it summarized were.
+        if (record.restore === "summarize" && record.summary !== undefined) {
+          lines.push(`[summary of the conversation from here, which the user summarized] ${record.summary}`);
+          events += 1;
+        }
         break;
       case "answer":
         lines.push(`[user answered "${record.question}"] ${record.answer}`);

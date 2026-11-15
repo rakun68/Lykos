@@ -68,7 +68,8 @@ export interface EventSource {
  * to run.
  */
 export interface TranscriptRecorder {
-  userMessage(text: string): void;
+  /** T264: `typed`, the prompt as typed, when `text` (as sent) differs from it. */
+  userMessage(text: string, typed?: string): void;
   steer(text: string, mode?: "steer" | "follow_up"): void;
   answer(question: string, answer: string): void;
   intervention(action: string, detail?: string): void;
@@ -120,8 +121,13 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
   private cutOffKey: object | undefined;
   /** T146: each running call's arguments, so its result can say whether it changed a file. */
   private toolCallArgs = new Map<string, unknown>();
-  /** T146: the next `turn_start`'s number — the same session-wide count the harness writes on checkpoints. */
+  /** T146: the next `turn_start`'s number — the same session-wide count the harness writes on checkpoints. T264: a resumed process continues it (`continues`). */
   private nextTurn = 0;
+  /**
+   * T264: the checkpoint turn `turn` started from (`LiveRewind.checkpointOf`). Pi tells the extensions of a
+   * turn start before its subscribers, so the harness has taken it by the time this asks.
+   */
+  checkpointOf?: (turn: number) => string | undefined;
   /** T238: turns ended, written to `live.json` at each turn end. A resumed session continues its count. */
   private turnsEnded: number;
 
@@ -157,8 +163,8 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
     this.writer.append(event);
   }
 
-  userMessage(text: string): void {
-    this.append({ kind: "user_message", text });
+  userMessage(text: string, typed?: string): void {
+    this.append({ kind: "user_message", text, ...(typed !== undefined && typed !== text ? { typed } : {}) });
   }
 
   steer(text: string, mode: "steer" | "follow_up" = "steer"): void {
@@ -185,6 +191,7 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
    * `outcome` lines are not copied: they are facts about the parent's calls and row, which stay the parent's.
    */
   continues(plan: ResumePlan): void {
+    if (plan.firstTurn !== undefined) this.nextTurn = plan.firstTurn;
     for (const { ts_utc, turn_index: _turnIndex, ...event } of plan.fork?.records ?? []) {
       if (event.kind === "usage" || event.kind === "outcome") continue;
       this.writer.append(event as TranscriptEventInput, new Date(ts_utc));
@@ -238,9 +245,12 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
     return source.subscribe((raw) => {
       const ev = raw as AgentEventish;
       switch (ev.type) {
-        case "turn_start":
-          this.append({ kind: "turn_start", turn: this.nextTurn++ });
+        case "turn_start": {
+          const turn = this.nextTurn++;
+          const checkpoint = this.checkpointOf?.(turn);
+          this.append({ kind: "turn_start", turn, ...(checkpoint !== undefined ? { checkpoint } : {}) });
           break;
+        }
         case "turn_end":
           this.turnsEnded += 1;
           recordLiveTurns(this.ledgerPath, this.sessionId, this.turnsEnded);

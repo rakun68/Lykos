@@ -30,7 +30,7 @@ import { estimateTokensChars4 } from "../ledger/tool-schema.js";
 import { currentGitCommit } from "./identity.js";
 import { hostGit } from "../git/host-git.js";
 import { buildReplay, interruptedToolCalls, type ReplayBundle, type TranscriptRecord } from "./replay.js";
-import { activeBranch } from "./active-branch.js";
+import { activeBranch, nextTurn } from "./active-branch.js";
 import {
   readSessionMeta,
   readTranscript,
@@ -92,10 +92,12 @@ export interface ResumePreflight {
   /** T238: present when the earlier run did not end cleanly. Its text is the last part of `replay`. */
   recovery?: Omit<RecoveryEvent, "kind">;
   /**
-   * T266: with `activeBranch`, the records `replay` was built from — the transcript without the turns a
-   * rewind undid — and the last turn on them. Absent when the transcript could not be read.
+   * T266: the records `replay` was built from — the transcript without the turns a rewind undid (T264: a
+   * resume's too, not only a fork's) — and the last turn on them. Absent when the transcript could not be read.
    */
   branch?: { records: TranscriptRecord[]; turn?: number };
+  /** T264: the turn the continuing process starts at: one past the highest in the whole transcript. */
+  nextTurn?: number;
 }
 
 export interface PreflightInput {
@@ -114,8 +116,8 @@ export interface PreflightInput {
   allowMissingFiles?: boolean;
   /** Priced at this instant, because DeepSeek's peak window doubles the base rate. */
   now?: Date;
-  /** T266: replay, and price, only the active branch — a fork's. A resume still replays the whole transcript. */
-  activeBranch?: boolean;
+  /** T266: the preflight is a fork's, which it says. Both replay, and price, only the active branch (T264). */
+  fork?: boolean;
 }
 
 interface SessionRow {
@@ -384,7 +386,7 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
     recovery = recoveryState(workspace, interrupted);
   }
   let branch: ResumePreflight["branch"];
-  if (records.length > 0 && input.activeBranch === true) {
+  if (records.length > 0) {
     const kept = activeBranch(records);
     let turn: number | undefined;
     for (const r of kept) if (r.kind === "turn_start") turn = r.turn;
@@ -398,7 +400,7 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
     replay = buildReplay(row.id, [...(branch?.records ?? records), ...tail]);
     const ref = splitModel(modelSpec);
     const tokens = estimateTokensChars4(replay.text);
-    const replaying = input.activeBranch === true ? "forking replays" : "resuming replays";
+    const replaying = input.fork === true ? "forking replays" : "resuming replays";
     if (ref) {
       cost = priceReplay(ref.provider, ref.model, tokens, now);
       checks.push({
@@ -506,6 +508,7 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
     meta,
     ...(recovery !== undefined ? { recovery } : {}),
     ...(branch !== undefined ? { branch } : {}),
+    ...(records.length > 0 ? { nextTurn: nextTurn(records) } : {}),
   };
 }
 

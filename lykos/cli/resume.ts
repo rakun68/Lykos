@@ -61,6 +61,7 @@ import { sessionModelPath } from "../delegate/session-base.js";
 
 import { preflightResume, formatPreflight, type ResumePreflight } from "../session/resume-preflight.js";
 import type { ResumePlan } from "../session/interactive.js";
+import { earlierPrompts } from "../session/rewind.js";
 import type { LineSource } from "../session/interactive.js";
 import { stdoutWrite } from "../tui/io-mode.js";
 
@@ -82,9 +83,20 @@ export interface ResumeOptions {
   lineSource?: LineSource;
   /** Called with the reason, once, whenever resume refuses or is declined, in addition to saying it on stderr. A caller with no one reading stderr (an MCP continuation) reports it itself. */
   onRefusal?: (reason: string) => void;
+  /** T264: what goes in the input box when the session starts: the prompt a rewind past a resume went back to. */
+  inputText?: string;
   /** Injected by tests so no real agent is booted. */
-  launch?: (input: LaunchInput) => Promise<{ status: "ok" | "error"; sessionId?: string; message?: string; forkRequested?: boolean }>;
+  launch?: (input: LaunchInput) => Promise<LaunchResult>;
   now?: Date;
+}
+
+export interface LaunchResult {
+  status: "ok" | "error";
+  sessionId?: string;
+  message?: string;
+  forkRequested?: boolean;
+  /** T264: a rewind went back past this process's prompts: rebuild the session from its transcript. */
+  rewindRebuild?: { inputText: string };
 }
 
 export interface LaunchInput {
@@ -187,6 +199,8 @@ export function planFromPreflight(
     priceVersion: pre.cost?.priceVersion ?? null,
     flags: { promptDiet: flags.promptDiet, outputDiet: flags.outputDiet, overridden: flags.overridden },
     ...(pre.recovery !== undefined ? { recovery: pre.recovery } : {}),
+    ...(pre.nextTurn !== undefined ? { firstTurn: pre.nextTurn } : {}),
+    ...(pre.branch !== undefined ? { earlierPrompts: earlierPrompts(pre.branch.records) } : {}),
   };
 }
 
@@ -248,7 +262,7 @@ export async function runResume(
       workspace: cwd,
       ...(opts?.force ? { allowMissingFiles: true } : {}),
       ...(opts?.now !== undefined ? { now: opts.now } : {}),
-      ...(opts?.fork === true ? { activeBranch: true } : {}),
+      ...(opts?.fork === true ? { fork: true } : {}),
     });
 
     stdoutWrite(`lykos resume${opts?.fork === true ? " --fork" : ""}  ${sessionId}\n`);
@@ -290,6 +304,7 @@ export async function runResume(
       // parent's `Agent` tool is never restored.
       isChild: identity.execution_shape === "subagent" || identity.parent_session_id !== null,
     });
+    if (opts?.inputText !== undefined) plan.inputText = opts.inputText;
     if (opts?.fork === true) {
       // T266: the parent's task is kept, so the task's cost sums both sessions.
       plan.fork = {
@@ -319,7 +334,7 @@ export async function runResume(
 
   const launch =
     opts?.launch ??
-    (async (input: LaunchInput) => {
+    (async (input: LaunchInput): Promise<LaunchResult> => {
       const { runInteractiveStandaloneSession } = await import("../session/interactive.js");
       const result = await runInteractiveStandaloneSession({
         workspace: input.workspace,
@@ -336,8 +351,13 @@ export async function runResume(
         resume: input.resume,
       });
       return result.status === "ok"
-        ? { status: "ok" as const, sessionId: result.sessionId, ...(result.forkRequested ? { forkRequested: true } : {}) }
-        : { status: "error" as const, message: result.message };
+        ? {
+            status: "ok",
+            sessionId: result.sessionId,
+            ...(result.forkRequested ? { forkRequested: true } : {}),
+            ...(result.rewindRebuild !== undefined ? { rewindRebuild: result.rewindRebuild } : {}),
+          }
+        : { status: "error", message: result.message };
     });
 
   const result = await launch({ workspace: cwd, ledgerPath, model, resume: plan });
@@ -368,6 +388,10 @@ export async function runResume(
   // T266: `/fork` typed in the session this started: fork it, as `lykos run` does.
   if (result.forkRequested === true && result.sessionId !== undefined) {
     return runResume(cwd, ledgerPath, result.sessionId, { ...opts, fork: true });
+  }
+  // T264: a rewind past the resume wrote its event and ended the session; it continues as itself, from there.
+  if (result.rewindRebuild !== undefined && result.sessionId !== undefined) {
+    return runResume(cwd, ledgerPath, result.sessionId, { ...opts, fork: false, inputText: result.rewindRebuild.inputText });
   }
   return 0;
 }

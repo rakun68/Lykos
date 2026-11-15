@@ -215,10 +215,16 @@ one.
 _Avoid_: conversation, run, thread
 
 **Rewind**:
-A person taking a live session back to before one of its earlier prompts: its code, its
-conversation, or both. The session stays the same session; nothing is deleted and nothing can be
+A person taking a live session back to before one of its earlier prompts, those from before a resume
+included: its code, its conversation, or both. The session stays the same session; nothing is deleted and nothing can be
 redone. Only a person rewinds, never the agent.
 _Avoid_: undo, revert, reset, rollback
+
+**Turn number**:
+A turn's place in its session, counted from 0 across every process the session ran in, so one number
+names one turn even after a resume. Sessions recorded before this rule counted each process from 0
+again, and keep their numbers.
+_Avoid_: turn index, step
 
 **Undone branch**:
 The turns a conversation rewind took the session back past. They stay in the transcript and their

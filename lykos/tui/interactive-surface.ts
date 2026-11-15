@@ -348,7 +348,7 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
     ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
     ...(input.continuation !== undefined ? { continuation: input.continuation } : {}),
   });
-  if (input.resume) await injectReplay(session, recorder, input.resume);
+  if (input.resume) await injectReplay(session, recorder, input.resume, booted.rewind);
 
   const width = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 80;
   const capability = detectColorCapability({
@@ -460,6 +460,7 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
       login: credentialCommands.login,
       credential: credentialCommands.credential,
       rewind: booted.rewind,
+      ...(input.resume?.inputText !== undefined ? { inputText: input.resume.inputText } : {}),
     });
   } finally {
     stopRotationNotices();
@@ -954,7 +955,7 @@ Start carrying this plan out?`,
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       ...(input.continuation !== undefined ? { continuation: input.continuation } : {}),
     });
-    if (input.resume) await injectReplay(session, recorder, input.resume);
+    if (input.resume) await injectReplay(session, recorder, input.resume, booted.rewind);
 
     const headerInfo = {
       // T114: this is the only shape where the affordance is real — it is a
@@ -1569,6 +1570,7 @@ Start carrying this plan out?`,
         login: credentialCommands.login,
         credential: credentialCommands.credential,
         rewind: booted.rewind,
+        ...(input.resume?.inputText !== undefined ? { inputText: input.resume.inputText } : {}),
         pickRewind: (points) => rewindOverlay.open(currentHeight, points),
       });
     } finally {

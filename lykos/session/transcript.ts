@@ -89,7 +89,10 @@ export interface AssistantMessageEvent {
 /** T53: a prompt the human typed at the top level. Stream capture only — the snapshot path never saw one. */
 export interface UserMessageEvent {
   kind: "user_message";
+  /** As the model was sent it: with any notice Lykos put before it. */
   text: string;
+  /** T264: as the person typed it, when a notice was put before it; what a rewind puts back in the input box. */
+  typed?: string;
 }
 
 /**
@@ -163,13 +166,18 @@ export interface ToolResultEvent {
 
 /**
  * P4 T146: the start of a model turn, counted across the whole session from
- * 0. The same count the harness writes on that turn's checkpoint
+ * 0 — T264: across its processes too, a resumed one continuing the count. The same count the harness writes on that turn's checkpoint
  * (`Lykos-Turn:`), which is what ties a turn that changed files to the
  * checkpoint taken before it. Stream capture only.
  */
 export interface TurnStartEvent {
   kind: "turn_start";
   turn: number;
+  /**
+   * T264: the checkpoint holding the tree this turn started from — the one written then, or the ref's tip when
+   * nothing had changed — so a later process can rewind the code to it. Absent before T264, or with no checkpoints.
+   */
+  checkpoint?: string;
 }
 
 /**

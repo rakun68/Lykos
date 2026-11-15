@@ -172,6 +172,8 @@ export interface HarnessExtensionOpts {
    * checkpointing, or git failed). The live session's rewind reads it.
    */
   onTurnStart?: (turn: number, checkpoint: string | undefined) => void;
+  /** T264: the first turn's number: a resumed process continues the session's count. Absent, 0. */
+  firstTurn?: number;
   /**
    * T105: the hook surface. Present → `pre_tool` runs on Pi's `tool_call`
    * event (which sees every tool, including the `read` that
@@ -237,7 +239,7 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
   const events = opts.events ?? NULL_EVENT_SINK;
   // T146: outside the factory so a reload of the extension does not restart the count.
   const checkpointTurns: { next: number; unstamped: { turn: number; tree: string } | undefined } = {
-    next: 0,
+    next: opts.firstTurn ?? 0,
     unstamped: undefined,
   };
   // T105: notes raised by a `pre_tool` hook, waiting for a result to ride on.

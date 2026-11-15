@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { activeBranch } from "./active-branch.js";
+import { earlierPrompts } from "./rewind.js";
 import { LiveTranscriptRecorder } from "./live-capture.js";
-import type { TranscriptRecord } from "./replay.js";
+import type { ResumePlan } from "./interactive.js";
+import { buildReplay, type TranscriptRecord } from "./replay.js";
 import { readTranscript, transcriptFilePath } from "./transcript.js";
 
 /** One process's recorder on a session's transcript, fed the event shapes Pi's `AgentSession` emits. */
@@ -36,6 +38,11 @@ function records(ledgerPath: string, sessionId: string): TranscriptRecord[] {
 
 function said(branch: readonly TranscriptRecord[]): string[] {
   return branch.flatMap((r) => (r.kind === "user_message" || r.kind === "assistant_message" ? [r.text] : []));
+}
+
+/** A resume's plan with nothing to replay, for a recorder to continue. */
+function plan(sessionId: string): ResumePlan {
+  return { fromSessionId: sessionId, replayText: "", replayEvents: 0, replayUserTurns: 0, estimateTokens: 0, estimateUsd: null, priceVersion: null };
 }
 
 function tempLedgerPath(): string {
@@ -77,6 +84,42 @@ describe("activeBranch", () => {
     assert.deepEqual(said(activeBranch(records(ledgerPath, "s3"))), ["before the resume", "zero"]);
   });
 
+  it("carries a summarize's summary in place of the turns it summarized, as the live session has it", () => {
+    const ledgerPath = tempLedgerPath();
+    const p = liveProcess(ledgerPath, "s5");
+    p.prompt("first", "one");
+    p.prompt("second", "two");
+    p.prompt("third", "three");
+    p.recorder.rewind({ restore: "summarize", prompt: "second", to_turn: 1, summarized_turns: [1, 2], summary: "SUMMARY of two and three" });
+    p.prompt("fourth", "four");
+
+    const branch = activeBranch(records(ledgerPath, "s5"));
+    assert.deepEqual(said(branch), ["first", "one", "fourth", "four"]);
+    const replay = buildReplay("s5", branch).text;
+    assert.match(replay, /SUMMARY of two and three/);
+    assert.ok(replay.indexOf("[user] first") < replay.indexOf("SUMMARY") && replay.indexOf("SUMMARY") < replay.indexOf("[user] fourth"));
+    assert.doesNotMatch(replay, /second|third/);
+  });
+
+  it("cuts at a turn from before a resume: turns are numbered across the session's processes", () => {
+    const ledgerPath = tempLedgerPath();
+    const first = liveProcess(ledgerPath, "s6");
+    first.prompt("one", "a");
+    first.prompt("two", "b");
+    const resumed = liveProcess(ledgerPath, "s6");
+    resumed.recorder.continues({ ...plan("s6"), firstTurn: 2 });
+    resumed.prompt("three", "c");
+    resumed.recorder.rewind({ restore: "both", prompt: "two", to_turn: 1, undone_turns: [1, 2], checkpoint: "c", safety_checkpoint: "d" });
+
+    const branch = records(ledgerPath, "s6");
+    assert.deepEqual(
+      branch.flatMap((r) => (r.kind === "turn_start" ? [r.turn] : [])),
+      [0, 1, 2],
+      "the resumed process numbers its turns after the earlier ones",
+    );
+    assert.deepEqual(said(activeBranch(branch)), ["one", "a"]);
+  });
+
   it("rewinds twice: the second rewind counts on the branch the first left", () => {
     const ledgerPath = tempLedgerPath();
     const p = liveProcess(ledgerPath, "s4");
@@ -88,5 +131,36 @@ describe("activeBranch", () => {
     p.recorder.rewind({ restore: "conversation", prompt: "fourth", to_turn: 3, undone_turns: [3, 3] });
 
     assert.deepEqual(said(activeBranch(records(ledgerPath, "s4"))), ["first", "one", "third", "three"]);
+  });
+});
+
+describe("earlierPrompts", () => {
+  it("offers each prompt of the branch with the turn it started and that turn's checkpoint", () => {
+    const ledgerPath = tempLedgerPath();
+    const p = liveProcess(ledgerPath, "e1");
+    p.recorder.checkpointOf = (turn) => `checkpoint-${turn}`;
+    p.recorder.userMessage("Notice.\n\none", "one");
+    p.prompt("two", "b");
+
+    const offered = earlierPrompts(activeBranch(records(ledgerPath, "e1")));
+    assert.deepEqual(offered, [{ text: "two", turn: 0, checkpoint: "checkpoint-0" }], "a prompt that started no turn is not offered");
+  });
+
+  it("leaves out a turn whose number a later process of a transcript from before T264 used again", () => {
+    const ledgerPath = tempLedgerPath();
+    const first = liveProcess(ledgerPath, "e2");
+    first.prompt("one", "a");
+    first.prompt("two", "b");
+    const legacy = liveProcess(ledgerPath, "e2");
+    legacy.recorder.resumeMarker({ from: "e2", events: 4, user_turns: 2, estimate_tokens: 10, estimate_usd: null, price_version: null });
+    legacy.prompt("three", "c");
+
+    assert.deepEqual(
+      earlierPrompts(activeBranch(records(ledgerPath, "e2"))).map((p) => [p.text, p.turn]),
+      [
+        ["two", 1],
+        ["three", 0],
+      ],
+    );
   });
 });

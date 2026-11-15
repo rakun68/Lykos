@@ -60,7 +60,9 @@ run`. A session that predates the per-run record shows only the ledger's run and
 ### 2.1 Resumption Semantics
 Invoking `lykos resume <session-id>` continues the designated session directly:
 1. `meta.json` is validated to ensure workspace and git commit coherence.
-2. The transcript is replayed into `createAgentSession` context up to the last turn.
+2. The transcript's active branch — without the turns a rewind undid, a summarize's summary in
+   place of the turns it summarized (§2.2.1) — is replayed into `createAgentSession` context, after
+   the ordinary frozen head, up to the last turn (T264; before it, a resume replayed every turn).
 3. Subsequent turns append new events directly to `transcript.jsonl`.
 4. Subsequent model calls record to the existing session in `.lykos/ledger.db`.
 
@@ -104,12 +106,18 @@ written to its transcript.
 - `lykos sessions` nests the fork under its parent and says `forked from <id> at turn <n>`;
   `lykos show` prints `forked from <id> at turn <n>` (`--json`: `forked_from`, `forked_from_turn`).
 
-A turn number is the parent's transcript's own (§2.2), counted afresh by each process, so after a
-resume the same number can name an earlier process's turn too.
+A turn number is the parent's transcript's own (§2.2): since T264 it names one turn across the
+parent's processes, and the fork's own turns are numbered after the parent's highest. A fork from
+before T264 keeps the number it recorded, which in a resumed parent can name more than one turn.
 
 ### 2.2 Turns, Edits and Checkpoints
 A stream transcript marks the start of every model turn with a `turn_start` event whose `turn` is
-counted from 0 across the whole session (Pi's own turn index restarts at each prompt). A
+counted from 0 across the whole session (Pi's own turn index restarts at each prompt), and since
+T264 across its processes: a resumed process starts one past the highest turn in the transcript, so
+a turn number names one turn of the session. A transcript from before T264 counts each process from
+0 again and is not renumbered. Since T264 `turn_start` also carries the `checkpoint` holding the tree
+the turn started from (the one taken then, or the ref's tip when nothing had changed), and a
+`user_message` with a notice put before the prompt carries the prompt as typed in `typed`. A
 `tool_result` for a successful file-changing call — by the tool registry's one declaration — carries
 `changes_files: true` and, when the call named one, the `path` it changed.
 
@@ -163,8 +171,16 @@ only, code only, summarize from here, or cancel. Only the person can rewind; the
   turns and prompts (`--json`: `rewinds`, with `undone` or `summarized`). The session keeps its id
   and its row.
 
-Only prompts sent by the running process are offered; a resumed session's replayed turns are not
-(T264). Resuming a session replays its whole transcript, undone turns included.
+**Past a resume (T264).** A resumed session's picker lists the prompts from before the resume too,
+read from its transcript's active branch, then its own. Choosing one of those rebuilds the session
+from its transcript: the code is restored as above, from the checkpoint its `turn_start` recorded;
+the `rewind` event is written (its `to_turn` cuts the active branch there); the session ends as
+`/exit` ends it and is resumed through `lykos resume`'s own preflight, under the same id and row, with
+the ordinary frozen head and the active branch replayed after it, and the prompt in the input box.
+Code only rebuilds nothing. Summarize from here is refused for those prompts: Pi's summarizer reads
+Pi's session tree, which holds only this process's turns. In a transcript from before T264, a turn
+whose number a later process used again is not offered, nor is a code restore for a turn whose
+`turn_start` recorded no checkpoint; nothing is backfilled.
 
 ### 2.3 Archival and Compression (`lykos archive`)
 Historical transcripts are compressed to `.gz` in place after passing the configured retention

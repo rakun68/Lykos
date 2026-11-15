@@ -28,10 +28,19 @@
 // reaches the ledger as a `compaction` call (`onSummarizerCall`), so it is a
 // `calls` row of phase `compact`; the files are not touched.
 //
-// Only prompts of this process are reachable; earlier ones (a resume's replay)
-// are T264.
+// PAST A RESUME (T264): a resumed session's earlier turns arrived as one
+// replayed message, so Pi's tree has no entry to move to. Its earlier prompts
+// come from the transcript's active branch instead (`earlierPrompts`), and the
+// picker lists them before this process's own. Choosing one writes the rewind
+// event, restores the code as above, and asks for a rebuild: the loop ends the
+// session as `/exit` does and `lykos resume` reopens it, same id, ordinary
+// frozen head, the active branch — which the event has cut at that prompt —
+// replayed after it, and the prompt in the input box. Summarize from here does
+// not reach past a resume: Pi's summarizer reads Pi's tree, which does not
+// hold those turns.
 
 import { createCheckpoint, restoreCheckpointByHash, shortHash } from "../loop/checkpoint.js";
+import type { TranscriptRecord } from "./replay.js";
 import type { RewindEvent } from "./transcript.js";
 
 /** What is put back: both, the conversation alone, or the files alone; or the conversation from the prompt on, summarized. */
@@ -109,6 +118,17 @@ export interface RewindReport {
   lines: string[];
   /** The prompt to put back in the input box: set when the conversation was rewound. */
   inputText?: string;
+  /** T264: the conversation went back past this process's own prompts; the session is rebuilt from its transcript. */
+  rebuild?: true;
+}
+
+/** T264: a prompt from before this process, as the transcript's active branch has it. */
+export interface EarlierPrompt {
+  text: string;
+  /** The session-wide turn it started. */
+  turn: number;
+  /** The checkpoint its first turn started from, as the transcript recorded it; absent before T264. */
+  checkpoint?: string;
 }
 
 interface PromptRecord extends RewindPoint {
@@ -120,7 +140,11 @@ interface PromptRecord extends RewindPoint {
 
 export class LiveRewind {
   private readonly prompts: PromptRecord[] = [];
+  private earlier: EarlierPrompt[] = [];
   private lastTurn: number | undefined;
+  private lastCheckpoint: string | undefined;
+  /** T264: the last turn before this process; undefined when there was none. */
+  private turnBefore: number | undefined;
   private readonly summarizerListeners = new Set<(call: SummarizerCall) => void>();
 
   /** `cwd` is the repository the session checkpoints; undefined when it takes none, and code cannot be restored. */
@@ -129,11 +153,23 @@ export class LiveRewind {
   /** The harness, at every turn start. The first turn after a prompt is that prompt's. */
   turnStarted(turn: number, checkpoint: string | undefined): void {
     this.lastTurn = turn;
+    this.lastCheckpoint = checkpoint;
     const latest = this.prompts[this.prompts.length - 1];
     if (latest !== undefined && latest.turn === undefined) {
       latest.turn = turn;
       latest.checkpoint = checkpoint;
     }
+  }
+
+  /** T264: the checkpoint turn `turn` started from, while it is the latest; the transcript writes it on its `turn_start`. */
+  checkpointOf(turn: number): string | undefined {
+    return turn === this.lastTurn ? this.lastCheckpoint : undefined;
+  }
+
+  /** T264: a resumed session's prompts from before this process, and the turn it starts at. */
+  continues(plan: { earlierPrompts?: readonly EarlierPrompt[]; firstTurn?: number }): void {
+    this.earlier = [...(plan.earlierPrompts ?? [])];
+    this.turnBefore = plan.firstTurn !== undefined && plan.firstTurn > 0 ? plan.firstTurn - 1 : undefined;
   }
 
   /** The loop, just before it sends a prompt the person typed. */
@@ -147,9 +183,9 @@ export class LiveRewind {
     return () => this.summarizerListeners.delete(listener);
   }
 
-  /** The prompts still on the conversation, oldest first. */
+  /** The prompts still on the conversation, oldest first: T264's from before this process, then its own. */
   points(): readonly RewindPoint[] {
-    return this.prompts.map(({ text, turn }) => ({ text, turn }));
+    return [...this.earlier, ...this.prompts].map(({ text, turn }) => ({ text, turn }));
   }
 
   /**
@@ -163,7 +199,9 @@ export class LiveRewind {
     recorder?: RewindRecorder,
     note?: string,
   ): Promise<RewindReport> {
-    const prompt = this.prompts[index];
+    if (index < this.earlier.length) return this.rewindEarlier(index, restore, recorder);
+    const live = index - this.earlier.length;
+    const prompt = this.prompts[live];
     if (prompt === undefined) return { ok: false, lines: [`lykos: no prompt ${index + 1} to rewind to`] };
     const code = restore === "both" || restore === "code";
     const conversation = restore !== "code";
@@ -178,32 +216,14 @@ export class LiveRewind {
         return { ok: false, lines: ["lykos: this session cannot rewind its conversation; nothing was changed"] };
       }
     }
-    if (code && (this.cwd === undefined || prompt.checkpoint === undefined)) {
-      return {
-        ok: false,
-        lines: [
-          this.cwd === undefined
-            ? "lykos: this session takes no checkpoints (not a git repository), so its code cannot be rewound; nothing was changed"
-            : "lykos: no checkpoint holds the tree from before that prompt; nothing was changed",
-        ],
-      };
-    }
+    const refused = code ? this.codeRefusal(prompt.checkpoint) : undefined;
+    if (refused !== undefined) return refused;
 
     let safety: string | undefined;
     if (code) {
-      // The safety checkpoint is taken here rather than left to the restore, which
-      // writes none when the tree is already checkpointed: either way the person is
-      // told which checkpoint holds the tree they had.
-      const before = createCheckpoint({ cwd: this.cwd! }, `before rewind to ${shortHash(prompt.checkpoint!)}`);
-      if (before.status === "skipped") return { ok: false, lines: [`lykos: rewind failed — ${before.reason}; nothing was changed`] };
-      safety = before.commit;
-      const restored = restoreCheckpointByHash({ cwd: this.cwd! }, prompt.checkpoint!);
-      if (restored.status === "error") return { ok: false, lines: [`lykos: rewind failed — ${restored.message}; nothing was changed`] };
-      lines.push(`rewound the code to checkpoint ${shortHash(restored.commit)}, from before prompt ${index + 1}`);
-      lines.push(`  the tree you had is checkpoint ${shortHash(safety)} — \`lykos rewind ${shortHash(safety)}\` puts it back`);
-      if (restored.extras.length > 0) {
-        lines.push(`  ${restored.extras.length} file(s) the checkpoint did not have were left in place: ${restored.extras.join(", ")}`);
-      }
+      const restored = this.restoreCode(prompt.checkpoint!, index, lines);
+      if (typeof restored !== "string") return restored;
+      safety = restored;
     }
 
     const range =
@@ -251,7 +271,7 @@ export class LiveRewind {
       } else {
         lines.push(`rewound the conversation to before prompt ${index + 1}; ${turns} stay in the transcript as an undone branch`);
       }
-      this.prompts.length = index;
+      this.prompts.length = live;
       inputText = prompt.text;
     }
 
@@ -268,6 +288,106 @@ export class LiveRewind {
     });
     return { ok: true, lines, ...(inputText !== undefined ? { inputText } : {}) };
   }
+
+  /**
+   * T264: rewinds to before a prompt from before this process. The code is restored here, as for this
+   * process's own; the conversation is the transcript's, so the event that cuts it is written and the
+   * session asks to be rebuilt from it.
+   */
+  private rewindEarlier(index: number, restore: RewindRestore, recorder: RewindRecorder | undefined): RewindReport {
+    const prompt = this.earlier[index]!;
+    if (restore === "summarize") {
+      return {
+        ok: false,
+        lines: [
+          "lykos: summarize from here reaches only the prompts sent since this session was resumed; " +
+            "rewind the conversation to that prompt instead; nothing was changed",
+        ],
+      };
+    }
+    const code = restore !== "conversation";
+    const conversation = restore !== "code";
+    const refused = code ? this.codeRefusal(prompt.checkpoint) : undefined;
+    if (refused !== undefined) return refused;
+    const lines: string[] = [];
+    let safety: string | undefined;
+    if (code) {
+      const restored = this.restoreCode(prompt.checkpoint!, index, lines);
+      if (typeof restored !== "string") return restored;
+      safety = restored;
+    }
+    const last = this.lastTurn ?? this.turnBefore;
+    const range = last !== undefined && last >= prompt.turn ? ([prompt.turn, last] as [number, number]) : undefined;
+    if (conversation) {
+      const turns = range === undefined ? "its turns" : range[0] === range[1] ? `turn ${range[0]}` : `turns ${range[0]}-${range[1]}`;
+      lines.push(
+        `rewound the conversation to before prompt ${index + 1}, from before this session was resumed; ${turns} stay in the transcript as an undone branch`,
+      );
+      lines.push("  rebuilding the session from its transcript there, as `lykos resume` does");
+    }
+    recorder?.rewind?.({
+      restore,
+      prompt: prompt.text,
+      to_turn: prompt.turn,
+      ...(conversation && range !== undefined ? { undone_turns: range } : {}),
+      ...(code ? { checkpoint: prompt.checkpoint! } : {}),
+      ...(safety !== undefined ? { safety_checkpoint: safety } : {}),
+    });
+    return { ok: true, lines, ...(conversation ? { inputText: prompt.text, rebuild: true as const } : {}) };
+  }
+
+  /** Why the code cannot be rewound to `checkpoint`; undefined when it can. */
+  private codeRefusal(checkpoint: string | undefined): RewindReport | undefined {
+    if (this.cwd !== undefined && checkpoint !== undefined) return undefined;
+    return {
+      ok: false,
+      lines: [
+        this.cwd === undefined
+          ? "lykos: this session takes no checkpoints (not a git repository), so its code cannot be rewound; nothing was changed"
+          : "lykos: no checkpoint holds the tree from before that prompt; nothing was changed",
+      ],
+    };
+  }
+
+  /** Restores the tree from `checkpoint` after a safety checkpoint, whose hash it returns; a refusal when either fails. */
+  private restoreCode(checkpoint: string, index: number, lines: string[]): string | RewindReport {
+    // The safety checkpoint is taken here rather than left to the restore, which
+    // writes none when the tree is already checkpointed: either way the person is
+    // told which checkpoint holds the tree they had.
+    const before = createCheckpoint({ cwd: this.cwd! }, `before rewind to ${shortHash(checkpoint)}`);
+    if (before.status === "skipped") return { ok: false, lines: [`lykos: rewind failed — ${before.reason}; nothing was changed`] };
+    const restored = restoreCheckpointByHash({ cwd: this.cwd! }, checkpoint);
+    if (restored.status === "error") return { ok: false, lines: [`lykos: rewind failed — ${restored.message}; nothing was changed`] };
+    lines.push(`rewound the code to checkpoint ${shortHash(restored.commit)}, from before prompt ${index + 1}`);
+    lines.push(`  the tree you had is checkpoint ${shortHash(before.commit)} — \`lykos rewind ${shortHash(before.commit)}\` puts it back`);
+    if (restored.extras.length > 0) {
+      lines.push(`  ${restored.extras.length} file(s) the checkpoint did not have were left in place: ${restored.extras.join(", ")}`);
+    }
+    return before.commit;
+  }
+}
+
+/**
+ * T264: the prompts on an active branch (`activeBranch`) that started a turn, with the turn and the checkpoint
+ * it started from. A transcript from before T264 numbers each process's turns from 0, and nothing is
+ * renumbered: where a number repeats, only its latest turn is one a rewind can name, so the earlier ones are
+ * left out.
+ */
+export function earlierPrompts(branch: readonly TranscriptRecord[]): EarlierPrompt[] {
+  const latest = new Map<number, number>();
+  branch.forEach((r, i) => {
+    if (r.kind === "turn_start") latest.set(r.turn, i);
+  });
+  const out: EarlierPrompt[] = [];
+  let pending: string | undefined;
+  branch.forEach((r, i) => {
+    if (r.kind === "user_message") pending = r.typed ?? r.text;
+    else if (r.kind === "turn_start" && pending !== undefined) {
+      if (latest.get(r.turn) === i) out.push({ text: pending, turn: r.turn, ...(r.checkpoint !== undefined ? { checkpoint: r.checkpoint } : {}) });
+      pending = undefined;
+    }
+  });
+  return out;
 }
 
 /** How a picker shows one prompt: its first line, clipped, and the turn it started. */
