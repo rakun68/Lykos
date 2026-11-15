@@ -116,6 +116,11 @@ export interface SteerEvent {
 export interface ResumeEvent {
   kind: "resume";
   from: string;
+  /**
+   * T266: set when this session is a fork of `from` — a new session — rather than `from` continuing. The
+   * records above the marker are a copy of `from`'s active branch; `turn` is its last turn on it.
+   */
+  fork?: { turn?: number };
   events: number;
   user_turns: number;
   estimate_tokens: number;

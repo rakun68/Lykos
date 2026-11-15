@@ -30,6 +30,7 @@ import { estimateTokensChars4 } from "../ledger/tool-schema.js";
 import { currentGitCommit } from "./identity.js";
 import { hostGit } from "../git/host-git.js";
 import { buildReplay, interruptedToolCalls, type ReplayBundle, type TranscriptRecord } from "./replay.js";
+import { activeBranch } from "./active-branch.js";
 import {
   readSessionMeta,
   readTranscript,
@@ -90,6 +91,11 @@ export interface ResumePreflight {
   meta?: SessionMeta | null;
   /** T238: present when the earlier run did not end cleanly. Its text is the last part of `replay`. */
   recovery?: Omit<RecoveryEvent, "kind">;
+  /**
+   * T266: with `activeBranch`, the records `replay` was built from — the transcript without the turns a
+   * rewind undid — and the last turn on them. Absent when the transcript could not be read.
+   */
+  branch?: { records: TranscriptRecord[]; turn?: number };
 }
 
 export interface PreflightInput {
@@ -108,6 +114,8 @@ export interface PreflightInput {
   allowMissingFiles?: boolean;
   /** Priced at this instant, because DeepSeek's peak window doubles the base rate. */
   now?: Date;
+  /** T266: replay, and price, only the active branch — a fork's. A resume still replays the whole transcript. */
+  activeBranch?: boolean;
 }
 
 interface SessionRow {
@@ -375,14 +383,22 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   if (records.length > 0 && (row.ended_utc === null || interrupted.length > 0)) {
     recovery = recoveryState(workspace, interrupted);
   }
+  let branch: ResumePreflight["branch"];
+  if (records.length > 0 && input.activeBranch === true) {
+    const kept = activeBranch(records);
+    let turn: number | undefined;
+    for (const r of kept) if (r.kind === "turn_start") turn = r.turn;
+    branch = { records: kept, ...(turn !== undefined ? { turn } : {}) };
+  }
   if (records.length > 0) {
     const tail: TranscriptRecord[] =
       recovery !== undefined
         ? [{ kind: "recovery", ...recovery, ts_utc: now.toISOString(), turn_index: records.length }]
         : [];
-    replay = buildReplay(row.id, [...records, ...tail]);
+    replay = buildReplay(row.id, [...(branch?.records ?? records), ...tail]);
     const ref = splitModel(modelSpec);
     const tokens = estimateTokensChars4(replay.text);
+    const replaying = input.activeBranch === true ? "forking replays" : "resuming replays";
     if (ref) {
       cost = priceReplay(ref.provider, ref.model, tokens, now);
       checks.push({
@@ -390,8 +406,8 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
         verdict: "confirm",
         message:
           cost.usd === null
-            ? `resuming replays ${fmtTokens(tokens)} tokens; ${ref.provider}/${ref.model} is not in the price table, so the cost is unpriced`
-            : `resuming replays ${fmtTokens(tokens)} tokens ≈ ${fmtUsd(cost.usd)}` +
+            ? `${replaying} ${fmtTokens(tokens)} tokens; ${ref.provider}/${ref.model} is not in the price table, so the cost is unpriced`
+            : `${replaying} ${fmtTokens(tokens)} tokens ≈ ${fmtUsd(cost.usd)}` +
               (cost.rateWindow ? ` (${cost.rateWindow} rate)` : "") +
               (cost.writeIsPremium ? " — priced at the cache-write rate, which this provider charges a premium for" : ""),
       });
@@ -399,7 +415,7 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
       checks.push({
         id: "rebuild_cost",
         verdict: "warn",
-        message: `resuming replays ${fmtTokens(tokens)} tokens; no provider/model recorded, so it cannot be priced`,
+        message: `${replaying} ${fmtTokens(tokens)} tokens; no provider/model recorded, so it cannot be priced`,
       });
     }
   }
@@ -489,6 +505,7 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
     ...(cost !== undefined ? { cost } : {}),
     meta,
     ...(recovery !== undefined ? { recovery } : {}),
+    ...(branch !== undefined ? { branch } : {}),
   };
 }
 

@@ -42,10 +42,17 @@
 //    collect.
 //
 // What it explicitly does not do: resume a LIVE session (that is G13's
-// problem and is not in this phase), fork mid-conversation (`/fork`, `/tree`
-// are not in `02-plan.md` §6 and adding them here would be scope taken from
-// Phase 5), or touch the original in any way.
+// problem and is not in this phase), or touch the original in any way.
+//
+// T266: `--fork` (and `/fork`, which ends its session and lands here) runs the
+// same preflight on the session it names, then starts a NEW session that
+// continues a copy of it: its own id and row, `forked_from` the parent and its
+// last turn, the parent's task. The copy is the active branch — the turns a
+// rewind undid stay behind — and goes into the fork's own transcript ahead of
+// the marker. The parent's row is not reopened and its transcript is not
+// written to.
 
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { AGENT_TOOL_NAME, canonicalToolName } from "../tools/tool-surface.js";
 
@@ -69,12 +76,14 @@ export interface ResumeOptions {
   model?: string;
   /** Report the preflight and start nothing. */
   dryRun?: boolean;
+  /** T266: `--fork` — continue in a copy of the session, a new one, and leave the session as it is. */
+  fork?: boolean;
   /** Injected by tests; production reads the real terminal. */
   lineSource?: LineSource;
   /** Called with the reason, once, whenever resume refuses or is declined, in addition to saying it on stderr. A caller with no one reading stderr (an MCP continuation) reports it itself. */
   onRefusal?: (reason: string) => void;
   /** Injected by tests so no real agent is booted. */
-  launch?: (input: LaunchInput) => Promise<{ status: "ok" | "error"; sessionId?: string; message?: string }>;
+  launch?: (input: LaunchInput) => Promise<{ status: "ok" | "error"; sessionId?: string; message?: string; forkRequested?: boolean }>;
   now?: Date;
 }
 
@@ -239,9 +248,10 @@ export async function runResume(
       workspace: cwd,
       ...(opts?.force ? { allowMissingFiles: true } : {}),
       ...(opts?.now !== undefined ? { now: opts.now } : {}),
+      ...(opts?.fork === true ? { activeBranch: true } : {}),
     });
 
-    stdoutWrite(`lykos resume  ${sessionId}\n`);
+    stdoutWrite(`lykos resume${opts?.fork === true ? " --fork" : ""}  ${sessionId}\n`);
     stdoutWrite(`${formatPreflight(pre)}\n`);
 
     if (pre.overall === "refuse") {
@@ -280,6 +290,14 @@ export async function runResume(
       // parent's `Agent` tool is never restored.
       isChild: identity.execution_shape === "subagent" || identity.parent_session_id !== null,
     });
+    if (opts?.fork === true) {
+      // T266: the parent's task is kept, so the task's cost sums both sessions.
+      plan.fork = {
+        sessionId: randomUUID(),
+        ...(pre.branch?.turn !== undefined ? { turn: pre.branch.turn } : {}),
+        records: pre.branch?.records ?? [],
+      };
+    }
     // A substitute model is always the caller's explicit choice — the
     // preflight refuses rather than picking one.
     // The full path (`provider/model`) when one was recorded: the row's bare id can resolve to another provider.
@@ -293,7 +311,8 @@ export async function runResume(
     // This is the last thing done before booting and the first thing that
     // could be undone by a failed boot, which is the right order: every
     // check above can still refuse, and none of them has written anything.
-    ledger.reopenSession(sessionId);
+    // T266: a fork never reopens its parent: the parent stays as it ended.
+    if (opts?.fork !== true) ledger.reopenSession(sessionId);
   } finally {
     ledger.close();
   }
@@ -317,7 +336,7 @@ export async function runResume(
         resume: input.resume,
       });
       return result.status === "ok"
-        ? { status: "ok" as const, sessionId: result.sessionId }
+        ? { status: "ok" as const, sessionId: result.sessionId, ...(result.forkRequested ? { forkRequested: true } : {}) }
         : { status: "error" as const, message: result.message };
     });
 
@@ -345,6 +364,10 @@ export async function runResume(
     } finally {
       after.close();
     }
+  }
+  // T266: `/fork` typed in the session this started: fork it, as `lykos run` does.
+  if (result.forkRequested === true && result.sessionId !== undefined) {
+    return runResume(cwd, ledgerPath, result.sessionId, { ...opts, fork: true });
   }
   return 0;
 }

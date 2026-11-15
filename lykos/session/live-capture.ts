@@ -49,6 +49,7 @@ import {
   type SessionMeta,
   type TranscriptEventInput,
 } from "./transcript.js";
+import type { ResumePlan } from "./interactive.js";
 import { isFileChangingCall, resolveActualToolArgs } from "../tools/tool-call.js";
 import { readLiveSnapshot, recordLiveTurns } from "../ledger/live.js";
 import { SELF_COMPACT_NOTE_TYPE } from "../loop/self-compact.js";
@@ -175,6 +176,30 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
   /** T57: written before anything else on a resumed session, so the file explains itself from its first line. */
   resumeMarker(event: Omit<ResumeEvent, "kind">): void {
     this.append({ kind: "resume", ...event });
+  }
+
+  /**
+   * T57/T266: what a session continuing `plan` writes before anything of its own. A fork first copies its
+   * parent's active branch, each record at the time it was first written, so its transcript reads like a
+   * resumed one: the conversation it continues, the marker, then this process. The parent's `usage` and
+   * `outcome` lines are not copied: they are facts about the parent's calls and row, which stay the parent's.
+   */
+  continues(plan: ResumePlan): void {
+    for (const { ts_utc, turn_index: _turnIndex, ...event } of plan.fork?.records ?? []) {
+      if (event.kind === "usage" || event.kind === "outcome") continue;
+      this.writer.append(event as TranscriptEventInput, new Date(ts_utc));
+    }
+    this.resumeMarker({
+      from: plan.fromSessionId,
+      ...(plan.fork !== undefined ? { fork: plan.fork.turn !== undefined ? { turn: plan.fork.turn } : {} } : {}),
+      events: plan.replayEvents,
+      user_turns: plan.replayUserTurns,
+      estimate_tokens: plan.estimateTokens,
+      estimate_usd: plan.estimateUsd,
+      price_version: plan.priceVersion,
+      ...(plan.flags !== undefined ? { inherited_flags: plan.flags } : {}),
+    });
+    if (plan.recovery !== undefined) this.recovery(plan.recovery);
   }
 
   /** T263: a rewind of this live session, at the moment it happened. */

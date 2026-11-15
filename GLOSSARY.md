@@ -225,6 +225,15 @@ The turns a conversation rewind took the session back past. They stay in the tra
 calls stay in the session's cost; the model is no longer sent them.
 _Avoid_: deleted turns, discarded history, abandoned branch
 
+**Active branch**:
+A session's conversation as the model has it now: its transcript without the undone branches.
+_Avoid_: current branch, live history
+
+**Fork**:
+A new session that continues a copy of another session's active branch, on the same task. The
+session it was copied from is left as it was. A fork is a new session; a resume is not.
+_Avoid_: clone, branch, copy, duplicate
+
 **Export**:
 A session's conversation taken out of Lykos as Markdown: prompts, answers, and tool calls with their
 results. The archive keeps the session; an export is a copy for reading elsewhere.

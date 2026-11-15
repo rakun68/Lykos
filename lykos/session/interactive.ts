@@ -79,6 +79,7 @@ export const PLAN_CONTINUE_AUTO = "yes — continue in Auto";
 export const PLAN_CONTINUE_MANUAL = "yes — continue in Manual, approving each step";
 export const PLAN_STAY = "no — keep planning";
 import { transcriptDir, type RecoveryEvent } from "./transcript.js";
+import type { TranscriptRecord } from "./replay.js";
 import { sessionMarkdown } from "./export-markdown.js";
 import { builtinProviderDecls, cacheModelsPath, generateProviderConfig, specialistModelSpec, resolveBootModel } from "../config/providers.js";
 import { assertHostProviderUsable, assertSpecialistProviderUsable } from "../config/specialist-credentials.js";
@@ -303,6 +304,8 @@ export interface InteractiveLoopResult {
    * the row earlier.
    */
   resumeSessionId?: string;
+  /** T266: `/fork` was typed. The loop ends this session; the caller continues in a copy of it, a new session. */
+  forkRequested?: boolean;
   /** T130: explicit browser action, not the refused `/new` command. */
   newRequested?: boolean;
   /** T129: close the current session after flushing its transcript. */
@@ -503,6 +506,7 @@ export async function runInteractiveLoop(opts: RunInteractiveLoopOpts): Promise<
   let resumeRequested = false;
   /** T114: set when the session browser chose the row, so the caller does not ask again. */
   let resumeSessionId: string | undefined;
+  let forkRequested = false;
   let newRequested = false;
   let closeRequested = false;
   /**
@@ -770,6 +774,17 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         } else {
           chrome("leaving this session and opening the session browser");
         }
+        return "exit";
+      case "fork":
+        // T266: the same shape as `/resume` — this session is finalised on the
+        // way out, so the copy is of a session whose transcript and numbers are
+        // complete, and the caller starts the fork as a new row.
+        if (!session.isIdle) {
+          chrome("lykos: /fork cannot run while a turn is in flight");
+          return "ok";
+        }
+        forkRequested = true;
+        chrome("leaving this session and continuing in a fork of it — this one is kept as it is");
         return "exit";
       case "rename": {
         const wanted = parsed.name.trim();
@@ -1281,6 +1296,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     ...(sawError !== undefined ? { sawError } : {}),
     ...(resumeRequested ? { resumeRequested: true } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+    ...(forkRequested ? { forkRequested: true } : {}),
     ...(humanName !== undefined
       ? { sessionName: humanName, nameIsHuman: true }
       : derivedName !== undefined
@@ -1326,6 +1342,15 @@ export interface ResumePlan {
    * tool call with no result). Written after the marker; its text is already in `replayText`.
    */
   recovery?: Omit<RecoveryEvent, "kind">;
+  /**
+   * T266: set when this is a fork — a NEW session, with its own id and row, that continues a copy of
+   * `fromSessionId`, which is left exactly as it was. `records` is the parent's active branch, copied into
+   * the fork's transcript ahead of the marker so the fork's archive holds the conversation it continues
+   * (and a resume or a fork of the fork replays it); `turn` is the parent's last turn on that branch.
+   * `sessionId` is the fork's own, minted with the plan: a session continuing a plan boots with
+   * `fork?.sessionId ?? fromSessionId`.
+   */
+  fork?: { sessionId: string; turn?: number; records: readonly TranscriptRecord[] };
 }
 
 export interface RunInteractiveStandaloneSessionInput {
@@ -1420,6 +1445,8 @@ export type RunInteractiveStandaloneSessionResult =
       resumeRequested?: boolean;
       /** T114: ...unless the browser already chose one, in which case the caller skips straight to it. */
       resumeSessionId?: string;
+      /** T266: the session ended because `/fork` was typed. The caller forks it. */
+      forkRequested?: boolean;
       newRequested?: boolean;
       closeRequested?: boolean;
       /** T109: the context threshold requested a disk-rebuilt successor. */
@@ -1513,12 +1540,13 @@ export async function bootInteractiveSession(
     ...(posture.requestPlanExit !== undefined && extras.currentMode !== undefined
       ? { requestPlanExit: posture.requestPlanExit, currentMode: extras.currentMode }
       : {}),
-    ...(input.resume?.fromSessionId !== undefined
+    ...(input.resume !== undefined
       ? {
+          // T266: a fork carries the parent's task list and handoff too; both are only read.
           resumeTaskListFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           // T152: an unfinished self-compact handoff finishes in the resumed session.
           resumeHandoffFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
-          sessionIdOverride: input.resume.fromSessionId,
+          sessionIdOverride: input.resume.fork?.sessionId ?? input.resume.fromSessionId,
         }
       : shared.containment !== undefined && shared.containment.record.used !== "off" && shared.containedSessionId !== undefined
         ? { sessionIdOverride: shared.containedSessionId }
@@ -1646,7 +1674,7 @@ export async function runInteractiveStandaloneSession(
 
   // T173: the same decision `runStandaloneTask` makes, before anything boots.
   let containment: Containment;
-  const containedSessionId = input.resume?.fromSessionId ?? randomUUID();
+  const containedSessionId = input.resume !== undefined ? (input.resume.fork?.sessionId ?? input.resume.fromSessionId) : randomUUID();
   try {
     containment = await startContainment({
       config: config.containment,
@@ -1700,16 +1728,7 @@ export async function injectReplay(
   recorder: LiveTranscriptRecorder | undefined,
   plan: ResumePlan,
 ): Promise<void> {
-  recorder?.resumeMarker({
-    from: plan.fromSessionId,
-    events: plan.replayEvents,
-    user_turns: plan.replayUserTurns,
-    estimate_tokens: plan.estimateTokens,
-    estimate_usd: plan.estimateUsd,
-    price_version: plan.priceVersion,
-    ...(plan.flags !== undefined ? { inherited_flags: plan.flags } : {}),
-  });
-  if (plan.recovery !== undefined) recorder?.recovery(plan.recovery);
+  recorder?.continues(plan);
   await session.sendCustomMessage?.(
     { customType: "lykos_resume", content: plan.replayText, display: false },
     { triggerTurn: false },
@@ -1771,6 +1790,10 @@ function interactiveIngestOpts(opts: InteractiveIngestInput): IngestOpts {
     // original — `sessionAlreadyExists` in `ingest.ts` sees it and
     // updates rather than inserting — so an edge from a session to itself
     // is neither needed nor meaningful.
+    // T266: a fork's row is new, and says which session and turn it was copied from.
+    ...(opts.resume?.fork !== undefined
+      ? { forkedFrom: { sessionId: opts.resume.fromSessionId, ...(opts.resume.fork.turn !== undefined ? { turn: opts.resume.fork.turn } : {}) } }
+      : {}),
     ...(opts.recorder !== undefined ? { liveTranscript: opts.recorder } : {}),
   };
 }
@@ -2073,6 +2096,7 @@ export async function finishInteractiveSession(opts: {
     snapshot,
     ...(loopResult.resumeRequested ? { resumeRequested: true } : {}),
     ...(loopResult.resumeSessionId !== undefined ? { resumeSessionId: loopResult.resumeSessionId } : {}),
+    ...(loopResult.forkRequested ? { forkRequested: true } : {}),
     ...(loopResult.newRequested ? { newRequested: true } : {}),
     ...(loopResult.closeRequested ? { closeRequested: true } : {}),
   };

@@ -72,6 +72,7 @@ Commands are dispatched locally without incurring LLM turns:
 - `/rewind`: Pick an earlier prompt, then restore code and conversation, conversation only, or code only (or cancel). A conversation rewind puts the prompt back in the input box; nothing is deleted and there is no redo (`sessions-and-archive.md` §2.2.1). Refused while a turn runs.
 - `/export [file]`: Write this session's conversation as Markdown to `file` (relative to the working directory), or with no file put it on the clipboard through OSC 52. Read from the transcript (sessions-and-archive §2.4). A session too large for the terminal's clipboard is refused with a message, never claimed as copied; the file form still works.
 - `/output-style [name]`: List available output styles (bare) or switch active output style in stream (`<name>`).
+- `/fork`: End this session and continue in a copy of it, a new session forked from it at its last turn; the turns a rewind undid are not copied, and this session is kept as it is (`sessions-and-archive.md` §2.1.1; T266). Refused while a turn runs.
 - `/close-session`: Mark current session closed and exit.
 - `/new`: Start a fresh session.
 - `/skill:<name>`: Load and invoke a specific registered skill.

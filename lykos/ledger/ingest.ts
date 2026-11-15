@@ -21,7 +21,7 @@ import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { loadConfig } from "../config/load.js";
 import { resolveCallAccounting } from "../config/providers.js";
 import type { ProvidersConfig } from "../config/types.js";
-import { defaultLedgerPath, Ledger, type ExecutionShape, type Runtime, type SessionModelSource, type StartSessionInput } from "./ledger.js";
+import { defaultLedgerPath, Ledger, type ExecutionShape, type ForkedFrom, type Runtime, type SessionModelSource, type StartSessionInput } from "./ledger.js";
 import { priceCall } from "./prices.js";
 import { formatSessionSummary, loadSessionSummary } from "./summary.js";
 import { estimateTokensChars4, measureToolset, piDefaultBaseline, schemaShareOfPrompt } from "./tool-schema.js";
@@ -550,6 +550,8 @@ export interface IngestOpts {
   resumedFrom?: string;
   /** T109: boundaries crossed by this task. NULL on pre-T109 rows. */
   continuationsUsed?: number;
+  /** T266: this session is a fork — a new row copied from another session at one of its turns. */
+  forkedFrom?: ForkedFrom;
   /** T39: reuse the parent's task rather than auto-creating a new one. */
   taskId?: string;
   projectId?: string;
@@ -623,6 +625,7 @@ export function writeBootRow(ledger: Ledger, snap: DelegateSnapshot, opts?: Inge
     ...(opts?.parentSessionId !== undefined ? { parentSessionId: opts.parentSessionId } : {}),
     ...(opts?.resumedFrom !== undefined ? { resumedFrom: opts.resumedFrom } : {}),
     ...(opts?.continuationsUsed !== undefined ? { continuationsUsed: opts.continuationsUsed } : {}),
+    ...(opts?.forkedFrom !== undefined ? { forkedFrom: opts.forkedFrom } : {}),
     ...(resumable !== undefined ? { resumable } : {}),
     ...(opts?.notResumableReason !== undefined ? { notResumableReason: opts.notResumableReason } : {}),
     ...(opts?.workspace !== undefined ? { workspace: opts.workspace } : {}),
@@ -944,6 +947,7 @@ function ingestSnapshotBody(
       ...(opts?.parentSessionId !== undefined ? { parentSessionId: opts.parentSessionId } : {}),
       ...(opts?.resumedFrom !== undefined ? { resumedFrom: opts.resumedFrom } : {}),
       ...(opts?.continuationsUsed !== undefined ? { continuationsUsed: opts.continuationsUsed } : {}),
+      ...(opts?.forkedFrom !== undefined ? { forkedFrom: opts.forkedFrom } : {}),
       ...(resumable !== undefined ? { resumable } : {}),
       ...(notResumableReason !== undefined ? { notResumableReason } : {}),
       ...(opts?.workspace !== undefined ? { workspace: opts.workspace } : {}),

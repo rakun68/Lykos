@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS sessions (
                                                 -- session continues another
   continuations_used    INTEGER,               -- T109: boundaries crossed
                                                 -- for this task; NULL before T109
+  -- T266: set when this session is a fork — a new session copied from
+  -- another at its last turn. NULL on every session before forks existed:
+  -- not backfilled, and none of them was one.
+  forked_from           TEXT REFERENCES sessions(id),
+  forked_from_turn      INTEGER,
   git_commit            TEXT,                   -- the PROJECT's working tree
                                                 -- at session start, for
                                                 -- resume-safety checks (§5)

@@ -161,8 +161,16 @@ function when(iso: string, now: Date): string {
 function indent(row: SessionListRow, ascii: boolean): string {
   if (row.depth === 0) return "";
   const stem = "  ".repeat(row.depth - 1);
-  const arm = row.edge === "resumed" ? (ascii ? "\\-> " : "└→ ") : ascii ? "\\-- " : "└─ ";
+  const arm =
+    row.edge === "resumed" ? (ascii ? "\\-> " : "└→ ") : row.edge === "forked" ? (ascii ? "\\-< " : "└↳ ") : ascii ? "\\-- " : "└─ ";
   return `${stem}${arm}`;
+}
+
+/** T266: where a fork came from, for the listing; empty for a row that is not one. */
+function forkedLabel(row: SessionListRow): string {
+  if (row.forkedFrom === null || row.forkedFrom === undefined) return "";
+  const turn = row.forkedFromTurn !== null && row.forkedFromTurn !== undefined ? ` at turn ${row.forkedFromTurn}` : "";
+  return ` · forked from ${row.forkedFrom.slice(0, 8)}${turn}`;
 }
 
 export interface RenderPickerOpts {
@@ -307,7 +315,7 @@ export function renderPickerFallback(
       fmtUsd(row.costUsd),
     ].join(" · ");
     const mark = row.resumable ? "" : "  [not resumable]";
-    return `${pad(`${i + 1})`, 4)} ${row.id.slice(0, 8)}  ${indent(row, ascii)}${truncate(label, 48, ascii)}  ${when(row.startedUtc, now)}  ${flags}${mark}`;
+    return `${pad(`${i + 1})`, 4)} ${row.id.slice(0, 8)}  ${indent(row, ascii)}${truncate(label, 48, ascii)}  ${when(row.startedUtc, now)}  ${flags}${forkedLabel(row)}${mark}`;
   });
   if (rows.length > shown.length) {
     lines.push(`     … ${rows.length - shown.length} more — narrow it with a filter, or use \`lykos show <id>\``);

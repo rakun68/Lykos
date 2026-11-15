@@ -76,6 +76,8 @@ export type ParsedInput =
    * The rule it carries is unchanged either way.
    */
   | { kind: "resume"; sessionId?: string }
+  /** T266: end this session and continue in a copy of it — a new session, `forked_from` this one. */
+  | { kind: "fork" }
   | { kind: "new-session" }
   | { kind: "close-session" }
   /**
@@ -158,6 +160,7 @@ export function parseInteractiveInput(line: string): ParsedInput {
   if (name === "help" || name === "hotkeys") return { kind: "help" };
   if (name === "session") return { kind: "session" };
   if (name === "resume") return arg.length > 0 ? { kind: "resume", sessionId: arg } : { kind: "resume" };
+  if (name === "fork") return { kind: "fork" };
   if (name === "close-session") return { kind: "close-session" };
   if (name === "rename" || name === "name") return { kind: "rename", name: arg };
   // Internal browser action. `/new` remains refused because it is a head

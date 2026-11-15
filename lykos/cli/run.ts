@@ -315,6 +315,17 @@ async function runInteractive(cwd: string, opts: RunCliOptions, trustSource: "st
       lineSource.close();
     }
   }
+  // T266: `/fork` ended the session above; it is finalised, so the copy is of a complete session.
+  if (result.forkRequested) {
+    const { runResume } = await import("./resume.js");
+    const { createReadlineLineSource } = await import("../session/interactive.js");
+    const lineSource = createReadlineLineSource();
+    try {
+      return await runResume(cwd, ledgerPath, result.sessionId, { lineSource, fork: true });
+    } finally {
+      lineSource.close();
+    }
+  }
   if (result.newRequested) {
     // T130: the browser action ends the current row and re-enters the same
     // in-process path. No child process and no special second boot path.

@@ -101,6 +101,7 @@ export const S0_HELP = [
   "  /mode [name]       interaction mode: manual accept-edits auto (free)",
   "  /permissions [cmd] view or adjust permissions: mode, outside rules, extra dirs, approvals",
   "  /resume            continue an earlier session — it becomes this session again (free)",
+  "  /fork              continue in a copy of this session, a new one; this one is kept as it is (free)",
   "  /rename [name]     name this session; with no name, report the one it has (free)",
   "  /close-session     close this session and move it to Closed (free)",
   "  /exit /quit        end the session",

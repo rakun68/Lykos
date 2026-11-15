@@ -125,6 +125,8 @@ export const BUILTIN_COMMANDS: readonly CommandSpec[] = [
     source: "builtin",
   },
   { name: "/resume", costClass: "local", description: "continue an earlier session", source: "builtin" },
+  // T266: ends this session and continues in a copy of it, a new session row.
+  { name: "/fork", costClass: "local", description: "continue in a copy of this session; this one is kept as it is", source: "builtin" },
   { name: "/close-session", costClass: "local", description: "close this session and move it to Closed", source: "builtin" },
   // T131: present because they dispatch. Their absence here was the drift.
   { name: "/rename", costClass: "local", description: "name this session — bare reports the current name", source: "builtin" },

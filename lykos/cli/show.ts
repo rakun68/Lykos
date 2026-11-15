@@ -74,11 +74,14 @@ interface SessionRow {
   verification_cmd: string | null;
   verification_output: string | null;
   verification_exit_code: number | null;
+  /** T266: set when this session is a fork. */
+  forked_from: string | null;
+  forked_from_turn: number | null;
 }
 
 const SESSION_COLUMNS =
   "id, task_id, brief, started_utc, ended_utc, outcome, outcome_source, model, capture_mode, transcript_path, transcript_sha256, " +
-  "verification_cmd, verification_output, verification_exit_code";
+  "verification_cmd, verification_output, verification_exit_code, forked_from, forked_from_turn";
 
 /** T144: how much of the gate's stored output `lykos show` prints. The ledger keeps up to 4000 characters. */
 export const GATE_EXCERPT_LIMIT = 1200;
@@ -131,6 +134,9 @@ function writeHeader(row: SessionRow, verified: boolean, eventCount: number, tas
   stdoutWrite(` model      ${row.model ?? "?"}\n`);
   stdoutWrite(` started    ${row.started_utc}\n`);
   stdoutWrite(` ended      ${row.ended_utc ?? "(not ended)"}\n`);
+  if (row.forked_from !== null) {
+    stdoutWrite(` forked     from ${row.forked_from}${row.forked_from_turn !== null ? ` at turn ${row.forked_from_turn}` : ""}\n`);
+  }
   const taskStateSuffix = taskState === "disputed" ? " (task: disputed)" : "";
   stdoutWrite(` outcome    ${outcomeLabel(row.outcome, row.outcome_source, row.ended_utc)}${taskStateSuffix}\n`);
   stdoutWrite(` events     ${eventCount}\n`);
@@ -743,6 +749,8 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
           outcome: row.outcome,
           outcome_source: row.outcome_source,
           capture_mode: row.capture_mode,
+          forked_from: row.forked_from,
+          forked_from_turn: row.forked_from_turn,
           verification_cmd: row.verification_cmd,
           verification_exit_code: row.verification_exit_code,
           verification_output: row.verification_output,

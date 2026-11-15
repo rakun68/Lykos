@@ -8,6 +8,7 @@
 //
 //   * `parent_session_id` — a subagent, nested under its spawner (T39).
 //   * `resumed_from`      — a continuation, chained under its original (T57).
+//   * `forked_from`       — a fork, under the session it was copied from (T266).
 //
 // The picker is the first place the four-level identity model is actually
 // legible, so the nesting lives here rather than in a renderer: it is a
@@ -38,6 +39,9 @@ export interface SessionListRow {
   notResumableReason: string | null;
   parentSessionId: string | null;
   resumedFrom: string | null;
+  /** T266: the session this one is a fork of, and that session's last turn the fork carries. */
+  forkedFrom?: string | null;
+  forkedFromTurn?: number | null;
   closedUtc?: string | null;
   deletedUtc?: string | null;
   /** T128: fresh live.json heartbeat, when the browser source can read it. */
@@ -64,14 +68,14 @@ export interface SessionListRow {
   /** 0 for a root session; 1 for a child or a continuation of a root; and so on. Assigned by `nestSessions()`. */
   depth: number;
   /** Why this row sits under the one above it. `null` at depth 0. */
-  edge: "subagent" | "resumed" | null;
+  edge: "subagent" | "resumed" | "forked" | null;
 }
 
 const SELECT = `
   SELECT s.id, s.task_id, t.brief AS task_brief, s.brief, s.started_utc, s.ended_utc,
          s.model, s.execution_shape, s.outcome, s.outcome_source, s.archive_state,
          s.capture_mode, s.resumable, s.not_resumable_reason,
-         s.parent_session_id, s.resumed_from, s.total_cost_usd,
+         s.parent_session_id, s.resumed_from, s.forked_from, s.forked_from_turn, s.total_cost_usd,
          s.closed_utc, s.deleted_utc,
          (SELECT COUNT(*) FROM calls c WHERE c.session_id = s.id) AS call_count
     FROM sessions s
@@ -94,6 +98,8 @@ interface Raw {
   not_resumable_reason: string | null;
   parent_session_id: string | null;
   resumed_from: string | null;
+  forked_from: string | null;
+  forked_from_turn: number | null;
   total_cost_usd: number | null;
   closed_utc: string | null;
   deleted_utc: string | null;
@@ -127,6 +133,8 @@ function toRow(r: Raw): SessionListRow {
     notResumableReason: r.not_resumable_reason,
     parentSessionId: r.parent_session_id,
     resumedFrom: r.resumed_from,
+    forkedFrom: r.forked_from,
+    forkedFromTurn: r.forked_from_turn,
     closedUtc: r.closed_utc,
     deletedUtc: r.deleted_utc,
     callCount: r.call_count,
@@ -175,7 +183,8 @@ export function nestSessions(rows: readonly SessionListRow[]): SessionListRow[] 
     // child belongs INSIDE its spawner's run.
     const parentId =
       (row.parentSessionId && byId.has(row.parentSessionId) ? row.parentSessionId : null) ??
-      (row.resumedFrom && byId.has(row.resumedFrom) ? row.resumedFrom : null);
+      (row.resumedFrom && byId.has(row.resumedFrom) ? row.resumedFrom : null) ??
+      (row.forkedFrom && byId.has(row.forkedFrom) ? row.forkedFrom : null);
     if (parentId === null || parentId === row.id) {
       roots.push(row);
       continue;
@@ -198,7 +207,7 @@ export function nestSessions(rows: readonly SessionListRow[]): SessionListRow[] 
     // the order the work actually happened in.
     const kids = (children.get(row.id) ?? []).slice().sort((a, b) => a.startedUtc.localeCompare(b.startedUtc));
     for (const kid of kids) {
-      walk(kid, depth + 1, kid.parentSessionId === row.id ? "subagent" : "resumed");
+      walk(kid, depth + 1, kid.parentSessionId === row.id ? "subagent" : kid.forkedFrom === row.id ? "forked" : "resumed");
     }
   };
   for (const root of roots) walk(root, 0, null);

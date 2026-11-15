@@ -30,7 +30,8 @@ project          a git repository or directory root (survives rename/move)
 - **Task:** The unit of human intent. Multiple sessions join under one `task_id` so that
   **cost per successful task** reflects the total investment across attempts.
 - **Session:** One continuous run. When resumed, **it continues the named session**; it does not
-  fork or create a duplicate session row.
+  fork or create a duplicate session row. A fork (§2.1.1) is the one way to make a new row from a
+  session: on purpose, and on the same task.
 - **Call:** An individual model inference round-trip recording input/output/cache tokens, duration,
   TTFT, and cost.
 
@@ -81,6 +82,30 @@ the turn index and the artifact numbering. Because a resume continues the same t
 resumed run killed before its own ingest leaves the file longer than its recorded hash: the resume
 check verifies the recorded first `transcript_bytes` bytes and warns that what follows is
 unverified. A change inside the hashed part is still refused.
+
+### 2.1.1 Forking a Session (`/fork`, `lykos resume <id> --fork`)
+A fork copies a session at its current point into a new session and continues there (T266). The
+parent's row and transcript are left exactly as they were: it is not reopened, and nothing is
+written to its transcript.
+
+- `/fork` in an interactive session ends it the way `/exit` does (finalised, its numbers written),
+  then forks it; `lykos resume <id> --fork` forks an ended session. Both run the resume preflight
+  on the parent, show what the replay costs, and ask unless `--yes`.
+- The fork is a new row: its own id, `forked_from` the parent's id and `forked_from_turn` the
+  parent's last turn the copy carries, the parent's `task_id` (so the task's cost sums both), the
+  same working directory, the parent's task list and tool surface.
+- **The copy is the active branch**: the parent's transcript without the turns a conversation
+  rewind undid (§2.2.1). Those records are copied into the fork's own transcript, each at its
+  original time, ahead of a `resume` marker with `from` the parent and `fork: { turn }`; the
+  parent's `usage` and `outcome` lines are not copied, as they belong to its calls and its row. The
+  fork's transcript therefore reads like a resumed one, and resuming or forking the fork replays the
+  conversation it was copied from. The same branch is replayed after the head as one custom
+  message, as a resume does (§2.1).
+- `lykos sessions` nests the fork under its parent and says `forked from <id> at turn <n>`;
+  `lykos show` prints `forked from <id> at turn <n>` (`--json`: `forked_from`, `forked_from_turn`).
+
+A turn number is the parent's transcript's own (§2.2), counted afresh by each process, so after a
+resume the same number can name an earlier process's turn too.
 
 ### 2.2 Turns, Edits and Checkpoints
 A stream transcript marks the start of every model turn with a `turn_start` event whose `turn` is

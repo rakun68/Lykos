@@ -1404,7 +1404,8 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   // handed its parent's executor and records nothing of its own.
   let containment: Containment | undefined;
   // The container is labelled with the id the session will carry, so that id exists before the session does.
-  const containedSessionId = input.resume?.fromSessionId ?? (input.continuation === undefined ? input.sessionId : undefined) ?? randomUUID();
+  // T266: a fork's id is its own, minted with its plan; a resume keeps the original's.
+  const containedSessionId = (input.resume !== undefined ? (input.resume.fork?.sessionId ?? input.resume.fromSessionId) : undefined) ?? (input.continuation === undefined ? input.sessionId : undefined) ?? randomUUID();
   if (ownsContainment) {
     try {
       containment = await startContainment({
@@ -1563,7 +1564,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
       ? {
           resumeTaskListFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           resumeHandoffFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
-          sessionIdOverride: input.resume.fromSessionId,
+          sessionIdOverride: input.resume.fork?.sessionId ?? input.resume.fromSessionId,
         }
       : (containment !== undefined && containment.record.used !== "off") ||
           ((input.workTree !== undefined || input.sessionId !== undefined) && input.continuation === undefined)
@@ -1670,6 +1671,10 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
         }
       : {}),
     ...(input.trustSource !== undefined ? { trustSource: input.trustSource } : {}),
+    // T266: a fork's row is new, and says which session and turn it was copied from.
+    ...(input.resume?.fork !== undefined
+      ? { forkedFrom: { sessionId: input.resume.fromSessionId, ...(input.resume.fork.turn !== undefined ? { turn: input.resume.fork.turn } : {}) } }
+      : {}),
     ...(input.resume?.taskId !== undefined
       ? { taskId: input.resume.taskId }
       : input.taskId !== undefined
@@ -1711,16 +1716,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   if (input.resume !== undefined) {
     // T57's `injectReplay`, for this shape: the marker first, then the
     // conversation appended after the frozen head without starting a turn.
-    recorder?.resumeMarker({
-      from: input.resume.fromSessionId,
-      events: input.resume.replayEvents,
-      user_turns: input.resume.replayUserTurns,
-      estimate_tokens: input.resume.estimateTokens,
-      estimate_usd: input.resume.estimateUsd,
-      price_version: input.resume.priceVersion,
-      ...(input.resume.flags !== undefined ? { inherited_flags: input.resume.flags } : {}),
-    });
-    if (input.resume.recovery !== undefined) recorder?.recovery(input.resume.recovery);
+    recorder?.continues(input.resume);
     await session.sendCustomMessage(
       { customType: "lykos_resume", content: input.resume.replayText, display: false },
       { triggerTurn: false },

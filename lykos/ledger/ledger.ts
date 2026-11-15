@@ -83,6 +83,12 @@ export interface SessionFlags {
   memoryInject?: boolean;
 }
 
+/** T266: the session a fork was copied from, and the parent's last turn the copy carries. */
+export interface ForkedFrom {
+  sessionId: string;
+  turn?: number;
+}
+
 export interface StartSessionInput {
   id?: string;
   /** T238: written at boot, before the session runs anything; ingest finalises it. */
@@ -144,6 +150,8 @@ export interface StartSessionInput {
   resumedFrom?: string;
   /** T109: boundaries crossed by this task; NULL on pre-T109 rows. */
   continuationsUsed?: number;
+  /** T266: this session is a fork of `sessionId`, copied at its turn `turn` (absent when it had none). */
+  forkedFrom?: ForkedFrom;
   /** The PROJECT's working-tree commit at session start (not harnessCommit). */
   gitCommit?: string;
   gitDirty?: boolean;
@@ -1287,6 +1295,9 @@ function migrateSessionsTable(db: Database.Database): void {
     // T109: no DEFAULT and no backfill. NULL means the session predates
     // continuation measurement; 1, 2, ... identify successor boundaries.
     ["continuations_used", "INTEGER"],
+    // T266: no DEFAULT and no backfill. NULL means not a fork.
+    ["forked_from", "TEXT REFERENCES sessions(id)"],
+    ["forked_from_turn", "INTEGER"],
     ["git_commit", "TEXT"],
     ["git_dirty", "INTEGER DEFAULT 0"],
     ["agent_role", "TEXT"],
@@ -1742,7 +1753,7 @@ export class Ledger {
            map_explore_covered, map_explore_uncovered,
            compaction_threshold, context_files,
            extensions, extension_set, extension_schema_tokens, extension_schema_share,
-           project_id, parent_session_id, resumed_from, continuations_used, git_commit, git_dirty,
+           project_id, parent_session_id, resumed_from, continuations_used, forked_from, forked_from_turn, git_commit, git_dirty,
            agent_role, model, model_switches, model_path, specialist_switches, specialist_path, trust_source, model_source, specialist, resumable, not_resumable_reason,
            closed_utc, deleted_utc, browser_fanout_ms, browser_projects_scanned, browser_rows_returned,
            execution_shape, runtime, capture_mode, archive_state,
@@ -1760,7 +1771,7 @@ export class Ledger {
            @map_explore_covered, @map_explore_uncovered,
            @compaction_threshold, @context_files,
            @extensions, @extension_set, @extension_schema_tokens, @extension_schema_share,
-           @project_id, @parent_session_id, @resumed_from, @continuations_used, @git_commit, @git_dirty,
+           @project_id, @parent_session_id, @resumed_from, @continuations_used, @forked_from, @forked_from_turn, @git_commit, @git_dirty,
            @agent_role, @model, @model_switches, @model_path, @specialist_switches, @specialist_path, @trust_source, @model_source, @specialist, @resumable, @not_resumable_reason,
            @closed_utc, @deleted_utc, @browser_fanout_ms, @browser_projects_scanned, @browser_rows_returned,
            @execution_shape, @runtime, @capture_mode, 'live',
@@ -1823,6 +1834,8 @@ export class Ledger {
         parent_session_id: input.parentSessionId ?? null,
         resumed_from: input.resumedFrom ?? null,
         continuations_used: input.continuationsUsed ?? null,
+        forked_from: input.forkedFrom?.sessionId ?? null,
+        forked_from_turn: input.forkedFrom?.turn ?? null,
         git_commit: input.gitCommit ?? null,
         git_dirty: input.gitDirty ? 1 : 0,
         agent_role: input.agentRole ?? null,

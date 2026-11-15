@@ -370,8 +370,9 @@ export const COMMANDS: readonly Command[] = [
     name: "resume",
     help: [
       "  resume    continue an earlier conversation: `lykos resume <session>`",
-      "            [--yes] [--force] [--dry-run] [--model m] [--(no-)prompt-diet] [--(no-)output-diet]",
+      "            [--fork] [--yes] [--force] [--dry-run] [--model m] [--(no-)prompt-diet] [--(no-)output-diet]",
       "            shows what the replay costs before spending it; the original is never rewritten",
+      "            --fork continues in a copy of it, a new session, and leaves it as it is",
       "            with no id it opens the session picker (`--all` for every project)",
     ],
     run: async (rest, { cwd }) => {
@@ -403,6 +404,7 @@ export const COMMANDS: readonly Command[] = [
           ...(rest.includes("--yes") ? { yes: true } : {}),
           ...(rest.includes("--force") ? { force: true } : {}),
           ...(rest.includes("--dry-run") ? { dryRun: true } : {}),
+          ...(rest.includes("--fork") ? { fork: true } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(rest.includes("--no-prompt-diet")
             ? { promptDiet: false }
