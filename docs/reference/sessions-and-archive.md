@@ -125,6 +125,21 @@ one backtick longer than the longest backtick run inside it, so content holding 
 cannot close the export's. With no file, `lykos export` prints to stdout and `/export` copies to
 the clipboard. The session is found by id or unique id prefix, as `lykos resume` finds it.
 
+### 2.5 Attachments (`@path` in a `lykos run` prompt)
+An `@path` written in a `lykos run` prompt (at its start or after whitespace; `@"a b.md"` for a
+name with a space) attaches the file to the brief, as an `@path` argument does: a text file as
+Pi's `<file name="<absolute path>">` block before the prompt, an image (PNG, JPEG, GIF, WebP,
+resized to the inline limit by Pi's `resizeImage`) as an image part of the first message, named
+by an empty block in the text. The mention stays in the prompt. Its path is resolved the way the
+file tools resolve one, relative to the workspace, which is the path the interactive `@`
+completion inserts, and judged by the workspace's path rules: a deny refuses it, and a path that
+would ask (outside the workspace) is refused, since a one-shot run has nobody to ask. A missing
+path is an error naming it; a prompt after `--` is verbatim and attaches nothing, which is how
+`@types/node` is written in one. Trailing sentence punctuation (`@a.ts,`) is not part of the path. A session whose model
+does not declare image input (`input` without `image`) refuses an image before it starts, naming
+the model and the file. The brief, attachments included, is the session's first message in its
+transcript; images travel to the session child in the request's `cli.images`.
+
 ---
 
 ## 3. Standalone Execution Shape

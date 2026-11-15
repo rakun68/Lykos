@@ -155,10 +155,23 @@ export {
   type BootedStandaloneSession,
 } from "../session.js";
 
+/**
+ * T268: an image attached to the prompt (`@shot.png` in `lykos run`): Pi's `ImageContent` fields plus the file it was
+ * read from, so a refusal can name it.
+ */
+export interface ImageAttachment {
+  path: string;
+  mimeType: string;
+  /** Base64. */
+  data: string;
+}
+
 export interface RunStandaloneTaskInput {
   /** The project directory this task runs against. */
   workspace: string;
   prompt: string;
+  /** T268: images sent with `prompt` as image parts. A model that takes no image input refuses the session before boot. */
+  images?: ImageAttachment[];
   /** `provider/model`, e.g. `deepseek/deepseek-v4-flash`. Default: T20's documented default (parseProviderModel(undefined)). */
   model?: string;
   /** Caller override. Default: T20's documented hop-0 surface, same as `runTask()`. */
@@ -1375,6 +1388,14 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
     ...(input.nativeProviders !== undefined ? { nativeProviders: input.nativeProviders } : {}),
   });
   const model = await resolveHostModel(modelSpec, modelRuntime);
+  // T268: an attached image goes to a model that declares image input, or the session does not start.
+  if (input.images !== undefined && input.images.length > 0 && !model.input.includes("image")) {
+    return {
+      status: "error",
+      message: `${model.provider}/${model.id} takes no image input, so ${input.images.map((i) => i.path).join(", ")} cannot be attached; choose a model that takes images with --model`,
+    };
+  }
+  const promptImages = input.images?.map((i) => ({ type: "image" as const, mimeType: i.mimeType, data: i.data }));
   // T184: the interaction mode, when the caller named one, decides whether this session writes and whether it asks.
   const readOnly = input.readOnly === true || config.readOnly === true || (input.interactionMode !== undefined && !modeWrites(input.interactionMode));
   const autoApprove = input.autoApprove === true;
@@ -1715,7 +1736,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   const fallbackPolicy = resolveFallbackPolicy(config.models.fallback);
   const fallbackState = newFallbackState(modelSpec);
   try {
-    await session.prompt(input.prompt);
+    await session.prompt(input.prompt, promptImages !== undefined ? { images: promptImages } : undefined);
     await session.waitForIdle();
   } catch (err) {
     runState = "error";
@@ -1749,7 +1770,7 @@ ${decision.note}
         // The conversation survives the switch, so this continues the task
         // rather than restarting it. The warm prefix does not survive, and
         // the note above already said so.
-        await session.prompt(input.prompt);
+        await session.prompt(input.prompt, promptImages !== undefined ? { images: promptImages } : undefined);
         await session.waitForIdle();
         runState = "done";
         sawError = undefined;

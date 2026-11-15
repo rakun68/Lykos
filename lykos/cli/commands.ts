@@ -3,6 +3,7 @@ import { stderrWrite } from "../tui/io-mode.js";
 import { parseInteractionMode, type InteractionMode } from "../gate/modes.js";
 import { claimProtocolStream, stdoutWrite } from "../tui/io-mode.js";
 import type { ColorFlag } from "../tui/theme/resolve.js";
+import type { ImageAttachment } from "../session/session.js";
 
 export interface CommandContext {
   cwd: string;
@@ -713,6 +714,7 @@ export const COMMANDS: readonly Command[] = [
       }
       let prompt: string | undefined;
       let taskFile: string | undefined;
+      let images: ImageAttachment[] = [];
       if (rest.includes("--interactive")) {
         prompt = firstPositional(rest, RUN_VALUED_FLAGS);
       } else {
@@ -739,6 +741,7 @@ export const COMMANDS: readonly Command[] = [
           return 1;
         }
         prompt = resolved.brief;
+        images = resolved.images;
       }
       const model = flagValue(rest, "model");
       const toolsRaw = flagValue(rest, "tools");
@@ -795,6 +798,7 @@ export const COMMANDS: readonly Command[] = [
       const base = flagValue(rest, "base");
       const rulingsFrom = flagValue(rest, "rulings-from");
       return runRun(cwd, prompt, {
+        ...(images.length > 0 ? { images } : {}),
         ...(rulingsFrom !== undefined ? { rulingsFrom: rulingsFrom.split(",").map((s) => s.trim()).filter((s) => s !== "") } : {}),
         ...(taskFile !== undefined ? { taskFile } : {}),
         ...(maxSteps !== undefined ? { maxSteps } : {}),

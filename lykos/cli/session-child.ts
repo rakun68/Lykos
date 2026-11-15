@@ -565,6 +565,7 @@ async function runRequest(
             ...(request.cli?.projectId !== undefined ? { projectId: request.cli.projectId } : {}),
             ...(request.cli?.autoApprove === true ? { autoApprove: true } : {}),
             ...(request.cli?.subagents === true ? { subagents: true } : {}),
+            ...(request.cli?.images !== undefined ? { images: request.cli.images } : {}),
           },
           trustSource,
         ),

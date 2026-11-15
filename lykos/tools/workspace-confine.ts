@@ -38,7 +38,7 @@ import {
   resolvePathRulesAndContext,
   type ApprovalGate,
 } from "../gate/approval.js";
-import { decidePath, type PathAccess } from "../gate/path-rules.js";
+import { decidePath, type PathAccess, type PathContext, type PathDecisionResult, type PathRule } from "../gate/path-rules.js";
 import { rememberExtraDir } from "../gate/permissions.js";
 import { resolveEditPath } from "./edit.js";
 
@@ -95,15 +95,11 @@ export function confineToWorkspace(tool: ToolDefinition, cwd: string, gate?: App
     ...tool,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       for (const given of pathsOf(params)) {
-        const target = realpathOfNearest(resolveEditPath(given, cwd));
         const { rules, ctx: pathCtx } =
           gate?.pathRules !== undefined && gate?.pathContext !== undefined
             ? { rules: gate.pathRules, ctx: gate.pathContext }
             : await resolvePathRulesAndContext(cwd);
-        // The requested path and its realpath: a deny on either wins.
-        const requested = decidePath(resolveEditPath(given, cwd), access, rules, pathCtx);
-        const resolved = decidePath(target, access, rules, pathCtx);
-        const verdict = requested.decision === "deny" ? requested : resolved;
+        const { target, verdict } = confinedPathVerdict(given, cwd, access, rules, pathCtx);
         if (verdict.decision === "deny") {
           if (gate && "denied" in gate && Array.isArray(gate.denied)) {
             gate.denied.push({
@@ -115,16 +111,15 @@ export function confineToWorkspace(tool: ToolDefinition, cwd: string, gate?: App
           }
           throw new ApprovalDeniedError(pathDenialMessage(given, verdict.reason));
         }
-        if (access === "write" || (requested.decision !== "ask" && resolved.decision !== "ask")) continue;
+        if (access === "write" || verdict.decision !== "ask") continue;
         if (gate === undefined) {
           throw new ApprovalDeniedError(`lykos: ${target} is outside the allowed folders and there is no one to ask.`);
         }
-        const asked = requested.decision === "ask" ? requested : resolved;
         const decision = await gate.request({
           kind: "read",
           summary: `${tool.name} ${given}`,
           detail: target,
-          pathAsk: { rule: asked.rule ?? "outside the project directory" },
+          pathAsk: { rule: verdict.rule ?? "outside the project directory" },
         });
         if (decision === "allow-folder") {
           try {
@@ -139,6 +134,26 @@ export function confineToWorkspace(tool: ToolDefinition, cwd: string, gate?: App
       return inner(toolCallId, params, signal, onUpdate, ctx);
     },
   } as ToolDefinition;
+}
+
+/**
+ * The path rules' verdict on a path as the file tools judge it: the path as given and its realpath (symlinks and
+ * junctions followed), a deny on either winning, then an ask on either. `target` is the realpath. T268's `@path`
+ * attachments are judged by this too, so a prompt reaches only what a file tool could.
+ */
+export function confinedPathVerdict(
+  given: string,
+  cwd: string,
+  access: PathAccess,
+  rules: readonly PathRule[],
+  ctx: PathContext,
+): { target: string; verdict: PathDecisionResult } {
+  const target = realpathOfNearest(resolveEditPath(given, cwd));
+  const requested = decidePath(resolveEditPath(given, cwd), access, rules, ctx);
+  const resolved = decidePath(target, access, rules, ctx);
+  if (requested.decision === "deny") return { target, verdict: requested };
+  if (resolved.decision === "deny") return { target, verdict: resolved };
+  return { target, verdict: requested.decision === "ask" ? requested : resolved };
 }
 
 /** Whether `path`, symlinks followed, lies inside the workspace at `cwd`. */

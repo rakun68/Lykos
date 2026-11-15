@@ -13,6 +13,7 @@ import type { InteractionMode } from "../gate/modes.js";
 import type { CommitSummary } from "../git/worktree.js";
 import type { TrustSource } from "../gate/trust.js";
 import type { DeniedAction } from "../gate/delegated.js";
+import type { ImageAttachment } from "../session/session.js";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -110,6 +111,8 @@ export interface SessionRequest {
     projectId?: string;
     autoApprove?: boolean;
     subagents?: boolean;
+    /** T268: the images `@path` attached to the brief, sent with it as image parts. */
+    images?: ImageAttachment[];
   };
 }
 

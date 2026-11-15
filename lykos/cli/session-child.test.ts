@@ -148,6 +148,18 @@ describe("the child's protocol (T181, stories 70-72)", () => {
     assert.equal(seen[0]!.trustSource, "flag");
   });
 
+  it("T268: the images `lykos run` attached reach the session with its brief", async () => {
+    const workspace = repo();
+    const seen: RunStandaloneTaskInput[] = [];
+    const image = { path: join(workspace, "shot.png"), mimeType: "image/png", data: "iVBORw0KGgo=" };
+    const { code } = await drive(request(workspace, { cli: { images: [image] } }), async (input) => {
+      seen.push(input);
+      return { status: "ok", sessionId: "s1", text: "answer", snapshot: {} as never };
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(seen[0]!.images, [image]);
+  });
+
   it("returns the commits the session made, from the ledger, oldest first", async () => {
     const workspace = repo();
     const ledgerPath = join(workspace, "ledger.db");

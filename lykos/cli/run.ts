@@ -13,7 +13,7 @@ import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from ".
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { loadConfig } from "../config/load.js";
 import type { ResolvedConfig } from "../config/types.js";
-import type { RunStandaloneTaskInput } from "../session/session.js";
+import type { ImageAttachment, RunStandaloneTaskInput } from "../session/session.js";
 import { readFileSync } from "node:fs";
 import { runDelegated } from "../delegate/mcp-server.js";
 import { parseTaskFile, resolveTestCommand, testCommandBrief, type TaskFile } from "../delegate/task-file.js";
@@ -81,6 +81,8 @@ export interface RunCliOptions {
   base?: string;
   /** T259: `--rulings-from <id>[,<id>]`, sessions whose spec-check rulings bind this one. */
   rulingsFrom?: string[];
+  /** T268: the images the brief's `@path` mentions attached, sent with it as image parts. */
+  images?: ImageAttachment[];
 }
 
 /** The env half of `--ask-outcome`. Any value but `0`/`false`/empty counts as on. */
@@ -120,6 +122,7 @@ export function sessionInput(
     ...(trustSource !== undefined ? { trustSource } : {}),
     specialist: opts.specialist ?? DEFAULT_SPECIALIST,
     ...(opts.outputStyle !== undefined ? { outputStyle: opts.outputStyle } : {}),
+    ...(opts.images !== undefined && opts.images.length > 0 ? { images: opts.images } : {}),
   };
 }
 
@@ -234,6 +237,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
           ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
           ...(opts.autoApprove === true ? { autoApprove: true } : {}),
           ...(opts.subagents === true ? { subagents: true } : {}),
+          ...(opts.images !== undefined && opts.images.length > 0 ? { images: opts.images } : {}),
         },
       },
       { trustSource: trust.source, signal: abort.signal, onProgress: (message) => stderrWrite(`lykos run: ${message}\n`) },
