@@ -1,29 +1,66 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RewindOverlay, renderRewind } from "./rewind.js";
-import type { CheckpointEntry } from "../../loop/checkpoint.js";
+import { RewindOverlay, renderRewind, type RewindState } from "./rewind.js";
+import type { RewindPoint } from "../../session/rewind.js";
 import { resolveTheme } from "../theme/resolve.js";
 
 const monoTheme = resolveTheme("mono", "none", "unicode");
 
-const entries: CheckpointEntry[] = [
-  { commit: "abcdef012345", label: "turn 2", at: "2026-09-07T00:00:00.000Z", index: 0 },
+const points: RewindPoint[] = [
+  { text: "first: change a", turn: 0 },
+  { text: "second: change b", turn: 2 },
+  { text: "third: change c", turn: 4 },
 ];
 
-test("T122 requires explicit confirmation before restoring a checkpoint", () => {
-  let restored: number | undefined;
+function overlay() {
   let rendered = "";
-  const overlay = new RewindOverlay({
-    load: () => entries,
-    onRender: (state) => { rendered = renderRewind(state, { width: 80, height: 8, theme: monoTheme }).join("\n"); },
-    onClose: () => undefined,
-    onRestore: (index) => { restored = index; },
+  let closed = 0;
+  const o = new RewindOverlay({
+    onRender: (state: RewindState) => {
+      rendered = renderRewind(state, { width: 80, height: 12, theme: monoTheme }).join("\n");
+    },
+    onClose: () => {
+      closed += 1;
+    },
   });
-  overlay.open(8);
-  overlay.feedBytes("\r");
-  overlay.flushPending();
-  assert.match(rendered, /\[y\/N\]/);
-  assert.equal(restored, undefined);
-  overlay.feedBytes("y");
-  assert.equal(restored, 0);
+  const keys = (bytes: string) => {
+    o.feedBytes(bytes);
+    o.flushPending();
+  };
+  return { o, keys, rendered: () => rendered, closed: () => closed };
+}
+
+test("T263: the picker opens on the latest prompt; Enter offers the restores, and Enter takes the highlighted one", async () => {
+  const p = overlay();
+  const chosen = p.o.open(12, points);
+  assert.match(p.rendered(), /› .*third: change c/);
+  p.keys("\r");
+  assert.match(p.rendered(), /code and conversation/);
+  assert.match(p.rendered(), /conversation only/);
+  assert.match(p.rendered(), /code only/);
+  p.keys("\r");
+  assert.deepEqual(await chosen, { index: 2, restore: "both" });
+  assert.equal(p.o.isOpen, false);
+  assert.equal(p.closed(), 1);
+});
+
+test("T263: arrows choose the prompt, a digit chooses the restore", async () => {
+  const p = overlay();
+  const chosen = p.o.open(12, points);
+  p.keys("\x1b[A");
+  p.keys("\r");
+  p.keys("3");
+  assert.deepEqual(await chosen, { index: 1, restore: "code" });
+});
+
+test("T263: Esc on the restores goes back to the prompts; Esc there cancels and changes nothing", async () => {
+  const p = overlay();
+  const chosen = p.o.open(12, points);
+  p.keys("\r");
+  p.keys("\x1b");
+  assert.match(p.rendered(), /third: change c/);
+  assert.doesNotMatch(p.rendered(), /conversation only/);
+  p.keys("\x1b");
+  assert.equal(await chosen, undefined);
+  assert.equal(p.o.isOpen, false);
 });

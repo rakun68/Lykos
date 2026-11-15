@@ -20,7 +20,6 @@ import { PreviewCache, deriveSessionName } from "../session/preview.js";
 import { readLiveSnapshot } from "../ledger/live.js";
 import { loadHistory } from "./history.js";
 import { lykosVersion } from "../version.js";
-import { listCheckpoints, restoreCheckpoint } from "../loop/checkpoint.js";
 import { compactionRecordsOf } from "../loop/self-compact.js";
 import { copyToClipboard, readClipboard } from "./clipboard.js";
 import { stdoutWrite, stderrWrite } from "./io-mode.js";
@@ -460,6 +459,7 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
       continuationRequested: () => booted.continuationState.requested,
       login: credentialCommands.login,
       credential: credentialCommands.credential,
+      rewind: booted.rewind,
     });
   } finally {
     stopRotationNotices();
@@ -530,7 +530,6 @@ export async function runFullscreenInteractive(shared: StandaloneBootInputs, fin
   const { BrowserOverlay } = await import("../tui/screen/browser-overlay.js");
   const { RewindOverlay } = await import("../tui/screen/rewind.js");
   const { renderRewind } = await import("../tui/screen/rewind.js");
-      const { listCheckpoints, restoreCheckpoint } = await import("../loop/checkpoint.js");
   const { allProjectSources, gatherSessions } = await import("../session/sources.js");
   const { renderBrowser: renderBrowserView } = await import("../tui/screen/browser.js");
   const { PreviewCache } = await import("../session/preview.js");
@@ -1299,21 +1298,14 @@ Start carrying this plan out?`,
       },
     });
     browserRef = browserOverlay;
+    // T263: the picker only chooses; the loop's `/rewind` carries the choice out.
     const rewindOverlay = new RewindOverlay({
-      load: () => listCheckpoints({ cwd }),
       onRender: (rewindState, viewHeight) => {
         pipeline.setFullView(renderRewind(rewindState, { width: currentWidth, height: viewHeight, theme }));
         pipeline.flush();
       },
       onClose: () => {
         pipeline.setFullView(null);
-        pipeline.flush();
-      },
-      onRestore: (index) => {
-        const result = restoreCheckpoint({ cwd }, index);
-        uiRef?.writeSystem(result.status === "restored"
-          ? `rewind restored checkpoint ${result.commit.slice(0, 8)} — ${result.label}`
-          : `rewind failed — ${result.message}`);
         pipeline.flush();
       },
     });
@@ -1470,9 +1462,10 @@ Start carrying this plan out?`,
         else pipeline.previousTranscriptMatch();
         pipeline.flush();
       },
+      // T263: Esc Esc is `/rewind`, through the loop, which refuses it mid-turn.
+      // While the picker is open it has the keys, so this only opens it.
       onDoubleEscape: () => {
-        if (rewindOverlay.isOpen) rewindOverlay.close();
-        else rewindOverlay.open(currentHeight);
+        lineSource.inject("/rewind");
         return true;
       },
     });
@@ -1575,6 +1568,8 @@ Start carrying this plan out?`,
         continuationRequested: () => booted.continuationState.requested,
         login: credentialCommands.login,
         credential: credentialCommands.credential,
+        rewind: booted.rewind,
+        pickRewind: (points) => rewindOverlay.open(currentHeight, points),
       });
     } finally {
       stopRotationNotices();

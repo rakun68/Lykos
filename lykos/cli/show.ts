@@ -295,6 +295,54 @@ export function fileChangingTurns(
     });
 }
 
+/** T263: one rewind of the live session, with the branch it undid. */
+export interface SessionRewind {
+  restore: "both" | "conversation" | "code";
+  to_turn?: number;
+  /** The undone branch: its first and last turn, and the prompts that started them. Absent when only code was restored. */
+  undone?: { turns: [number, number]; prompts: string[] };
+}
+
+/**
+ * T263: the session's rewinds, read from its `rewind` events. A prompt belongs to
+ * the first turn that starts after it; the undone branch's prompts are the ones
+ * whose turn falls inside it.
+ */
+export function sessionRewinds(events: ReadonlyArray<TranscriptEventInput>): SessionRewind[] {
+  const promptTurns: Array<{ text: string; turn: number }> = [];
+  let pending: string | undefined;
+  const out: SessionRewind[] = [];
+  for (const e of events) {
+    if (e.kind === "user_message") pending = e.text;
+    else if (e.kind === "turn_start" && pending !== undefined) {
+      promptTurns.push({ text: pending, turn: e.turn });
+      pending = undefined;
+    } else if (e.kind === "rewind") {
+      const range = e.undone_turns;
+      out.push({
+        restore: e.restore,
+        ...(e.to_turn !== undefined ? { to_turn: e.to_turn } : {}),
+        ...(range !== undefined
+          ? { undone: { turns: range, prompts: promptTurns.filter((p) => p.turn >= range[0] && p.turn <= range[1]).map((p) => p.text) } }
+          : {}),
+      });
+    }
+  }
+  return out;
+}
+
+/** T263: each rewind, and the undone branch it left in the transcript. Nothing when there was none. */
+function writeRewinds(rewinds: readonly SessionRewind[]): void {
+  for (const r of rewinds) {
+    const what = r.restore === "both" ? "code and conversation" : r.restore === "code" ? "code only" : "conversation only";
+    stdoutWrite(` rewind     ${what}${r.to_turn !== undefined ? ` to before turn ${r.to_turn}` : ""}\n`);
+    if (r.undone !== undefined) {
+      stdoutWrite(`            undone branch: turns ${r.undone.turns[0]}-${r.undone.turns[1]}, kept in the transcript and the cost\n`);
+      for (const p of r.undone.prompts) stdoutWrite(`              ${p.split("\n")[0]}\n`);
+    }
+  }
+}
+
 /**
  * T146: the session's checkpoints, from the repository `meta.json` names. Unreadable is reported, never guessed.
  * A delegated session's worktree is removed when its call ends (T184), but the checkpoint ref lives in the main
@@ -593,6 +641,15 @@ function formatEventBlock(record: TranscriptEventRecord & TranscriptEventInput):
       lines.push(`${head}  ${record.action}${record.detail ? `  ${record.detail}` : ""}`);
       break;
     }
+    case "rewind": {
+      // T263: the turns above it stay where they are; this says which were undone.
+      lines.push(`${head}  ${record.restore}${record.to_turn !== undefined ? `  to turn ${record.to_turn}` : ""}`);
+      lines.push(`    prompt: ${record.prompt}`);
+      if (record.undone_turns !== undefined) lines.push(`    undone: turns ${record.undone_turns[0]}-${record.undone_turns[1]}`);
+      if (record.checkpoint !== undefined) lines.push(`    code from checkpoint ${shortHash(record.checkpoint)}`);
+      if (record.safety_checkpoint !== undefined) lines.push(`    the tree before it: checkpoint ${shortHash(record.safety_checkpoint)}`);
+      break;
+    }
     case "error": {
       lines.push(head);
       lines.push(`    ${record.message}`);
@@ -666,6 +723,7 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
     const checkpoints = sessionCheckpoints(meta, row.id, ledgerPath);
     const credentials = sessionCredentials(ledger, row.id);
     const turns = fileChangingTurns(events, checkpoints.entries);
+    const rewinds = sessionRewinds(events);
     const sealEvents = sessionSealEvents(ledger, row.id);
 
     // T168 part B: the transcript just read, so the edit figures come from it and not from a second read.
@@ -697,6 +755,7 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
         transcript: { path, sha256: row.transcript_sha256, verified, truncated },
         meta,
         file_changing_turns: turns,
+        rewinds,
         strength,
         events,
       };
@@ -720,6 +779,7 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
     writeCommits(commits);
     writeCompactions(compactions);
     writeCheckpoints(turns, checkpoints.note);
+    writeRewinds(rewinds);
     writeStrength(strength);
     writeResumeContract(meta);
     writeSealEvents(sealEvents, meta);

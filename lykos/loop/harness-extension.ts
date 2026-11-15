@@ -166,6 +166,13 @@ export interface HarnessExtensionOpts {
     isExtensionTool?: (name: string) => boolean;
   };
   /**
+   * T263: told at every turn start the session-wide turn that started and the
+   * checkpoint holding the tree it started from: the one written then, or the
+   * ref's tip when the tree had not changed. Undefined when there is none (no
+   * checkpointing, or git failed). The live session's rewind reads it.
+   */
+  onTurnStart?: (turn: number, checkpoint: string | undefined) => void;
+  /**
    * T105: the hook surface. Present → `pre_tool` runs on Pi's `tool_call`
    * event (which sees every tool, including the `read` that
    * `gate/approval.ts` deliberately does not shadow) and `post_tool` runs
@@ -260,6 +267,7 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
           const result = createCheckpoint(deps, `before turn ${turn}`, { turn });
           if (result.status === "created") obs.checkpoints += 1;
           checkpointTurns.unstamped = result.status === "unchanged" ? { turn, tree: result.tree } : undefined;
+          opts.onTurnStart?.(turn, result.status === "skipped" ? undefined : result.commit);
         });
         // T146: a turn that began on an unchanged tree wrote no commit, so
         // its "before" state is only the previous checkpoint — which belongs
@@ -278,6 +286,10 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
           if (result.status === "created") obs.checkpoints += 1;
           return undefined;
         });
+      } else if (opts.onTurnStart !== undefined) {
+        // T263: no checkpoints, but the turns are still counted the same way.
+        const told = opts.onTurnStart;
+        pi.on("turn_start", () => told(checkpointTurns.next++, undefined));
       }
 
       // P4 T149: a read-only child refuses anything that is not a read,

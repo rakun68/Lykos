@@ -249,6 +249,28 @@ export interface RecoveryEvent {
   interrupted?: string[];
 }
 
+/**
+ * T263: the person rewound the live session to before one of its prompts. With the
+ * conversation rewound, the turns `undone_turns` names (first and last, inclusive)
+ * are an undone branch: they stay in this file and in the ledger, and the model
+ * is no longer sent them. Nothing is deleted and there is no redo.
+ */
+export interface RewindEvent {
+  kind: "rewind";
+  /** What was put back. */
+  restore: "both" | "conversation" | "code";
+  /** The prompt rewound to, as typed. */
+  prompt: string;
+  /** The session-wide turn that prompt started: the turn rewound to. Absent when it started none. */
+  to_turn?: number;
+  /** The undone branch, first and last turn. Absent when the conversation was not rewound. */
+  undone_turns?: [number, number];
+  /** The checkpoint the tree was restored from. Absent when the code was not rewound. */
+  checkpoint?: string;
+  /** The checkpoint holding the tree as it was just before the restore. Absent when the code was not rewound. */
+  safety_checkpoint?: string;
+}
+
 export interface ErrorEvent {
   kind: "error";
   message: string;
@@ -279,6 +301,7 @@ export type TranscriptEventInput =
   | PruneEvent
   | ShakeEvent
   | RecoveryEvent
+  | RewindEvent
   | ErrorEvent
   | OutcomeEvent;
 

@@ -90,6 +90,7 @@ export const S0_HELP = [
   "  /session           id, model, turns, tokens",
   "  /copy              copy the last answer to the clipboard",
   "  /export [file]     this session as Markdown, to the file or the clipboard (free)",
+  "  /rewind            go back to an earlier prompt: code, conversation, or both (free)",
   "  /compact [hint]    compact context now",
   "  /followup <text>   queue a follow-up (delivered when idle)",
   "  /verbose           expand folded blocks, and show each tool's raw result",
@@ -134,6 +135,7 @@ export const S0_HELP = [
   "  click to copy      the hint under an answer copies that answer's source text",
   "  Ctrl-Backspace     delete the word behind the cursor (Ctrl-W does the same)",
   "  Alt-Left           the session browser",
+  "  Esc Esc            on an empty input, /rewind",
   "  Ctrl-Left          move a word left (Ctrl-Right moves right; Home/End reach the line ends)",
   "  PgUp/PgDn, wheel   scroll the transcript",
 ].join("\n");

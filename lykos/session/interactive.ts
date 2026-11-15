@@ -127,6 +127,7 @@ import { setStderrSink, stdoutWrite, stderrWrite } from "../tui/io-mode.js";
 import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
+import { REWIND_RESTORES, rewindPointLabel, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
 import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type SystemPart } from "../tui/s0.js";
 import { runInteractiveSurface } from "../tui/interactive-surface.js";
 import { effortToken } from "../tui/effort.js";
@@ -140,7 +141,7 @@ import { listCheckpoints } from "../loop/checkpoint.js";
 import { sessionChangedPaths } from "../loop/diff-summary.js";
 
 /** The subset of `AgentSession` this loop actually calls — the real class satisfies this structurally. */
-export interface InteractiveSession {
+export interface InteractiveSession extends RewindableSession {
   readonly sessionId: string;
   readonly systemPrompt: string;
   /** Synchronous truth, not a promise chain's accumulated flag — the loop's inner steering race checks this directly so a coincidental tie (idle and a new line arriving on the same microtask) can never leave a completed turn misread as still running. */
@@ -184,6 +185,11 @@ export interface LineSource {
   nextSecret?(): Promise<string | null>;
   /** Wakes any pending `next()` with null — used by the idle-Ctrl-C handler. */
   close(): void;
+  /**
+   * T263: put text in the input box, to edit and send — a rewound prompt. Absent on a
+   * source with no input box (readline), where the loop prints the text instead.
+   */
+  prefill?(text: string): void;
 }
 
 /**
@@ -449,6 +455,13 @@ export interface RunInteractiveLoopOpts {
   login?: (provider: string, apiKey: boolean, io: TuiLoginIO) => Promise<void>;
   /** P14.6 ticket 06: `/credential [label|auto]`. Returns the lines to print. */
   credential?: (arg: string) => string;
+  /** T263: this session's rewind (`booted.rewind`). Absent, `/rewind` says it is not available. */
+  rewind?: LiveRewind;
+  /**
+   * T263: the surface's own picker — the full-screen overlay. Absent, the loop
+   * asks on its line source: a numbered prompt, then a numbered restore.
+   */
+  pickRewind?: (points: readonly RewindPoint[]) => Promise<RewindChoice | undefined>;
 }
 
 /** What the loop gives `/login`: a prompt-and-read, and a line printer. */
@@ -708,6 +721,25 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     return sendToModel ? `$ ${command}\n${result.output}` : undefined;
   }
 
+  /** T263: the picker on the line source, for a surface with no overlay. Empty or unknown input cancels. */
+  async function pickOnLines(points: readonly RewindPoint[]): Promise<RewindChoice | undefined> {
+    const ask = async (): Promise<number | undefined> => {
+      const line = await nextLine();
+      consumeLine();
+      const n = Number((line ?? "").trim());
+      return Number.isInteger(n) && n >= 1 ? n - 1 : undefined;
+    };
+    chrome(
+      ["rewind to before which prompt? (Enter cancels)", ...points.map((p, i) => `  ${i + 1}  ${rewindPointLabel(p)}`)].join("\n"),
+    );
+    const index = await ask();
+    if (index === undefined || index >= points.length) return undefined;
+    chrome(["restore what? (Enter cancels)", ...REWIND_RESTORES.map((r, i) => `  ${i + 1}  ${r.label}`)].join("\n"));
+    const which = await ask();
+    const restore = which !== undefined ? REWIND_RESTORES[which]?.restore : undefined;
+    return restore === undefined ? undefined : { index, restore };
+  }
+
   async function handleOwned(
     parsed: Exclude<ReturnType<typeof parseInteractiveInput>, { kind: "prompt" } | { kind: "empty" } | { kind: "continue" }>,
   ): Promise<"exit" | "ok"> {
@@ -807,6 +839,34 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         }
         if (opts.onCopyText(markdown, "session as Markdown") === false) {
           chrome("lykos: /export <file> writes the session to a file instead");
+        }
+        return "ok";
+      }
+      case "rewind": {
+        // T263: the person's, never the agent's — there is no tool for it.
+        if (!opts.rewind) {
+          chrome("lykos: /rewind is not available on this session");
+          return "ok";
+        }
+        if (!session.isIdle) {
+          chrome("lykos: /rewind cannot run while a turn is in flight");
+          return "ok";
+        }
+        const points = opts.rewind.points();
+        if (points.length === 0) {
+          chrome("lykos: nothing to rewind yet — no prompt has been sent in this session");
+          return "ok";
+        }
+        const choice = await (opts.pickRewind ?? pickOnLines)(points);
+        if (choice === undefined) {
+          chrome("rewind cancelled; nothing was changed");
+          return "ok";
+        }
+        const report = await opts.rewind.rewind(session, choice.index, choice.restore, opts.recorder);
+        chrome(report.lines.join("\n"));
+        if (report.inputText !== undefined) {
+          if (lineSource.prefill) lineSource.prefill(report.inputText);
+          else chrome(`your prompt, to send again or change:\n${report.inputText}`);
         }
         return "ok";
       }
@@ -1057,6 +1117,8 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     // turn — nothing was sent, and a transcript that claimed otherwise would
     // replay a prompt the model never saw.
     opts.recorder?.userMessage(text);
+    // T263: the prompt as typed, so a rewind can put it back in the input box.
+    opts.rewind?.promptSent(session, rawText);
     turnRunning = true;
     try {
       await session.prompt(text);

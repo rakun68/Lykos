@@ -189,6 +189,7 @@ import { currentPriceTable } from "../ledger/prices.js";
 import { AUTO_SEARCH_PROVIDER, resolveAutoSearchKeys, resolveSearchApiKey, type SearchBackendKeys } from "../tools/web-search.js";
 import { assembleOutputStyleHead, resolveOutputStyle } from "../config/output-styles.js";
 import { homedir } from "node:os";
+import { LiveRewind } from "./rewind.js";
 
 /**
  * T86: the model's context window, if the registry knows it. Never guesses:
@@ -350,6 +351,8 @@ export function buildAppendSystemPromptOverride(
 
 export interface BootedStandaloneSession {
   session: AgentSession;
+  /** T263: `/rewind` and Esc Esc in the live session: its prompts, and the checkpoint each started from. */
+  rewind: LiveRewind;
   headContract: HeadContract;
   /** T84: live clamp counters, mutated by the harness extension all session. */
   harnessObservation: HarnessObservation;
@@ -1042,9 +1045,12 @@ async function assembleSession(opts: AssembleOpts): Promise<BootedStandaloneSess
   const sessionHolder: { id?: () => string } = {};
   extensionHost.setSessionId(() => sessionHolder.id?.() ?? "");
   extensionHost.setSpecialist(() => opts.specialistName);
+  // T263: the live session's rewind, told by the harness which checkpoint each turn started from.
+  const rewind = new LiveRewind(checkpointEnabled ? cwd : undefined);
   const harnessExtension = createHarnessExtension({
     maxBytes: toolResultMaxBytesFromEnv(),
     observation: harnessObservation,
+    onTurnStart: (turn, checkpoint) => rewind.turnStarted(turn, checkpoint),
     compactionThreshold: opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
     events,
     extensionHost,
@@ -1399,6 +1405,7 @@ ${note}
 
   return {
     session,
+    rewind,
     headContract,
     harnessObservation,
     denials,

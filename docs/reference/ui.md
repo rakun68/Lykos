@@ -54,6 +54,7 @@ The input composer is a multi-line buffer with word-wrapping and bracketed paste
 | `PgUp` / `PgDn` | Scroll transcript viewport up/down |
 | Mouse Wheel | Scroll transcript viewport smoothly |
 | `Escape` | Dismiss completion popup or cancel search |
+| `Esc Esc` | On an empty input, `/rewind` (T263) |
 
 ### 2.2 Built-in Slash Commands
 Commands are dispatched locally without incurring LLM turns:
@@ -68,6 +69,7 @@ Commands are dispatched locally without incurring LLM turns:
 - `/model <provider/model>`: Switch active model for the remainder of the session (advisory: next turn may pay for cold prefix).
 - `/effort <off|low|mid|max>`: Adjust reasoning effort level and composer border hue.
 - `/session`: Display current session ID, token totals, and running cost.
+- `/rewind`: Pick an earlier prompt, then restore code and conversation, conversation only, or code only (or cancel). A conversation rewind puts the prompt back in the input box; nothing is deleted and there is no redo (`sessions-and-archive.md` §2.2.1). Refused while a turn runs.
 - `/export [file]`: Write this session's conversation as Markdown to `file` (relative to the working directory), or with no file put it on the clipboard through OSC 52. Read from the transcript (sessions-and-archive §2.4). A session too large for the terminal's clipboard is refused with a message, never claimed as copied; the file form still works.
 - `/output-style [name]`: List available output styles (bare) or switch active output style in stream (`<name>`).
 - `/close-session`: Mark current session closed and exit.

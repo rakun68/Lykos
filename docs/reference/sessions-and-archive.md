@@ -109,6 +109,27 @@ is refused and restores nothing, not even the safety checkpoint. An index still 
 or more digits is read as a hash when one matches, and refused when it is also a different
 checkpoint's index.
 
+### 2.2.1 Rewinding a Live Session (`/rewind`, Esc Esc)
+In an interactive session, `/rewind` (or Esc Esc on an empty input, on the full-screen surface)
+lists the session's earlier prompts. The chosen one offers: code and conversation, conversation
+only, code only, or cancel. Only the person can rewind; there is no tool for it.
+
+- **Conversation** moves Pi's session tree back to before that prompt (`navigateTree`), and the
+  prompt goes back in the input box (the append-only surface, which has no input box, prints it).
+  The next prompt is answered from that point: the model is not sent the undone turns.
+- **Code** restores the whole tree, shell edits included, from the checkpoint holding the tree the
+  prompt's first turn started from: the one taken then, or the ref's tip when nothing had changed.
+  The current tree is checkpointed first (`before rewind to <hash>`, listed by `lykos rewind`), and
+  a file the checkpoint did not have is reported and left in place, as `lykos rewind` does.
+- **Nothing is deleted and there is no redo.** The transcript gets a `rewind` event (what was
+  restored, the prompt, `to_turn`, `undone_turns`, `checkpoint`, `safety_checkpoint`); the undone
+  turns stay in the transcript before it and their calls stay in the ledger and in the session's
+  cost. `lykos show` prints each rewind and the undone branch's turns and prompts (`--json`:
+  `rewinds`). The session keeps its id and its row.
+
+Only prompts sent by the running process are offered; a resumed session's replayed turns are not
+(T264). Resuming a session replays its whole transcript, undone turns included.
+
 ### 2.3 Archival and Compression (`lykos archive`)
 Historical transcripts are compressed to `.gz` in place after passing the configured retention
 period. Compression preserves the uncompressed SHA-256 byte hash in the ledger to guarantee

@@ -45,6 +45,7 @@ import {
   type CaptureMode,
   type RecoveryEvent,
   type ResumeEvent,
+  type RewindEvent,
   type SessionMeta,
   type TranscriptEventInput,
 } from "./transcript.js";
@@ -70,6 +71,8 @@ export interface TranscriptRecorder {
   steer(text: string, mode?: "steer" | "follow_up"): void;
   answer(question: string, answer: string): void;
   intervention(action: string, detail?: string): void;
+  /** T263: optional, so a test's recorder need not write rewinds. */
+  rewind?(event: Omit<RewindEvent, "kind">): void;
 }
 
 interface AgentEventish {
@@ -172,6 +175,11 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
   /** T57: written before anything else on a resumed session, so the file explains itself from its first line. */
   resumeMarker(event: Omit<ResumeEvent, "kind">): void {
     this.append({ kind: "resume", ...event });
+  }
+
+  /** T263: a rewind of this live session, at the moment it happened. */
+  rewind(event: Omit<RewindEvent, "kind">): void {
+    this.append({ kind: "rewind", ...event });
   }
 
   /** T238: the working tree a resume found, after the marker and before the replay. */

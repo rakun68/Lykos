@@ -214,6 +214,17 @@ One continuous run of the agent. A resume continues the session it names rather 
 one.
 _Avoid_: conversation, run, thread
 
+**Rewind**:
+A person taking a live session back to before one of its earlier prompts: its code, its
+conversation, or both. The session stays the same session; nothing is deleted and nothing can be
+redone. Only a person rewinds, never the agent.
+_Avoid_: undo, revert, reset, rollback
+
+**Undone branch**:
+The turns a conversation rewind took the session back past. They stay in the transcript and their
+calls stay in the session's cost; the model is no longer sent them.
+_Avoid_: deleted turns, discarded history, abandoned branch
+
 **Export**:
 A session's conversation taken out of Lykos as Markdown: prompts, answers, and tool calls with their
 results. The archive keeps the session; an export is a copy for reading elsewhere.

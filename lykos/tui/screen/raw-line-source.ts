@@ -121,7 +121,7 @@ export interface RawLineSourceOptions {
   onTranscriptSearchSubmit?: (query: string) => void;
   onTranscriptSearchCancel?: () => void;
   onTranscriptSearchMove?: (direction: "next" | "previous") => void;
-  /** T122: Esc Esc opens the human-only checkpoint picker. */
+  /** T263: Esc Esc on an empty input opens the rewind picker. Never called with text in the input. */
   onDoubleEscape?: () => boolean;
   doubleEscapeWindowMs?: number;
   /**
@@ -477,7 +477,8 @@ export class RawLineSource implements LineSource {
       case "escape":
         {
           const now = Date.now();
-          if (now - this.lastEscapeAt <= this.doubleEscapeWindowMs && this.onDoubleEscape?.() === true) {
+          const empty = this.editor.text.length === 0;
+          if (empty && now - this.lastEscapeAt <= this.doubleEscapeWindowMs && this.onDoubleEscape?.() === true) {
             this.lastEscapeAt = 0;
             return;
           }
@@ -989,6 +990,12 @@ export class RawLineSource implements LineSource {
   inject(text: string): void {
     this.queue.push(text);
     this.drain();
+  }
+
+  /** T263: a rewound prompt, put back in the input box to edit and send. Replaces what is there. */
+  prefill(text: string): void {
+    this.editor.reset(text);
+    this.onChange?.(this.editor.state);
   }
 
   private drain(): void {

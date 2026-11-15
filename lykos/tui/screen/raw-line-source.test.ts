@@ -396,3 +396,37 @@ describe("the session-browser gesture (UI feedback item 5)", () => {
     assert.ok(src.editorState.selection !== null, "Ctrl+Shift+Left still extends a selection");
   });
 });
+
+describe("T263: RawLineSource — rewind", () => {
+  it("Esc Esc on an empty input calls onDoubleEscape", () => {
+    let calls = 0;
+    const src = new RawLineSource({ onDoubleEscape: () => ((calls += 1), true) });
+    src.feedBytes("\x1b");
+    src.flushPending();
+    src.feedBytes("\x1b");
+    src.flushPending();
+    assert.equal(calls, 1);
+  });
+
+  it("Esc Esc with text in the input does not, and the text stays", () => {
+    let calls = 0;
+    const src = new RawLineSource({ onDoubleEscape: () => ((calls += 1), true) });
+    src.feedBytes("draft");
+    src.feedBytes("\x1b");
+    src.flushPending();
+    src.feedBytes("\x1b");
+    src.flushPending();
+    assert.equal(calls, 0);
+    assert.deepEqual(src.editorState.lines, ["draft"]);
+  });
+
+  it("prefill puts the text in the input box, to edit and send", async () => {
+    const src = new RawLineSource();
+    src.prefill("third: change c");
+    assert.deepEqual(src.editorState.lines, ["third: change c"]);
+    const p = src.next();
+    src.feedBytes(" again\r");
+    src.flushPending();
+    assert.equal(await p, "third: change c again");
+  });
+});

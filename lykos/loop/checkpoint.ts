@@ -133,8 +133,11 @@ export function workingTreeFingerprint(deps: CheckpointDeps): string | undefined
 
 export type CheckpointResult =
   | { status: "created"; commit: string; label: string }
-  /** Nothing changed since the last checkpoint, so no commit was made. `tree` is the tree that was found. */
-  | { status: "unchanged"; tree: string }
+  /**
+   * Nothing changed since the last checkpoint, so no commit was made. `tree` is the tree that was found;
+   * `commit` (T263) is the checkpoint already holding it, the ref's tip.
+   */
+  | { status: "unchanged"; tree: string; commit: string }
   | { status: "skipped"; reason: string };
 
 /**
@@ -168,7 +171,7 @@ export function createCheckpoint(deps: CheckpointDeps, label: string, meta: Chec
   const parent = git(["rev-parse", "--verify", "--quiet", CHECKPOINT_REF], deps.cwd);
   if (meta.tree === undefined && parent.ok && parent.stdout.length > 0) {
     const parentTree = git(["rev-parse", `${CHECKPOINT_REF}^{tree}`], deps.cwd);
-    if (parentTree.ok && parentTree.stdout === tree) return { status: "unchanged", tree };
+    if (parentTree.ok && parentTree.stdout === tree) return { status: "unchanged", tree, commit: parent.stdout };
   }
 
   // T146: the session and turn ride in the commit message as trailers — the

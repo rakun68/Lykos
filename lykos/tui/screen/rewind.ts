@@ -1,29 +1,34 @@
-// T122: a human-only checkpoint picker. It deliberately owns no git logic;
-// the caller supplies the list and the restore action, keeping rewind out of
-// the agent tool surface.
+// T263 (was T122's checkpoint picker): the full-screen rewind picker. Esc Esc
+// on an empty input and `/rewind` open it over the session's earlier prompts;
+// Enter on one offers what to restore. It owns no git and no session logic:
+// it resolves with the choice and `session/rewind.ts` carries it out, so
+// rewind stays a human action and never reaches the agent's tool surface.
 
 import { KeyDecoder, type FeedOptions, type KeyEvent } from "./input.js";
 import { style, withBackground, type ResolvedTheme } from "../theme/resolve.js";
 import { visibleWidth } from "./frame.js";
-import type { CheckpointEntry } from "../../loop/checkpoint.js";
+import { REWIND_RESTORES, rewindPointLabel, type RewindChoice, type RewindPoint } from "../../session/rewind.js";
 
 export interface RewindState {
-  entries: CheckpointEntry[];
+  points: readonly RewindPoint[];
+  /** The highlighted prompt. */
   cursor: number;
-  confirming: boolean;
+  /** Choosing a prompt, then what to restore from before it. */
+  stage: "prompt" | "restore";
+  /** The highlighted restore, into `REWIND_RESTORES`. */
+  restoreCursor: number;
 }
 
 export interface RewindOverlayOptions {
-  load(): CheckpointEntry[];
   onRender(state: RewindState, height: number): void;
   onClose(): void;
-  onRestore(index: number): void;
 }
 
 export class RewindOverlay {
   private readonly decoder = new KeyDecoder();
   private readonly opts: RewindOverlayOptions;
   private state: RewindState | null = null;
+  private resolve: ((choice: RewindChoice | undefined) => void) | null = null;
   private height = 24;
 
   constructor(opts: RewindOverlayOptions) {
@@ -34,18 +39,21 @@ export class RewindOverlay {
     return this.state !== null;
   }
 
-  open(height: number): void {
-    if (this.state) return;
+  /** Opens on the latest prompt. Resolves with the choice, or undefined when cancelled. */
+  open(height: number, points: readonly RewindPoint[]): Promise<RewindChoice | undefined> {
+    this.finish(undefined);
     this.height = Math.max(6, height);
-    this.state = { entries: this.opts.load(), cursor: 0, confirming: false };
+    this.state = { points, cursor: Math.max(0, points.length - 1), stage: "prompt", restoreCursor: 0 };
+    const chosen = new Promise<RewindChoice | undefined>((resolve) => {
+      this.resolve = resolve;
+    });
     this.render();
+    return chosen;
   }
 
+  /** Cancels, if open. */
   close(): void {
-    if (!this.state) return;
-    this.state = null;
-    this.decoder.flush();
-    this.opts.onClose();
+    this.finish(undefined);
   }
 
   setHeight(height: number): void {
@@ -61,49 +69,54 @@ export class RewindOverlay {
     for (const event of this.decoder.flush()) this.handleKey(event);
   }
 
+  private finish(choice: RewindChoice | undefined): void {
+    if (!this.state) return;
+    this.state = null;
+    this.decoder.flush();
+    const resolve = this.resolve;
+    this.resolve = null;
+    this.opts.onClose();
+    resolve?.(choice);
+  }
+
   private handleKey(event: KeyEvent): void {
     const state = this.state;
     if (!state) return;
     if (event.type === "escape") {
-      if (state.confirming) {
-        this.state = { ...state, confirming: false };
+      if (state.stage === "restore") {
+        this.state = { ...state, stage: "prompt" };
         this.render();
-      } else this.close();
+      } else this.finish(undefined);
       return;
     }
     if (event.type === "arrow" && (event.dir === "up" || event.dir === "down")) {
       const delta = event.dir === "up" ? -1 : 1;
-      this.state = {
-        ...state,
-        cursor: Math.max(0, Math.min(Math.max(0, state.entries.length - 1), state.cursor + delta)),
-      };
+      this.state =
+        state.stage === "prompt"
+          ? { ...state, cursor: clamp(state.cursor + delta, state.points.length) }
+          : { ...state, restoreCursor: clamp(state.restoreCursor + delta, REWIND_RESTORES.length) };
       this.render();
       return;
     }
-    if (event.type === "pageUp" || event.type === "pageDown") {
-      const delta = event.type === "pageUp" ? -Math.max(1, this.height - 5) : Math.max(1, this.height - 5);
-      this.state = {
-        ...state,
-        cursor: Math.max(0, Math.min(Math.max(0, state.entries.length - 1), state.cursor + delta)),
-      };
+    if ((event.type === "pageUp" || event.type === "pageDown") && state.stage === "prompt") {
+      const step = Math.max(1, this.height - 5);
+      this.state = { ...state, cursor: clamp(state.cursor + (event.type === "pageUp" ? -step : step), state.points.length) };
       this.render();
       return;
     }
-    if (event.type === "char" && state.confirming && /^[yn]$/i.test(event.value)) {
-      if (event.value.toLowerCase() === "y" && state.entries[state.cursor]) {
-        const index = state.cursor;
-        this.close();
-        this.opts.onRestore(index);
-      } else {
-        this.state = { ...state, confirming: false };
-        this.render();
-      }
+    if (event.type === "char" && state.stage === "restore" && /^[1-9]$/.test(event.value)) {
+      const restore = REWIND_RESTORES[Number(event.value) - 1]?.restore;
+      if (restore !== undefined) this.finish({ index: state.cursor, restore });
       return;
     }
     if (event.type === "enter" && !event.alt && !event.ctrl && !event.shift) {
-      if (state.entries.length === 0) return;
-      this.state = { ...state, confirming: true };
-      this.render();
+      if (state.points.length === 0) return;
+      if (state.stage === "prompt") {
+        this.state = { ...state, stage: "restore", restoreCursor: 0 };
+        this.render();
+      } else {
+        this.finish({ index: state.cursor, restore: REWIND_RESTORES[state.restoreCursor]!.restore });
+      }
     }
   }
 
@@ -112,21 +125,35 @@ export class RewindOverlay {
   }
 }
 
+function clamp(value: number, length: number): number {
+  return Math.max(0, Math.min(Math.max(0, length - 1), value));
+}
+
 export function renderRewind(state: RewindState, opts: { width: number; height: number; theme: ResolvedTheme }): string[] {
-  const lines = [
-    style("rewind — human checkpoint picker", "accent", opts.theme),
-    style("↑/↓ choose · Enter review · y restore · n/Esc cancel · Esc back", "dim", opts.theme),
-  ];
-  if (state.entries.length === 0) lines.push(style("no checkpoints yet — they are taken at the start of each turn", "dim", opts.theme));
-  for (const [index, entry] of state.entries.entries()) {
-    const marker = index === state.cursor ? "› " : "  ";
-    const label = `${index}  ${entry.at}  ${entry.label}`;
-    const line = `${marker}${label}`;
-    lines.push(index === state.cursor ? withBackground(line, "completionBg", opts.theme, visibleWidth(line), opts.width) : line);
-  }
-  if (state.confirming) {
+  const highlight = (line: string) => withBackground(line, "completionBg", opts.theme, visibleWidth(line), opts.width);
+  const lines = [style("rewind — go back to before an earlier prompt", "accent", opts.theme)];
+  if (state.stage === "prompt") {
+    lines.push(style("↑/↓ choose · Enter choose what to restore · Esc cancel", "dim", opts.theme));
+    for (const [index, point] of state.points.entries()) {
+      const line = `${index === state.cursor ? "› " : "  "}${index + 1}  ${rewindPointLabel(point, Math.max(20, opts.width - 24))}`;
+      lines.push(index === state.cursor ? highlight(line) : line);
+    }
+  } else {
+    const point = state.points[state.cursor];
+    lines.push(style("↑/↓ or 1-3 choose · Enter restore · Esc back", "dim", opts.theme));
+    if (point !== undefined) lines.push(`before: ${rewindPointLabel(point, Math.max(20, opts.width - 30))}`);
+    for (const [index, r] of REWIND_RESTORES.entries()) {
+      const line = `${index === state.restoreCursor ? "› " : "  "}${index + 1}  ${r.label}`;
+      lines.push(index === state.restoreCursor ? highlight(line) : line);
+    }
     lines.push("");
-    lines.push(style(`restore checkpoint ${state.cursor}? This first checkpoints your current work and leaves extra files untouched. [y/N]`, "warn", opts.theme));
+    lines.push(
+      style(
+        "Nothing is deleted: the current tree is checkpointed first, files the checkpoint lacks stay, and undone turns stay in the transcript.",
+        "dim",
+        opts.theme,
+      ),
+    );
   }
   while (lines.length < opts.height) lines.push("");
   return lines.slice(0, opts.height);

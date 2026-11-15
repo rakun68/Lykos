@@ -58,6 +58,8 @@ export type ParsedInput =
   /** T267: the session as Markdown. `file` is empty when none was typed, which means the clipboard. */
   | { kind: "export"; file: string }
   | { kind: "verbose" }
+  /** T263: open the rewind picker over this session's earlier prompts. */
+  | { kind: "rewind" }
   | { kind: "thinking" }
   | { kind: "compact"; hint: string }
   | { kind: "followup"; text: string }
@@ -165,6 +167,7 @@ export function parseInteractiveInput(line: string): ParsedInput {
   if (name === "copy") return { kind: "copy" };
   if (name === "export") return { kind: "export", file: arg };
   if (name === "verbose") return { kind: "verbose" };
+  if (name === "rewind") return { kind: "rewind" };
   if (name === "thinking") return { kind: "thinking" };
   if (name === "effort") return { kind: "effort", level: arg.toLowerCase() };
   if (name === "usage") return { kind: "usage" };
