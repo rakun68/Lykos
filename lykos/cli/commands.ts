@@ -850,6 +850,17 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "bench",
+    help: [
+      "  bench     `lykos bench import <instance> --out <dir>`: a SWE-bench-Live task as a repository at its base and a task file;",
+      "            `lykos bench check <instance> [--repo <dir>] [--ref <ref>]`: run its hidden tests on a finished branch, recorded in the ledger (JSON)",
+    ],
+    run: async (rest, { cwd }) => {
+      const { runBench } = await import("./bench.js");
+      return runBench(cwd, rest);
+    },
+  },
+  {
     name: "accept",
     help: ["  accept    `lykos accept <id> --why <reason> [--cause <cause>]`: record that you accept a delegated session's result (JSON; no arguments lists the causes)"],
     run: async (rest, { cwd }) => {

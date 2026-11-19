@@ -209,6 +209,17 @@ The SQLite database recording every session and every model call. It is written 
 never by an agent.
 _Avoid_: telemetry store, metrics database, analytics
 
+**Benchmark instance**:
+One task of a public benchmark: a repository at a base commit, an issue's problem statement, and
+hidden tests. The session sees the repository and the statement; the hidden tests run only after it
+ends, and decide whether the issue is resolved.
+_Avoid_: benchmark task (for the imported files), eval case, sample
+
+**Hidden tests**:
+A benchmark instance's tests, test patch and expected results, kept where no session can read them
+and run only by `lykos bench check` on the finished branch.
+_Avoid_: sealed tests (a sealed test is in the session's view and may not be edited), held-out tests
+
 **Session**:
 One continuous run of the agent. A resume continues the session it names rather than creating a new
 one.

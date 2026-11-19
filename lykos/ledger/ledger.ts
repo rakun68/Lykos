@@ -758,6 +758,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateSpecChecks(db);
   migrateFindings(db);
   migrateCycles(db);
+  migrateBenchResults(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -1184,6 +1185,33 @@ function migrateBaselines(db: Database.Database): void {
       reused       INTEGER NOT NULL,
       recorded_at  TEXT NOT NULL
     );
+  `);
+}
+
+/**
+ * T258: `bench_results`, one row per `lykos bench check`: a benchmark instance's hidden tests run on a ref. Append-only;
+ * `status` is `resolved`, `unresolved` or `error`, and the counts are null when the tests never ran.
+ */
+function migrateBenchResults(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bench_results (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts           TEXT NOT NULL,
+      dataset      TEXT NOT NULL,
+      revision     TEXT NOT NULL,
+      instance_id  TEXT NOT NULL,
+      ref          TEXT NOT NULL,
+      head         TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      f2p_passed   INTEGER,
+      f2p_total    INTEGER,
+      p2p_passed   INTEGER,
+      p2p_total    INTEGER,
+      error        TEXT,
+      duration_ms  INTEGER NOT NULL,
+      log_path     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bench_results_instance ON bench_results(instance_id);
   `);
 }
 
