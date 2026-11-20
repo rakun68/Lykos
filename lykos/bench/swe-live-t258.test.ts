@@ -9,11 +9,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
+import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { parseTaskFile } from "../delegate/task-file.js";
 import { collectPathRules, decidePath, type PathContext } from "../gate/path-rules.js";
+import { loadConfig } from "../config/load.js";
 import { openLedgerSync } from "../ledger/use.js";
+import { applySpecialist } from "../session/specialist-apply.js";
+import { applyToolDeltas, resolveStandaloneTools } from "../tools/session-tools.js";
+import { createSpecialistGuardHandler } from "../tools/specialist-guard-extension.js";
 import {
   asInstance,
+  BENCH_WEB_TOOLS,
   BenchError,
   checkInstance,
   fetchInstance,
@@ -156,6 +162,30 @@ describe("T258: import", () => {
     assert.equal(stored.instance.test_patch, TEST_PATCH);
 
     assert.throws(() => importInstance({ dataset: "d", revision: "r", instance: row, out, home, cloneUrl: pathToFileURL(up.dir).href }), /exists/);
+  });
+
+  it("leaves a session in the repository no tool that reaches the web, and git sees no trace of it", () => {
+    const up = upstream();
+    const out = scratch();
+    const res = importInstance({ dataset: "SWE-bench-Live/Windows", revision: "rev1", instance: instance(up.base), out, home: scratch(), cloneUrl: pathToFileURL(up.dir).href });
+
+    // The path `session/boot.ts` takes: the project layer's delta on the default surface, then the specialist guard,
+    // which refuses an off-limits tool both called directly and through `tool_call`.
+    const { resolved } = loadConfig({ cwd: res.repoDir, globalDir: scratch(), env: {} });
+    const defaults = resolveStandaloneTools({ isChild: false });
+    for (const name of BENCH_WEB_TOOLS) assert.ok(defaults.includes(name), `${name} is on the default surface, so withholding it is real`);
+    const app = applySpecialist({
+      context: "session-start",
+      defaultToolNames: defaults,
+      specialistToolNames: applyToolDeltas(defaults, resolved.tools_add, resolved.tools_remove),
+    });
+    const guard = createSpecialistGuardHandler({ offLimitTools: app.offLimitToolNames, registryOffTools: [] });
+    for (const name of BENCH_WEB_TOOLS) {
+      const verdict = guard({ type: "tool_call", toolCallId: "c1", toolName: name, input: {} } as ToolCallEvent);
+      assert.equal(verdict?.block, true, `${name} is refused`);
+    }
+    for (const name of ["read", "bash", "edit"]) assert.equal(guard({ type: "tool_call", toolCallId: "c2", toolName: name, input: {} } as ToolCallEvent), undefined, `${name} stays`);
+    assert.equal(git(res.repoDir, "status", "--porcelain", "--ignored"), "!! .lykos/");
   });
 
   it("keeps the hidden material where the gate denies every session, for read and write", () => {

@@ -49,6 +49,15 @@ export interface StoredInstance {
 
 export class BenchError extends Error {}
 
+/**
+ * The tools a session in an imported repository is denied: the issue and its fix PR are public, so a session that can
+ * search or fetch the web can read the answer (FrontierHarness Eval v1.1 found 163 of 216 reward-hacking trials were
+ * online lookups). The import writes them into the repository's `.lykos/config.yaml` as `tools_remove`, which the
+ * specialist guard refuses whether called directly or through `tool_call`, trusted project or not.
+ * Not covered: `github` (mounted, so `tools_remove` does not reach it) and network commands in `bash`/`powershell`.
+ */
+export const BENCH_WEB_TOOLS = ["web_search", "web_fetch"] as const;
+
 const REQUIRED_STRINGS = ["instance_id", "repo", "base_commit", "problem_statement", "test_patch", "log_parser"] as const;
 const REQUIRED_LISTS = ["rebuild_cmds", "test_cmds", "print_cmds", "FAIL_TO_PASS", "PASS_TO_PASS"] as const;
 
@@ -200,6 +209,10 @@ export function importInstance(input: {
   if (head.stdout !== instance.base_commit) throw new BenchError(`bench: the checkout is at ${head.stdout || "(none)"}, not the base commit ${instance.base_commit}`);
   // FETCH_HEAD names the upstream URL and is the only trace of it; the reflog holds nothing past the base either.
   rmSync(join(repoDir, ".git", "FETCH_HEAD"), { force: true });
+  // The web tools are withheld from every session here; git ignores the config, so no branch carries it.
+  mkdirSync(join(repoDir, ".lykos"), { recursive: true });
+  writeFileSync(join(repoDir, ".lykos", "config.yaml"), `# lykos bench import: no web lookups during a bench run.\ntools_remove: [${BENCH_WEB_TOOLS.join(", ")}]\n`);
+  writeFileSync(join(repoDir, ".git", "info", "exclude"), "/.lykos/\n", { flag: "a" });
 
   const taskFile = join(out, "task.md");
   writeFileSync(taskFile, taskFileFor(instance));
