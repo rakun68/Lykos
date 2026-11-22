@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -14,6 +14,7 @@ import {
   renderCheckpointList,
   renderRestore,
   restoreCheckpoint,
+  restoreCheckpointByHash,
 } from "./checkpoint.js";
 
 /**
@@ -131,6 +132,61 @@ describe("createCheckpoint", () => {
       assert.equal(isGitRepo({ cwd: dir }), false);
       const result = createCheckpoint({ cwd: dir }, "turn 1");
       assert.equal(result.status, "skipped");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Lykos's runtime state is never checkpointed or restored", () => {
+  /** A repository whose .gitignore says nothing of `.lykos/`, as one `lykos init` never ran in. */
+  function withRuntimeState(dir: string): { transcript: string; ledger: string; config: string } {
+    const sessionDir = join(dir, ".lykos", "sessions", "s1");
+    mkdirSync(sessionDir, { recursive: true });
+    const transcript = join(sessionDir, "transcript.jsonl");
+    const ledger = join(dir, ".lykos", "ledger.db");
+    const config = join(dir, ".lykos", "config.yaml");
+    writeFileSync(transcript, '{"turn_index":0}\n');
+    writeFileSync(ledger, "ledger v1");
+    writeFileSync(config, "model: a\n");
+    return { transcript, ledger, config };
+  }
+
+  it("leaves the transcripts and the ledger out of a checkpoint, and keeps the project's config", () => {
+    const dir = repo();
+    try {
+      withRuntimeState(dir);
+      assert.equal(createCheckpoint({ cwd: dir }, "turn 1").status, "created");
+      const files = execFileSync("git", ["ls-tree", "-r", "--name-only", CHECKPOINT_REF], { cwd: dir, encoding: "utf8" });
+      assert.ok(!files.includes(".lykos/sessions/"), `checkpoint holds a transcript: ${files}`);
+      assert.ok(!files.includes(".lykos/ledger.db"), `checkpoint holds the ledger: ${files}`);
+      assert.ok(files.includes(".lykos/config.yaml"), `checkpoint lost the config: ${files}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a restore writes no runtime state back, even from a checkpoint that holds it", () => {
+    const dir = repo();
+    try {
+      const { transcript, ledger } = withRuntimeState(dir);
+      // A checkpoint written before runtime state was excluded: `add -A` took everything.
+      const index = { ...process.env, GIT_INDEX_FILE: join(dir, ".git", "old-index") };
+      execFileSync("git", ["add", "-A"], { cwd: dir, env: index });
+      const tree = execFileSync("git", ["write-tree"], { cwd: dir, env: index, encoding: "utf8" }).trim();
+      const commit = execFileSync("git", ["commit-tree", tree, "-m", "old turn"], { cwd: dir, encoding: "utf8" }).trim();
+      execFileSync("git", ["update-ref", CHECKPOINT_REF, commit], { cwd: dir });
+
+      writeFileSync(join(dir, "a.txt"), "changed\n");
+      writeFileSync(transcript, '{"turn_index":0}\n{"turn_index":1}\n');
+      writeFileSync(ledger, "ledger v2");
+
+      const result = restoreCheckpointByHash({ cwd: dir }, commit.slice(0, 8));
+      assert.equal(result.status, "restored");
+      assert.equal(readFileSync(join(dir, "a.txt"), "utf8"), "original\n");
+      assert.equal(readFileSync(transcript, "utf8"), '{"turn_index":0}\n{"turn_index":1}\n', "the transcript was rewound");
+      assert.equal(readFileSync(ledger, "utf8"), "ledger v2", "the ledger was rewound");
+      assert.deepEqual((result as { extras: string[] }).extras, [], "runtime state is not an extra");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

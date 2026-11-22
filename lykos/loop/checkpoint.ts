@@ -41,15 +41,46 @@
 //
 // A RESTORE IS ITSELF CHECKPOINTED first, so a rewind can be un-rewound.
 // `.gitignore` is respected throughout, because `add -A` respects it: a
-// checkpoint never contains `node_modules` or `.lykos/ledger.db`.
+// checkpoint never contains `node_modules`.
+//
+// LYKOS'S OWN RUNTIME STATE IS NEVER CHECKPOINTED OR RESTORED, whatever the
+// `.gitignore` says: the transcripts, the ledger, the history (the scaffold's
+// `GITIGNORE_LINES`). A repository `lykos init` never ran in ignores none of
+// them, and a code rewind there wrote the transcript back to the turn it
+// rewound to, losing the undone branch the rewind had just promised to keep.
+// A restore skips those paths even in a checkpoint taken before this rule.
 
 import { join } from "node:path";
+import { GITIGNORE_LINES } from "../config/scaffold.js";
 import type { LykosEventSink } from "../extensions/api.js";
 import { spawnGit, type GitRun, type GitRunner } from "../git/host-git.js";
 
 export const CHECKPOINT_REF = "refs/lykos/checkpoints";
 const CHECKPOINT_INDEX = "lykos-checkpoint-index";
 const RESTORE_INDEX = "lykos-restore-index";
+
+const runtimePaths = GITIGNORE_LINES.map((line) => line.replace(/\/$/, ""));
+/** Lykos's runtime state, as pathspecs from the repository's root. */
+const RUNTIME_STATE = runtimePaths.map((path) => `:(top)${path}`);
+/** The whole working tree except the runtime state. */
+const PROJECT_FILES = [":/", ...runtimePaths.map((path) => `:(top,exclude)${path}`)];
+
+/**
+ * Stages the working tree into a scratch index, without Lykos's runtime state. The scratch index
+ * persists between checkpoints, so runtime entries an earlier `add -A` put there are dropped too.
+ */
+function stageProject(git: GitRunner, cwd: string, indexEnv: NodeJS.ProcessEnv): GitRun {
+  // Plain `add -A`: an exclude pathspec naming a path `.gitignore` already ignores makes `add` fail.
+  const added = git(["add", "-A"], cwd, indexEnv);
+  if (!added.ok) return added;
+  return dropRuntimeState(git, cwd, indexEnv);
+}
+
+/** Removes Lykos's runtime state from a scratch index; the files on disk are not touched. */
+function dropRuntimeState(git: GitRunner, cwd: string, indexEnv: NodeJS.ProcessEnv): GitRun {
+  // `-f`: an entry that differs from HEAD and the file is still only an index entry here.
+  return git(["rm", "--cached", "-r", "-q", "-f", "--ignore-unmatch", "--", ...RUNTIME_STATE], cwd, indexEnv);
+}
 
 // T170: the host git helper owns the runner, so hooks and fsmonitor stay off.
 export { spawnGit, type GitRun, type GitRunner };
@@ -126,7 +157,7 @@ export function workingTreeFingerprint(deps: CheckpointDeps): string | undefined
   // first fingerprint in a session hash every file (measured: 2063 ms on a
   // 2164-file repository, against 16-25 ms warm).
   const indexEnv = { GIT_INDEX_FILE: join(dir, CHECKPOINT_INDEX) };
-  if (!git(["add", "-A"], deps.cwd, indexEnv).ok) return undefined;
+  if (!stageProject(git, deps.cwd, indexEnv).ok) return undefined;
   const written = git(["write-tree"], deps.cwd, indexEnv);
   return written.ok ? written.stdout : undefined;
 }
@@ -160,7 +191,7 @@ export function createCheckpoint(deps: CheckpointDeps, label: string, meta: Chec
     const indexEnv = { GIT_INDEX_FILE: join(dir, CHECKPOINT_INDEX) };
     // `add -A` against a scratch index: the user's own index is never read and
     // never written, so a half-staged change survives untouched.
-    const added = git(["add", "-A"], deps.cwd, indexEnv);
+    const added = stageProject(git, deps.cwd, indexEnv);
     if (!added.ok) return { status: "skipped", reason: `git add failed: ${added.stderr}` };
 
     const written = git(["write-tree"], deps.cwd, indexEnv);
@@ -372,6 +403,8 @@ function restoreCheckpointEntry(deps: CheckpointDeps, target: CheckpointEntry): 
   const indexEnv = { GIT_INDEX_FILE: join(dir, RESTORE_INDEX) };
   const read = git(["read-tree", target.commit], deps.cwd, indexEnv);
   if (!read.ok) return { status: "error", message: `git read-tree failed: ${read.stderr}` };
+  const dropped = dropRuntimeState(git, deps.cwd, indexEnv);
+  if (!dropped.ok) return { status: "error", message: `git rm --cached failed: ${dropped.stderr}` };
   const checkout = git(["checkout-index", "-a", "-f"], deps.cwd, indexEnv);
   if (!checkout.ok) return { status: "error", message: `git checkout-index failed: ${checkout.stderr}` };
 
@@ -382,7 +415,9 @@ function restoreCheckpointEntry(deps: CheckpointDeps, target: CheckpointEntry): 
 function filesInTree(deps: CheckpointDeps, commit: string): string[] {
   const git = deps.git ?? spawnGit;
   const result = git(["ls-tree", "-r", "--name-only", commit], deps.cwd);
-  return result.ok && result.stdout.length > 0 ? result.stdout.split("\n") : [];
+  // `ls-tree` takes no pathspec magic, so the runtime state is filtered here.
+  const files = result.ok && result.stdout.length > 0 ? result.stdout.split("\n") : [];
+  return files.filter((file) => !runtimePaths.some((path) => file === path || file.startsWith(`${path}/`)));
 }
 
 /**
@@ -394,7 +429,7 @@ function filesInTree(deps: CheckpointDeps, commit: string): string[] {
  */
 function filesInWorkingTree(deps: CheckpointDeps): string[] {
   const git = deps.git ?? spawnGit;
-  const result = git(["ls-files", "--cached", "--others", "--exclude-standard"], deps.cwd);
+  const result = git(["ls-files", "--cached", "--others", "--exclude-standard", "--", ...PROJECT_FILES], deps.cwd);
   return result.ok && result.stdout.length > 0 ? result.stdout.split("\n") : [];
 }
 

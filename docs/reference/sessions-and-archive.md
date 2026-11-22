@@ -129,6 +129,13 @@ before that first file-changing call, holding the tree it started from. A checkp
 trailers — `lykos rewind --now`, a rewind's own safety checkpoint, and every checkpoint written
 before P4 — lists and restores exactly as before, with its session shown as not recorded.
 
+A checkpoint holds the working tree as `git add -A` sees it, without Lykos's runtime state: the
+transcripts in `.lykos/sessions/`, the ledger, the history and the other paths `lykos init` puts in
+`.gitignore`, whether or not the repository ignores them. A restore never writes those paths, even
+from a checkpoint taken before this rule that holds them, and never reports them as extras. Without
+it, a code rewind in a repository `lykos init` never ran in wrote the transcript back to the
+rewound turn and lost the undone branch.
+
 `lykos show <session>` lists the turns that changed files, the files, and the checkpoint taken
 before each (read from the repository named in `meta.json`), and flags a turn with none as
 `MISSING`. A transcript with no `turn_start` markers predates them and says so. `lykos rewind`

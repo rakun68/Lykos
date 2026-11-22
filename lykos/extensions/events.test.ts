@@ -143,6 +143,7 @@ describe("P10.9 D2 checkpoint_written fires from loop/checkpoint.ts", () => {
       if (head === "rev-parse" && args.includes("--verify")) return { ok: true, stdout: parent, stderr: "" };
       if (head === "rev-parse") return { ok: true, stdout: "othertree", stderr: "" };
       if (head === "add") return { ok: true, stdout: "", stderr: "" };
+      if (head === "rm") return { ok: true, stdout: "", stderr: "" };
       if (head === "write-tree") return { ok: true, stdout: tree, stderr: "" };
       if (head === "commit-tree") return { ok: true, stdout: "deadbeef", stderr: "" };
       if (head === "update-ref") return { ok: true, stdout: "", stderr: "" };

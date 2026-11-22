@@ -716,11 +716,11 @@ export function checkFlakyTests(ledgerPath: string): Check {
   }
 }
 
-/** T9.2: ".lykos/session/ must stay gitignored — it carries T9 transcripts (redacted, but still real conversation content)." */
+/** T9.2: ".lykos/sessions/ must stay gitignored — it carries T9 transcripts (redacted, but still real conversation content)." */
 function checkSessionsGitignored(cwd: string): Check {
   const path = join(cwd, ".gitignore");
   if (!existsSync(path)) {
-    return { status: "fail", label: `no .gitignore at ${path} — .lykos/session/ (transcripts) could be committed by accident` };
+    return { status: "fail", label: `no .gitignore at ${path} — .lykos/sessions/ (transcripts) could be committed by accident` };
   }
   const lines = new Set(readFileSync(path, "utf8").split("\n").map((l) => l.trim()));
   const missing = GITIGNORE_LINES.filter((l) => !lines.has(l));

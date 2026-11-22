@@ -361,7 +361,7 @@ instead.
 
 /**
  * docs/reference/cli-and-config.md §0: gitignore ledger.db, sessions/, cache/.
- * `.lykos/session/` carries T9's transcripts — redacted, but still real
+ * `.lykos/sessions/` carries T9's transcripts — redacted, but still real
  * conversation content — so this is not optional the way a stray cache
  * file would be. Exported so `lykos doctor` can assert the same list
  * (T9.2) rather than keeping its own copy that could drift from this one.
@@ -372,7 +372,9 @@ export const GITIGNORE_LINES = [
   // everything it may, so a runtime file left unignored would be committed).
   ".lykos/ledger.db-wal",
   ".lykos/ledger.db-shm",
-  ".lykos/session/",
+  ".lykos/sessions/",
+  // The composer history: a verbatim record of every prompt.
+  ".lykos/history.json",
   ".lykos/cache/",
   ".lykos/today.json",
   ".lykos/resolved-config.json",
