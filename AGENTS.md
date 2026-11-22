@@ -53,7 +53,8 @@ backfilled.**
 **5. Prices come from primary provider documentation only.** Never from memory.
 
 **6. Measurement never gates a change.** A change lands on its demonstration. Nothing is deleted on
-a date or a threshold.
+a date or a threshold. **The one exception is the TUI and the desktop app** (rule 10): a change that
+makes either slower or heavier fails unless the maintainer accepts the trade.
 
 **7. Translate at the boundary; never patch Pi.** Where an extension expects a Pi path, generate that
 content from Lykos's own.
@@ -65,7 +66,8 @@ mode**: one place decides the IO mode, every writer asks it.
 
 **10. The TUI and the desktop app are the fastest and lightest there are.** Speed and footprint come
 before features and looks; every change is measured, never estimated, and nothing slower or heavier
-ships without a measurement and a reason ([ADR-0063](docs/adr/0063-the-tui-and-desktop-app-are-new-rust-clients-built-to-be-the-fastest.md)).
+ships without the maintainer's yes ([ADR-0063](docs/adr/0063-the-tui-and-desktop-app-are-new-rust-clients-built-to-be-the-fastest.md),
+[ADR-0064](docs/adr/0064-the-p5-tui-copies-opencode-on-a-local-engine-server-and-speed-gates-it.md)).
 
 ---
 
