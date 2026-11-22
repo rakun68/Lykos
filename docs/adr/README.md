@@ -27,3 +27,4 @@ number that is not published here.
 - [0053](0053-mcp-calls-reuse-a-warm-engine.md) MCP calls reuse a warm engine
 - [0055](0055-a-delegated-session-gets-a-lean-head.md) A delegated session gets a lean head
 - [0057](0057-auto-runs-the-sessions-own-verification-command.md) Auto runs the session's own verification command
+- [0063](0063-the-tui-and-desktop-app-are-new-rust-clients-built-to-be-the-fastest.md) The TUI and the desktop app are new Rust clients, built to be the fastest

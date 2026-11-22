@@ -63,6 +63,10 @@ mode**: one place decides the IO mode, every writer asks it.
 
 **9. Nothing enters the frozen head unless it is fixed for the whole session.**
 
+**10. The TUI and the desktop app are the fastest and lightest there are.** Speed and footprint come
+before features and looks; every change is measured, never estimated, and nothing slower or heavier
+ships without a measurement and a reason ([ADR-0063](docs/adr/0063-the-tui-and-desktop-app-are-new-rust-clients-built-to-be-the-fastest.md)).
+
 ---
 
 ## Code quality
