@@ -23,6 +23,8 @@ export const DEFAULT_SECRET_PATHS: readonly string[] = containmentPathPlan(shipp
 
 /** T223: default maximum live concurrent sessions for the MCP worker. */
 export const DEFAULT_MCP_MAX_SESSIONS = 4;
+/** P5 #35: set from the engine server's measured cold start; see docs/reference/engine-server.md. */
+export const DEFAULT_TUI_SERVER_IDLE_SECONDS = 300;
 /** T224: default timeout in seconds for unanswered questions in a delegated session. */
 export const DEFAULT_MCP_ASK_TIMEOUT = 600;
 /** T226: default size of the warm pool of session-child processes. */
@@ -334,6 +336,9 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
     secret_paths: [],
     image: "",
     global_image: "",
+  },
+  tui: {
+    server_idle_seconds: DEFAULT_TUI_SERVER_IDLE_SECONDS,
   },
   mcp: {
     max_sessions: DEFAULT_MCP_MAX_SESSIONS,

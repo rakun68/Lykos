@@ -1004,6 +1004,29 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "serve",
+    aliases: [],
+    help: [
+      "lykos serve [--idle SECONDS]",
+      "            run the engine server the new TUI connects to, on a named pipe (Windows) or a Unix socket",
+      "            (Linux) open only to this user; exits after tui.server_idle_seconds with no client and no",
+      "            session running. A client starts it when none runs. See docs/reference/engine-server.md",
+    ],
+    run: async (args, ctx) => {
+      const { runServe } = await import("./serve.js");
+      return runServe(ctx.cwd, args);
+    },
+  },
+  {
+    name: "server-session",
+    aliases: [],
+    help: [],
+    run: async () => {
+      const { runServerSession } = await import("./serve.js");
+      return runServerSession();
+    },
+  },
+  {
     name: "session-child",
     aliases: [],
     help: [],

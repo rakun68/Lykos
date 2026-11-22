@@ -38,7 +38,7 @@ async function main(argv: string[]): Promise<number> {
   // Pi session (bare `lykos`, `run`, `resume`, `mcp`). Everything else — `hud`
   // on the S1 hot path, `usage`, `doctor` — pays for the variable only and
   // never writes into the home.
-  if (command === undefined || command === "run" || command === "resume" || command === "mcp" || command === "session-child") {
+  if (command === undefined || command === "run" || command === "resume" || command === "mcp" || command === "session-child" || command === "server-session") {
     try {
       ensurePiHost({ dir: piHost });
     } catch (err) {

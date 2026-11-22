@@ -363,6 +363,15 @@ export interface ReviewerConfig {
 }
 
 /** T223, T224, T226: MCP worker settings. */
+/** P5 #35 (ADR-0064 decision 2). */
+export interface TuiConfig {
+  /**
+   * How long the engine server stays up after its last client disconnects and no session runs, in seconds.
+   * `0` exits at once. A client that finds no server starts one, so this only trades a restart for memory.
+   */
+  server_idle_seconds?: number;
+}
+
 export interface McpConfig {
   /** Maximum live concurrent sessions (lykos_start and blocking tools). Default 4. */
   max_sessions?: number;
@@ -640,6 +649,8 @@ export interface ConfigFile {
   containment?: ContainmentConfig;
   /** T223: MCP worker settings. */
   mcp?: McpConfig;
+  /** P5 #35: the new TUI and its engine server. */
+  tui?: TuiConfig;
   /** P18: delegation settings. */
   delegation?: DelegationConfig;
   /** T210: path access rules determining allow | ask | deny per path (ADR-0042). */
@@ -756,6 +767,7 @@ export interface ResolvedConfig {
   containment: Required<ContainmentConfig>;
   /** T223. MCP worker settings. Always resolved. */
   mcp: Required<McpConfig>;
+  tui: Required<TuiConfig>;
   delegation: Required<DelegationConfig>;
   /** T210 (ADR-0042). Path rules kept per layer ({ global, project }) so source and trust survive. */
   path_rules: { global: RawPathRules; project: RawPathRules };

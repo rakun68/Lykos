@@ -129,7 +129,7 @@ import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
 import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
-import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type SystemPart } from "../tui/s0.js";
+import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type AgentUiOptions, type SystemPart } from "../tui/s0.js";
 import { runInteractiveSurface } from "../tui/interactive-surface.js";
 import { effortToken } from "../tui/effort.js";
 import { fmtUsd } from "../tui/format.js";
@@ -1403,6 +1403,10 @@ export interface RunInteractiveStandaloneSessionInput {
   lineSource?: LineSource;
   /** Default: `TerminalApprovalGate` sharing `lineSource`. */
   approvalGate?: ApprovalGate;
+  /** P5 #35: the engine server's session asks over its own channel, not on `lineSource`. Default: `TerminalAsk` on `lineSource`. */
+  askHuman?: AskHuman;
+  /** P5 #35: the engine server's session turns what the surface shows into protocol events. Default: `createAgentUi`. */
+  createUi?: (opts: AgentUiOptions, session: InteractiveSession) => AgentUi;
   /**
    * T162: native providers registered on this run's model runtime — tests
    * only, as for `runStandaloneTask`. The scripted-model session's faux

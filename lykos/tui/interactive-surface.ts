@@ -286,10 +286,12 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
     // T103: the human channel exists here, so `ask` is registered. It is the
     // same `lineSource` the approval gate reads, and `TerminalAsk` serializes
     // onto one outstanding read for the same reason the gate does.
-    askHuman: new TerminalAsk(
-      () => lineSource.next(),
-      { write: (chunk: string) => stdoutWrite(String(chunk)) },
-    ).ask,
+    askHuman:
+      input.askHuman ??
+      new TerminalAsk(
+        () => lineSource.next(),
+        { write: (chunk: string) => stdoutWrite(String(chunk)) },
+      ).ask,
   });
   // T131: hand the discovered skills to the command surface, so `/handoff`
   // both completes and dispatches. This is the one runtime seam the old
@@ -358,14 +360,15 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
   });
   const glyphs = config.ui.glyphs === "unicode" ? detectGlyphSet(process.env) : config.ui.glyphs;
   const theme = resolveTheme(config.ui.theme, capability, glyphs, { cwd });
-  ui = createAgentUi({
+  const uiOptions = {
     width,
     theme,
     header: { model: modelSpec, sessionId: session.sessionId, cwd, ...(booted.specialistName !== undefined ? { specialist: booted.specialistName } : {}) },
     ledgerPath,
     config,
     startedUtc: booted.startedAt,
-  });
+  };
+  ui = input.createUi !== undefined ? input.createUi(uiOptions, session) : createAgentUi(uiOptions);
   const unsubUi = session.subscribe
     ? ui.attach({ subscribe: (fn) => session.subscribe!((ev) => fn(ev as import("../tui/s0.js").StreamEvent)) }, () => state)
     : undefined;

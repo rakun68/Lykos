@@ -32,6 +32,7 @@ import type {
   FlagsConfig,
   LspConfig,
   McpConfig,
+  TuiConfig,
   DelegationConfig,
   MemoryConfig,
   ModelsConfig,
@@ -319,6 +320,7 @@ function applyLayer(current: ResolvedConfig, layer: ConfigFile): ResolvedConfig 
     containment: mergeSection(current.containment, layer.containment as Required<ContainmentConfig> | undefined),
     // T223: MCP worker settings.
     mcp: mergeSection(current.mcp, layer.mcp as Required<McpConfig> | undefined),
+    tui: mergeSection(current.tui, layer.tui as Required<TuiConfig> | undefined),
     delegation: mergeSection(current.delegation, layer.delegation as Required<DelegationConfig> | undefined),
     path_rules: current.path_rules,
     // T105: replace, never merge — same rule as `extensions:` above, because
@@ -493,6 +495,22 @@ function validateSealConfig(layer: ConfigLayer): void {
 }
 
 const VALID_MCP_KEYS = new Set(["max_sessions", "ask_timeout", "warm_pool"]);
+
+/** P5 #35: `tui:` holds one key so far; a typo is refused rather than silently ignored. */
+function validateTuiConfig(layer: ConfigLayer): void {
+  const val = layer.value as Record<string, unknown>;
+  const tui = val.tui;
+  if (tui === undefined || tui === null) return;
+  const where = layer.path !== undefined ? ` in ${layer.path}` : ` in the ${layer.name} layer`;
+  if (typeof tui !== "object" || Array.isArray(tui)) throw new Error(`lykos config: tui must be an object${where}`);
+  for (const k of Object.keys(tui)) {
+    if (k !== "server_idle_seconds") throw new Error(`lykos config: unknown key "${k}" in tui (allowed: server_idle_seconds)${where}`);
+  }
+  const s = (tui as TuiConfig).server_idle_seconds;
+  if (s !== undefined && (typeof s !== "number" || !Number.isInteger(s) || s < 0)) {
+    throw new Error(`lykos config: tui.server_idle_seconds must be a whole number >= 0${where}`);
+  }
+}
 
 function validateMcpConfig(layer: ConfigLayer): void {
   const val = layer.value as Record<string, unknown>;
@@ -720,6 +738,7 @@ export function loadConfig(opts: LoadConfigOptions = {}): LoadedConfig {
     if (modeProb !== undefined) throw new Error(`lykos config: ${modeProb}`);
     validateSealConfig(layer);
     validateMcpConfig(layer);
+    validateTuiConfig(layer);
     validateDelegationConfig(layer);
     resolved = applyLayer(resolved, layer.name === "global" ? globalImageApart(layer.value) : layer.value);
   }
