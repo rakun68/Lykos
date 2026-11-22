@@ -1,0 +1,10 @@
+[package]
+name = "bench-own"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+fixture.workspace = true
+crossterm.workspace = true
+lykos-term = { path = "../../../crates/term" }

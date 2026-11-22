@@ -1,0 +1,17 @@
+[package]
+name = "lykos-tui"
+description = "Lykos's terminal interface."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "lykos-tui"
+path = "src/main.rs"
+
+[dependencies]
+lykos-term.workspace = true
+lykos-client.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true
