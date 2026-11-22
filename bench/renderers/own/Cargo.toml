@@ -8,3 +8,7 @@ publish = false
 fixture.workspace = true
 crossterm.workspace = true
 lykos-term = { path = "../../../crates/term" }
+
+[features]
+# A deliberately slowed build, for the speed gate's own test (#34): 2 ms more per frame.
+slow = []

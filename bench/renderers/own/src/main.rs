@@ -17,6 +17,8 @@ fn style(kind: Kind) -> Style {
 }
 
 fn paint(f: &Fixture, b: &mut Buffer) -> Option<(u16, u16)> {
+    #[cfg(feature = "slow")]
+    std::thread::sleep(std::time::Duration::from_millis(2));
     let (w, h) = (b.width, b.height);
     if h < 6 || w < 10 {
         return None;

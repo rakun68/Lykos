@@ -7,6 +7,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { TuiSession, percentile, processStats } from "./harness.mjs";
 
 export async function measure(binary, { ready = "READY", runs = 5, args = [], env = {}, cols = 120, rows = 40, keystrokes = 60, streamFrames = 600 } = {}) {
