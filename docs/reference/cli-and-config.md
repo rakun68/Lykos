@@ -84,6 +84,14 @@ The `lykos` executable provides the following commands:
 
 ---
 
+### 1.1 `lykos-tui` (P5)
+
+`lykos-tui [--cwd DIR] [--model PROVIDER/MODEL] [--trust-workspace]`: the Rust TUI
+([ui.md](ui.md) §5). `--cwd` is the workspace (default: the current directory), `--model` the
+model its sessions start with (default: the config's), and `--trust-workspace` starts a session in
+a workspace not yet trusted. It finds the engine server through `LYKOS_ENGINE_DIR` and starts it
+with `LYKOS_SERVE_CMD` when none answers.
+
 ## 2. Configuration Precedence
 
 Configuration resolves across six distinct layers (evaluated in ascending order):

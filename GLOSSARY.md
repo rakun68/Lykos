@@ -552,3 +552,11 @@ _Avoid_: daemon, backend, host, server (unqualified)
 An interactive session running under the engine server, in a `lykos server-session` child of its
 own.
 _Avoid_: remote session, attached session
+
+**Home screen**:
+What `lykos-tui` shows before its first prompt: the logo and the prompt box, centred.
+_Avoid_: landing page, start screen
+
+**Session screen**:
+What `lykos-tui` shows once a session runs: its transcript in one box, the prompt box under it.
+_Avoid_: chat view, conversation pane

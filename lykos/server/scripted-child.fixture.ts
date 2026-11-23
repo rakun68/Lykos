@@ -37,6 +37,18 @@ process.on("message", (msg: ToChild) => {
         send({ kind: "status", status: "waiting" });
         break;
       }
+      if (msg.text === "tool") {
+        // A tool call and the usage after it, as a real turn sends them (the TUI's end-to-end test, #37).
+        send({ kind: "event", data: { type: "tool.start", toolId: "t1", name: "read", summary: "README.md", args: { path: "README.md" } } });
+        send({ kind: "event", data: { type: "tool.end", toolId: "t1", name: "read", ok: true, preview: "# Lykos" } });
+        const usage = { model: "faux/scripted", effort: "high", contextTokens: 12345, contextWindow: 200000, contextPercent: 6.2, runUsd: null, todayUsd: null, cacheHitRatio: null, calls: 1 };
+        send({ kind: "event", data: { type: "usage", usage } });
+        send({ kind: "event", data: { type: "message.delta", text: "read the readme" } });
+        send({ kind: "event", data: { type: "message.end" } });
+        send({ kind: "event", data: { type: "turn.end" } });
+        send({ kind: "status", status: "idle" });
+        break;
+      }
       const third = Math.ceil(msg.text.length / 3);
       for (let i = 0; i < msg.text.length; i += third) send({ kind: "event", data: { type: "message.delta", text: msg.text.slice(i, i + third) } });
       send({ kind: "event", data: { type: "message.end" } });

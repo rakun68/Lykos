@@ -138,3 +138,44 @@ When prompted, answers are:
   - `context`: Token usage gauge against provider window limits.
   - `health`: Tool schema overhead and prefix stability indicators.
   - `session`: Session ID, task ID, agent, and model specifications.
+
+---
+
+## 5. The Rust TUI (`lykos-tui`, P5)
+
+`crates/tui` builds `lykos-tui`. It draws its first frame before it connects, then connects to the
+engine server on a thread, starting one when none answers ([engine-server.md](engine-server.md)).
+It sleeps while nothing on screen moves and draws only after a key, an event or a spinner tick.
+Its layout and keys follow OpenCode's TUI at `4332e24`, read from source; each place in the code
+names the file.
+
+- **Home screen:** the logo and the prompt box centred, the box at most 75 columns wide, the
+  workspace in the bottom row. The first prompt starts a server session with origin `tui`.
+- **Session screen:** the transcript in one bordered box titled with the session's title, newest at
+  the bottom, and the prompt box under it. User messages sit on a raised background behind a bar;
+  tool calls show an icon (`→` read, `←` write or edit, `✱` search, `%` web, `$` shell, `⚙` other;
+  a spinner while running, `✗` on failure).
+- **Prompt box:** a bar in the accent colour (gold while a turn runs), the input, then the model and
+  the thinking effort (`model · effort`, the effort in bold gold). Under it, the footer: the spinner
+  and `esc interrupt` (`esc again to interrupt` once armed) while a turn runs, else the workspace;
+  on the right, `N tokens · P% used` from the last `usage` event.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Submit. While a session starts, the prompt waits and shows as `queued` |
+| `Shift+Enter`, `Ctrl+Enter`, `Alt+Enter`, `Ctrl+J` | New line |
+| `Esc`, then `Esc` within 5 s | Interrupt the running turn |
+| `Ctrl+C` | Clear the prompt; on an empty prompt, quit |
+| `Ctrl+D` | Quit on an empty prompt |
+| `PageUp`, `PageDown`, mouse wheel | Scroll the transcript |
+| `Ctrl+G`, `Ctrl+Alt+G` | Oldest, newest |
+
+Where it differs from OpenCode on purpose: the context use is always on screen rather than in a
+sidebar, the metadata row has no agent name (Lykos has no agents to switch), the footer shows the
+workspace without its git branch (reading it would cost a process at startup), and
+`--trust-workspace` replaces a trust dialog until the dialogs land (#46).
+
+Speed (rule 10): `node scripts/tui/gate.mjs target/release/lykos-tui.exe --ready "Ask anything"`
+holds startup, keystroke latency, frame time, idle CPU, peak memory and binary size against
+`bench/tui-limits.json`. `node scripts/tui/tui-test.mjs` drives it end to end in a pty against the
+real server and the scripted session child.
