@@ -6,9 +6,11 @@ use lykos_term::{Attr, Buffer, Cell, Style};
 
 use crate::app::{App, Dialog, InputArea, Link};
 use crate::editor::{Chip, Editor};
+use crate::keymap;
 use crate::menu::Menu;
 use crate::theme::{self, ACCENT, GOLD, LOVE, MUTED, OVERLAY, PINE, SURFACE};
 use crate::wrap::wrap;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -251,29 +253,61 @@ fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
 fn dialog(app: &App, buf: &mut Buffer) {
     let Some(d) = &app.dialog else { return };
     let (w, h) = (buf.width, buf.height);
-    let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. }) { 100 } else { 72 });
+    let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. } | Dialog::Help { .. }) { 100 } else { 72 });
     let inner = dw.saturating_sub(4) as usize;
     let room = h.saturating_sub(6) as usize;
-    let (title, lines, selected, keys): (String, Vec<(String, Style)>, Option<usize>, &str) = match d {
+    let k = |id: &str| app.keymap.first(id);
+    let close = format!("{} close", k("dialog.close"));
+    let mut scrolled = None;
+    let (title, lines, selected, keys): (String, Vec<(String, Style)>, Option<usize>, String) = match d {
         Dialog::Queue { selected } => (
             "Queued prompts".into(),
             app.queue.iter().map(|q| (first_line(q).to_string(), theme::text())).collect(),
             Some(*selected),
-            "enter steer · ctrl+u edit · ctrl+d delete · esc close",
+            format!("{} steer · {} edit · {} delete · {close}", k("dialog.select.submit"), k("queued_prompt.undo"), k("queued_prompt.delete")),
         ),
         Dialog::Stash { selected } => (
             "Stashed prompts".into(),
             app.stash.entries.iter().rev().map(|e| (first_line(&e.text).to_string(), theme::text())).collect(),
             Some(*selected),
-            "enter restore · ctrl+d delete · esc close",
+            format!("{} restore · {} delete · {close}", k("dialog.select.submit"), k("stash.delete")),
         ),
+        Dialog::Palette { query, selected } => {
+            let rows = app
+                .palette(query)
+                .into_iter()
+                .map(|d| {
+                    let source = app.keymap.source(d.id);
+                    let right = if source == "default" { app.keymap.keys(d.id) } else { format!("{} · {}", app.keymap.keys(d.id), layer_name(source)) };
+                    (columns(d.title, &right, inner), theme::text())
+                })
+                .collect();
+            let title = if query.is_empty() { "Commands  type to search".to_string() } else { format!("Commands  {query}") };
+            (title, rows, Some(*selected), format!("{} run · {close}", k("dialog.select.submit")))
+        }
+        Dialog::Help { scroll } => {
+            let mut rows = vec![
+                (format!("Press {} to see all available actions and commands in any context.", k("command.palette.show")), theme::muted()),
+                (columns("Leader", &format!("{} · {}", app.keymap.leader_label(), layer_name(app.keymap.source("leader"))), inner), theme::text()),
+            ];
+            for g in keymap::GROUPS {
+                rows.push((g.to_string(), theme::text().bold()));
+                for d in keymap::DEFS.iter().filter(|d| d.group == g) {
+                    let keys = app.keymap.keys(d.id);
+                    let keys = if keys.is_empty() { "none".to_string() } else { keys };
+                    rows.push((columns(d.title, &format!("{keys} · {}", layer_name(app.keymap.source(d.id))), inner), theme::text()));
+                }
+            }
+            scrolled = Some(*scroll);
+            ("Help".into(), rows, None, format!("↑↓ scroll · {close}"))
+        }
         Dialog::Images { index } => {
             let images = app.editor.images();
             let path = match images.get(*index) {
                 Some(Chip::Image { path, .. }) => path.clone(),
                 _ => String::new(),
             };
-            let keys = if images.len() > 1 { "← previous · next → · esc close" } else { "esc close" };
+            let keys = if images.len() > 1 { format!("← previous · next → · {close}") } else { close.clone() };
             (format!("Image {} of {}", index + 1, images.len()), vec![(path, theme::text())], None, keys)
         }
         Dialog::Aside { question, answer, scroll } => {
@@ -284,11 +318,11 @@ fn dialog(app: &App, buf: &mut Buffer) {
             let all = wrap(text, inner.max(1));
             let start = (*scroll).min(all.len().saturating_sub(room));
             let shown = all.into_iter().skip(start).take(room).map(|l| (l, style)).collect();
-            (format!("/btw {}", first_line(question)), shown, None, "c copy · ↑↓ scroll · esc close")
+            (format!("/btw {}", first_line(question)), shown, None, format!("{} copy · ↑↓ scroll · {close}", k("aside.copy")))
         }
     };
     // A list longer than the dialog scrolls with its selection.
-    let skip = selected.map_or(0, |s| (s + 1).saturating_sub(room));
+    let skip = scrolled.map_or_else(|| selected.map_or(0, |s| (s + 1).saturating_sub(room)), |s| s.min(lines.len().saturating_sub(room)));
     let body = (lines.len().min(room) as u16).max(1);
     let dh = body + 4;
     let (x, y) = ((w - dw) / 2, h.saturating_sub(dh) / 2);
@@ -303,7 +337,31 @@ fn dialog(app: &App, buf: &mut Buffer) {
             buf.text(x + 2, ly, inner as u16, line, style.on(SURFACE));
         }
     }
-    buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), keys, theme::muted().on(SURFACE));
+    buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), &keys, theme::muted().on(SURFACE));
+}
+
+/// `left`, then `right` against the right edge of `width` columns; `left` is cut short to make room.
+fn columns(left: &str, right: &str, width: usize) -> String {
+    let rw = right.width();
+    let lw = width.saturating_sub(rw + 2);
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in left.chars() {
+        let cw = ch.width().unwrap_or(0);
+        if used + cw > lw {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    out.push_str(&" ".repeat(width.saturating_sub(used + rw)));
+    out.push_str(right);
+    out
+}
+
+/// A layer's name without its file, as a row has room for: `project`, `global`.
+fn layer_name(source: &str) -> &str {
+    source.split(" (").next().unwrap_or(source)
 }
 
 /// `component/prompt/metadata.tsx`: model, then ` · ` and the thinking effort in bold warning colour.
@@ -507,6 +565,26 @@ mod tests {
             app.on_event(&Event { event: "x".into(), session: "s1".into(), seq: i as u64 + 1, data });
         }
         app
+    }
+
+    #[test]
+    fn the_palette_and_the_help_show_each_actions_keys_and_where_they_were_set() {
+        let mut app = App::new("C:/work".into());
+        app.connected();
+        app.on_keybinds(Ok(serde_json::json!({ "keybinds": { "input.undo": { "value": "alt+u", "source": "project (C:/w/.lykos/config.yaml)" } } })));
+        app.dialog = Some(Dialog::Palette { query: "undo".into(), selected: 0 });
+        let mut buf = Buffer::new(100, 30);
+        assert_eq!(draw(&app, &mut buf), None, "no prompt cursor under a dialog");
+        let s = screen(&buf);
+        assert!(s.contains("Commands  undo") && s.contains("Undo in input") && s.contains("alt+u · project"), "{s}");
+        app.dialog = Some(Dialog::Help { scroll: 0 });
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("Press ctrl+p to see all available actions"), "{s}");
+        assert!(s.contains("Leader") && s.contains("ctrl+x · default"), "{s}");
+        app.dialog = Some(Dialog::Help { scroll: 40 });
+        draw(&app, &mut buf);
+        assert!(screen(&buf).contains("Undo in input"), "scrolled to the input actions");
     }
 
     #[test]

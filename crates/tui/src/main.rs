@@ -4,6 +4,7 @@
 mod app;
 mod editor;
 mod history;
+mod keymap;
 mod menu;
 mod paste;
 mod stash;
@@ -41,6 +42,8 @@ enum Msg {
     Files(Vec<String>),
     /// A side question and its answer.
     Aside(String, Result<String, String>),
+    /// `config.keybinds`' answer.
+    Keybinds(Result<Value, String>),
 }
 
 /// The input thread reads the terminal unless `pause` is set, and says so in `parked`: the external editor owns
@@ -241,6 +244,10 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             app.on_aside(question, answer);
             Vec::new()
         }
+        Msg::Keybinds(result) => {
+            app.on_keybinds(result);
+            Vec::new()
+        }
     }
 }
 
@@ -355,6 +362,8 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
         }
     });
     let _ = tx.send(Msg::Connected);
+    let keybinds = client.request("config.keybinds", json!({ "cwd": args.cwd })).map_err(|e| e.to_string());
+    let _ = tx.send(Msg::Keybinds(keybinds));
     for action in actions {
         let reply = match &action {
             Action::Start => {

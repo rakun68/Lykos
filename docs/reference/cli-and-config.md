@@ -640,6 +640,9 @@ ui:
 # least 30 s for its first client whatever this says.
 tui:
   server_idle_seconds: 60
+  # Rebinds the TUI's actions (ui.md §5, #39): an action id, then a key list ("a,b"), a list of
+  # keys, "none" or false. `leader` is the leader key. The last layer to name an action wins.
+  keybinds: {}
 ```
 
 ---

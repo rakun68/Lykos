@@ -579,3 +579,16 @@ _Avoid_: pending message
 Prompts set aside with `/stash` and brought back with `/stash pop` or `/stash list`, kept across
 runs.
 _Avoid_: drafts, saved prompts
+
+**Action**:
+Something `lykos-tui` does on a key, named by an id (`input.undo`), with default keys that
+`tui.keybinds` rebinds.
+_Avoid_: command (that is a slash command), shortcut
+
+**Leader**:
+The key (`Ctrl+X` by default) that a two-key binding starts with, written `<leader>q`.
+_Avoid_: prefix key, chord
+
+**Command palette**:
+The `Ctrl+P` list of every action, filtered as typed, that runs the one chosen.
+_Avoid_: command menu, quick open

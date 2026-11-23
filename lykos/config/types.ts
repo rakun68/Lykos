@@ -370,7 +370,15 @@ export interface TuiConfig {
    * `0` exits at once. A client that finds no server starts one, so this only trades a restart for memory.
    */
   server_idle_seconds?: number;
+  /**
+   * P5 #39: `lykos-tui`'s key bindings by action name (OpenCode `config/keybind.ts`): `leader` and each action take
+   * a key list (`"ctrl+x,<leader>q"` or an array) or `none` / `false` to unbind. Merged per action across layers,
+   * the last layer that names one wins; `lykos-tui` knows the names and refuses one it does not.
+   */
+  keybinds?: Record<string, TuiKeybindValue>;
 }
+
+export type TuiKeybindValue = string | false | string[];
 
 export interface McpConfig {
   /** Maximum live concurrent sessions (lykos_start and blocking tools). Default 4. */

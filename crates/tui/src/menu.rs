@@ -15,9 +15,10 @@ pub enum Local {
     Stash,
     StashList,
     StashPop,
+    Help,
 }
 
-pub const LOCAL: [(Local, &str, &str); 7] = [
+pub const LOCAL: [(Local, &str, &str); 8] = [
     (Local::Btw, "/btw", "Ask a side question; the answer stays out of the conversation"),
     (Local::Editor, "/editor", "Open the prompt in your editor"),
     (Local::Images, "/images", "View the images attached to the prompt"),
@@ -25,6 +26,7 @@ pub const LOCAL: [(Local, &str, &str); 7] = [
     (Local::Stash, "/stash", "Stash the prompt"),
     (Local::StashList, "/stash list", "List stashed prompts"),
     (Local::StashPop, "/stash pop", "Pop the last stashed prompt"),
+    (Local::Help, "/help", "Every key, and the config layer that set it"),
 ];
 
 pub fn local(name: &str) -> Option<Local> {

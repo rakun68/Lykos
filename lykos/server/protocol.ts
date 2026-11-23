@@ -4,6 +4,8 @@
  * source of truth for field names, and the Rust client (`crates/client`) mirrors it.
  */
 
+import type { KeybindSetting } from "../config/keybinds.js";
+
 /** Bumped on any change a client of the previous version would misread. A client of another version is refused. */
 export const PROTOCOL_VERSION = 1;
 
@@ -69,6 +71,8 @@ export type Method =
   | "session.close"
   /** A side question (`/btw`): one answer from the session's context, with no tools, kept out of the conversation. */
   | "session.aside"
+  /** `lykos-tui`'s key bindings for a workspace, each with the layer that set it (P5 #39). */
+  | "config.keybinds"
   | "subscribe";
 
 // --- Events ------------------------------------------------------------------------------------------------------
@@ -137,6 +141,11 @@ export interface CommandInfo {
   description: string;
   /** "builtin", "skill", "extension" or "pi-extension". */
   source: string;
+}
+
+/** What `config.keybinds` answers: only what a config layer sets; the client holds the defaults. */
+export interface KeybindsResult {
+  keybinds: Record<string, KeybindSetting>;
 }
 
 /** What `session.aside` answers. */

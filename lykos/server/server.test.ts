@@ -2,7 +2,7 @@
 // resync after a drop, and when it exits.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import { aclIsOwnerOnly, engineAddress, readOrCreateKey } from "./address.js";
 import { connectEngine, type EngineConnection } from "./client.js";
 import { EngineServer } from "./server.js";
-import { PROTOCOL_VERSION, type Event, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type Event, type KeybindsResult, type SessionSummary } from "./protocol.js";
 import { WorkspaceTrustError } from "../gate/trust.js";
 
 const fixture = fileURLToPath(new URL("./scripted-child.fixture.ts", import.meta.url));
@@ -24,6 +24,7 @@ function setup(idleSeconds = 60, trusted = true, firstClientMs?: number): { serv
     idleSeconds,
     ...(firstClientMs !== undefined ? { firstClientMs } : {}),
     child,
+    globalDir: dir,
     log: () => {},
     trust: async (cwd, flag) => {
       if (trusted || flag) return trusted ? "stored" : "flag";
@@ -144,6 +145,31 @@ describe("engine server", () => {
       a.close();
     } finally {
       await server.stop("test");
+    }
+  });
+
+  it("answers config.keybinds with what each layer sets and where", async () => {
+    const { server, key, dir } = setup();
+    const work = mkdtempSync(join(tmpdir(), "lykos-keybinds-"));
+    mkdirSync(join(work, ".lykos"));
+    writeFileSync(join(dir, "config.yaml"), ["tui:", "  keybinds:", "    leader: ctrl+o", "    app.exit: none", ""].join("\n"));
+    writeFileSync(join(work, ".lykos", "config.yaml"), ["tui:", "  keybinds:", "    app.exit: [ctrl+q]", "    input.undo: false", ""].join("\n"));
+    await server.listen();
+    try {
+      const a = await connectEngine(server.address, key);
+      const got = await a.request<KeybindsResult>("config.keybinds", { cwd: work });
+      assert.deepEqual(Object.fromEntries(Object.entries(got.keybinds).map(([k, v]) => [k, [v.value, v.source.split(" ")[0]]])), {
+        leader: ["ctrl+o", "global"],
+        "app.exit": [["ctrl+q"], "project"],
+        "input.undo": [false, "project"],
+      });
+      assert.match(got.keybinds.leader?.source ?? "", /config\.yaml\)$/);
+      writeFileSync(join(work, ".lykos", "config.yaml"), ["tui:", "  keybinds:", "    app.exit: 3", ""].join("\n"));
+      await assert.rejects(a.request("config.keybinds", { cwd: work }), /tui\.keybinds\.app\.exit must be/);
+      a.close();
+    } finally {
+      await server.stop("test");
+      rmSync(work, { recursive: true, force: true });
     }
   });
 

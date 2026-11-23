@@ -70,6 +70,11 @@ export interface RoleMapping {
   source: string;
 }
 
+/** A layer as a setting's source is shown: its name, with its file when it has one. */
+export function layerLabel(layer: ConfigLayer): string {
+  return layer.path !== undefined ? `${layer.name} (${layer.path})` : layer.name;
+}
+
 /** Every role in the resolved config with its model and the last layer that set it. */
 export function roleMappings(roles: Readonly<Record<string, string>>, layers: readonly ConfigLayer[]): RoleMapping[] {
   return Object.entries(roles)
@@ -79,7 +84,7 @@ export function roleMappings(roles: Readonly<Record<string, string>>, layers: re
       for (const layer of layers) {
         if (!layer.present || layer.name === "specialist") continue;
         const set = layer.value.models?.roles?.[role];
-        if (set !== undefined) source = layer.path !== undefined ? `${layer.name} (${layer.path})` : layer.name;
+        if (set !== undefined) source = layerLabel(layer);
       }
       return { role, model, source };
     });

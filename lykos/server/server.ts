@@ -14,12 +14,14 @@ import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, rmSync, type WriteStream } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { resolve as resolvePath } from "node:path";
+import { tuiKeybinds } from "../config/keybinds.js";
+import { loadConfig } from "../config/load.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
-import { PROTOCOL_VERSION, type AsideResult, type Event, type EventData, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type EventData, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
 import { LineReader, send, serverHandshake } from "./wire.js";
 
 export interface EngineServerOptions {
@@ -35,6 +37,8 @@ export interface EngineServerOptions {
   log?: (line: string) => void;
   /** How a session start decides trust. Default: `ensureWorkspaceTrust`, never prompting. Tests pass their own. */
   trust?: (cwd: string, trustFlag: boolean) => Promise<ChildStartParams["trustSource"]>;
+  /** The global config directory `config.keybinds` reads. Default `~/.lykos`; tests pass their own. */
+  globalDir?: string;
   /** Called once the server has stopped listening and every child has exited. */
   onExit?: (reason: string) => void;
 }
@@ -193,6 +197,11 @@ export class EngineServer {
         if (typeof params.requestId !== "string" || typeof params.answer !== "string") throw new Error("session.answer needs requestId and answer");
         this.toChild(this.session(params), { kind: "answer", requestId: params.requestId, answer: params.answer });
         return { ok: true };
+      }
+      case "config.keybinds": {
+        if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("config.keybinds needs cwd");
+        const result: KeybindsResult = { keybinds: tuiKeybinds(loadConfig({ cwd: resolvePath(params.cwd), ...(this.opts.globalDir !== undefined ? { globalDir: this.opts.globalDir } : {}) }).layers) };
+        return result;
       }
       case "session.aside": {
         if (typeof params.text !== "string" || params.text.trim() === "") throw new Error("session.aside needs text");

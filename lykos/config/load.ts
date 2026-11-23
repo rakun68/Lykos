@@ -496,7 +496,7 @@ function validateSealConfig(layer: ConfigLayer): void {
 
 const VALID_MCP_KEYS = new Set(["max_sessions", "ask_timeout", "warm_pool"]);
 
-/** P5 #35: `tui:` holds one key so far; a typo is refused rather than silently ignored. */
+/** P5 #35, #39: a typo under `tui:` is refused rather than silently ignored. */
 function validateTuiConfig(layer: ConfigLayer): void {
   const val = layer.value as Record<string, unknown>;
   const tui = val.tui;
@@ -504,11 +504,18 @@ function validateTuiConfig(layer: ConfigLayer): void {
   const where = layer.path !== undefined ? ` in ${layer.path}` : ` in the ${layer.name} layer`;
   if (typeof tui !== "object" || Array.isArray(tui)) throw new Error(`lykos config: tui must be an object${where}`);
   for (const k of Object.keys(tui)) {
-    if (k !== "server_idle_seconds") throw new Error(`lykos config: unknown key "${k}" in tui (allowed: server_idle_seconds)${where}`);
+    if (k !== "server_idle_seconds" && k !== "keybinds") throw new Error(`lykos config: unknown key "${k}" in tui (allowed: server_idle_seconds, keybinds)${where}`);
   }
   const s = (tui as TuiConfig).server_idle_seconds;
   if (s !== undefined && (typeof s !== "number" || !Number.isInteger(s) || s < 0)) {
     throw new Error(`lykos config: tui.server_idle_seconds must be a whole number >= 0${where}`);
+  }
+  const keybinds: unknown = (tui as Record<string, unknown>).keybinds;
+  if (keybinds === undefined || keybinds === null) return;
+  if (typeof keybinds !== "object" || Array.isArray(keybinds)) throw new Error(`lykos config: tui.keybinds must be an object${where}`);
+  for (const [name, v] of Object.entries(keybinds)) {
+    const ok = v === false || typeof v === "string" || (Array.isArray(v) && v.every((x) => typeof x === "string"));
+    if (!ok) throw new Error(`lykos config: tui.keybinds.${name} must be a key list, a list of keys, "none" or false${where}`);
   }
 }
 

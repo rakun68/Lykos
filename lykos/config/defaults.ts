@@ -344,6 +344,7 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
   },
   tui: {
     server_idle_seconds: DEFAULT_TUI_SERVER_IDLE_SECONDS,
+    keybinds: {},
   },
   mcp: {
     max_sessions: DEFAULT_MCP_MAX_SESSIONS,

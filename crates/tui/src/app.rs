@@ -9,6 +9,7 @@ use lykos_client::{Event, EventData, Session, SessionStatus, Store};
 
 use crate::editor::{Chip, Editor};
 use crate::history::History;
+use crate::keymap::{self, Keymap};
 use crate::menu::{self, Local, Menu, Pick, Trigger};
 use crate::stash::Stash;
 
@@ -58,6 +59,10 @@ pub enum Dialog {
     Images { index: usize },
     /// OpenCode `feature-plugins/prompt/btw.tsx`'s answer dialog.
     Aside { question: String, answer: Result<String, String>, scroll: usize },
+    /// OpenCode `command.palette.show`: every action, searched as typed.
+    Palette { query: String, selected: usize },
+    /// Every key, and the layer that set it.
+    Help { scroll: usize },
 }
 
 /// The old TUI's ctrl+r (`lykos/tui/screen/raw-line-source.ts`): entries starting with what was typed, newest first.
@@ -83,6 +88,7 @@ pub struct App {
     pub store: Store,
     pub session: Option<String>,
     pub editor: Editor,
+    pub keymap: Keymap,
     pub history: History,
     pub stash: Stash,
     pub menu: Option<Menu>,
@@ -118,6 +124,7 @@ impl App {
             store: Store::default(),
             session: None,
             editor: Editor::default(),
+            keymap: Keymap::default(),
             history: History::default(),
             stash: Stash::default(),
             menu: None,
@@ -212,6 +219,17 @@ impl App {
     pub fn on_files(&mut self, files: Vec<String>) -> Vec<Action> {
         self.files = Some(files);
         self.refresh_menu()
+    }
+
+    /// The config layers' key bindings (`config.keybinds`). What cannot be read is shown, and the rest applies.
+    pub fn on_keybinds(&mut self, result: Result<serde_json::Value, String>) {
+        let problems = match result {
+            Ok(v) => self.keymap.apply(&v["keybinds"]),
+            Err(e) => vec![format!("key bindings: {e}")],
+        };
+        if !problems.is_empty() {
+            self.notice = Some(problems.join("; "));
+        }
     }
 
     pub fn on_aside(&mut self, question: String, answer: Result<String, String>) {
@@ -319,11 +337,16 @@ impl App {
         }
         if let Some(at) = self.leader.take() {
             if now.duration_since(at) < LEADER_WINDOW {
-                return self.leader_key(&key);
+                for id in self.keymap.matches(&key, true) {
+                    if let Some(out) = self.run(id, now, page) {
+                        return out;
+                    }
+                }
+                return Vec::new();
             }
         }
         if self.dialog.is_some() {
-            return self.dialog_key(&key, page);
+            return self.dialog_key(&key, now, page);
         }
         if self.search.is_some() {
             if let Some(out) = self.search_key(&key) {
@@ -331,237 +354,321 @@ impl App {
             }
         }
         let m = key.modifiers;
-        let (ctrl, alt, shift, sup) = (m.contains(KeyModifiers::CONTROL), m.contains(KeyModifiers::ALT), m.contains(KeyModifiers::SHIFT), m.contains(KeyModifiers::SUPER));
+        let (ctrl, alt, sup) = (m.contains(KeyModifiers::CONTROL), m.contains(KeyModifiers::ALT), m.contains(KeyModifiers::SUPER));
         if let Some(answer) = self.answer_key(&key, ctrl || alt) {
             return answer;
         }
         if self.menu.is_some() {
-            if let Some(out) = self.menu_key(&key, ctrl) {
+            if let Some(out) = self.menu_key(&key) {
                 return out;
             }
         }
-        // A letter with a modifier is matched in lower case: terminals differ on what shift does to it.
-        let code = match key.code {
-            KeyCode::Char(c) if ctrl || alt || sup => KeyCode::Char(c.to_ascii_lowercase()),
-            c => c,
-        };
-        let w = self.input_cols.max(1);
-        let e = &mut self.editor;
-        match code {
-            // The old TUI's cut, with a selection; otherwise OpenCode's leader.
-            KeyCode::Char('x') if ctrl && !alt && e.selection().is_some() => {
-                if let Some(text) = e.cut() {
-                    return vec![Action::Copy(text)];
-                }
+        for id in self.keymap.matches(&key, false) {
+            if let Some(out) = self.run(id, now, page) {
+                return out;
             }
-            KeyCode::Char('x') if ctrl && !alt => {
-                self.leader = Some(now);
-                return Vec::new();
+        }
+        if self.keymap.is_leader(&key) {
+            self.leader = Some(now);
+            return Vec::new();
+        }
+        // A character no binding took is typed; AltGr arrives as ctrl+alt.
+        if let KeyCode::Char(ch) = key.code {
+            if !sup && ctrl == alt {
+                self.editor.insert_char(ch);
             }
-            // `prompt.clear` is ctrl+c and wins while there is text; `app.exit` is ctrl+c and ctrl+d. With a
-            // selection, the old TUI's copy.
-            KeyCode::Char('c') if ctrl && !alt => {
-                if let Some(text) = e.copy() {
-                    let at = e.cursor();
-                    e.click(at, false);
-                    return vec![Action::Copy(text)];
-                }
-                if e.is_empty() {
-                    return vec![Action::Quit];
-                }
-                e.set("");
-                self.history.reset();
-            }
-            KeyCode::Char('d') if ctrl && shift => e.delete_line(),
-            KeyCode::Char('d') if ctrl && !alt => {
-                if e.is_empty() {
-                    return vec![Action::Quit];
-                }
-                e.delete();
-            }
-            // `input.newline`: shift+return, ctrl+return, alt+return, ctrl+j.
-            KeyCode::Enter if ctrl || alt || shift => e.newline(),
-            KeyCode::Char('j') if ctrl && !alt => e.newline(),
-            KeyCode::Enter => return self.submit(),
-            KeyCode::Esc => return self.escape(now),
-            // `session.page.up` / `.down`; `session.first` ctrl+g, `session.last` ctrl+alt+g.
-            KeyCode::PageUp => self.on_scroll(true, page),
-            KeyCode::PageDown => self.on_scroll(false, page),
-            KeyCode::Char('g') if ctrl && alt => self.scroll = 0,
-            KeyCode::Char('g') if ctrl => self.scroll = usize::MAX / 2,
-            KeyCode::Char('r') if ctrl && !alt => self.start_search(),
-            // The old TUI's history keys: ctrl+up and ctrl+down recall from anywhere in the prompt.
-            KeyCode::Up if ctrl => self.recall(-1),
-            KeyCode::Down if ctrl => self.recall(1),
-            KeyCode::Up if shift => {
-                e.up(w, true);
-            }
-            KeyCode::Down if shift => {
-                e.down(w, true);
-            }
-            KeyCode::Up => self.history_move(-1),
-            KeyCode::Down => self.history_move(1),
-            KeyCode::Left if alt || ctrl => e.word_backward(shift),
-            KeyCode::Right if alt || ctrl => e.word_forward(shift),
-            KeyCode::Left => e.left(shift),
-            KeyCode::Right => e.right(shift),
-            KeyCode::Char('b') if ctrl && !alt => e.left(false),
-            KeyCode::Char('f') if ctrl && !alt => e.right(false),
-            KeyCode::Char('b') if alt && !ctrl => e.word_backward(shift),
-            KeyCode::Char('f') if alt && !ctrl => e.word_forward(shift),
-            KeyCode::Home if shift => e.buffer_home(true),
-            KeyCode::End if shift => e.buffer_end(true),
-            // The old TUI's Home and End: OpenCode binds them to the transcript, which PageUp and ctrl+g also move.
-            KeyCode::Home => e.line_home(false),
-            KeyCode::End => e.line_end_(false),
-            KeyCode::Char('a') if ctrl && !alt => e.line_home(shift),
-            KeyCode::Char('e') if ctrl && !alt => e.line_end_(shift),
-            KeyCode::Char('a') if alt && !ctrl => e.visual_home(w, shift),
-            KeyCode::Char('e') if alt && !ctrl => e.visual_end(w, shift),
-            KeyCode::Char('a') if sup => e.select_all(),
-            KeyCode::Char('k') if ctrl && !alt => e.delete_to_line_end(),
-            KeyCode::Char('u') if ctrl && !alt => e.delete_to_line_start(),
-            // ctrl+backspace arrives as ctrl+h in many terminals.
-            KeyCode::Backspace if ctrl || alt => e.delete_word_backward(),
-            KeyCode::Char('w' | 'h') if ctrl && !alt => e.delete_word_backward(),
-            KeyCode::Backspace => e.backspace(),
-            KeyCode::Delete if ctrl || alt => e.delete_word_forward(),
-            KeyCode::Char('d') if alt && !ctrl => e.delete_word_forward(),
-            KeyCode::Delete => e.delete(),
-            // `input.undo` ctrl+- and super+z, `input.redo` ctrl+. and super+shift+z; the old TUI's ctrl+z, ctrl+y
-            // and ctrl+shift+z.
-            KeyCode::Char('z') if (ctrl || sup) && shift => {
-                e.redo();
-            }
-            KeyCode::Char('-' | '_' | 'z') if (ctrl || sup) && !alt => {
-                e.undo();
-            }
-            KeyCode::Char('.' | 'y') if ctrl && !alt => {
-                e.redo();
-            }
-            // The old TUI's ctrl+v when the terminal sends the key, not a paste: the register.
-            KeyCode::Char('v') if ctrl && !alt => {
-                let r = e.register.clone();
-                e.insert_str(&r);
-            }
-            // AltGr arrives as ctrl+alt.
-            KeyCode::Char(ch) if !sup && ctrl == alt => {
-                e.insert_char(if let KeyCode::Char(original) = key.code { original } else { ch });
-            }
-            _ => {}
         }
         self.refresh_menu()
     }
 
-    fn leader_key(&mut self, key: &KeyEvent) -> Vec<Action> {
-        match key.code {
-            // `prompt.queue`: <leader>return.
-            KeyCode::Enter => self.submit_queued(),
-            // `prompt.editor`: <leader>e.
-            KeyCode::Char('e') => self.run_local(Local::Editor),
-            // `prompt.images.view`: <leader>i.
-            KeyCode::Char('i') => self.run_local(Local::Images),
-            // `session.queued_prompts`: <leader>q.
-            KeyCode::Char('q') => self.run_local(Local::Queue),
-            _ => Vec::new(),
+    /// Runs an action (`keymap::DEFS`) where it applies; `None` where it does not, so the key's next action is tried.
+    /// The comments name OpenCode's actions where Lykos's differ.
+    fn run(&mut self, id: &str, now: Instant, page: usize) -> Option<Vec<Action>> {
+        let w = self.input_cols.max(1);
+        let e = &mut self.editor;
+        match id {
+            // OpenCode `command-palette.tsx`.
+            "command.palette.show" => {
+                self.dialog = Some(Dialog::Palette { query: String::new(), selected: 0 });
+                return Some(Vec::new());
+            }
+            "help.show" => {
+                self.dialog = Some(Dialog::Help { scroll: 0 });
+                return Some(Vec::new());
+            }
+            // The old TUI's copy and cut, with a selection.
+            "prompt.copy" => {
+                let text = e.copy()?;
+                let at = e.cursor();
+                e.click(at, false);
+                return Some(vec![Action::Copy(text)]);
+            }
+            "prompt.cut" => {
+                e.selection()?;
+                let text = e.cut()?;
+                let mut out = vec![Action::Copy(text)];
+                out.extend(self.refresh_menu());
+                return Some(out);
+            }
+            // `prompt.clear` wins while there is text; `app.exit` only on an empty prompt.
+            "prompt.clear" => {
+                if e.is_empty() {
+                    return None;
+                }
+                e.set("");
+                self.history.reset();
+            }
+            "app.exit" => return e.is_empty().then(|| vec![Action::Quit]),
+            "session.interrupt" => return Some(self.escape(now)),
+            "session.page.up" => self.on_scroll(true, page),
+            "session.page.down" => self.on_scroll(false, page),
+            "session.line.up" => self.on_scroll(true, 1),
+            "session.line.down" => self.on_scroll(false, 1),
+            "session.half.page.up" => self.on_scroll(true, (page / 2).max(1)),
+            "session.half.page.down" => self.on_scroll(false, (page / 2).max(1)),
+            "session.first" => self.scroll = usize::MAX / 2,
+            "session.last" => self.scroll = 0,
+            "session.queued_prompts" => return Some(self.run_local(Local::Queue)),
+            // The question is typed after it.
+            "session.aside" => {
+                if !e.text().starts_with("/btw ") {
+                    e.replace(0, 0, "/btw ");
+                }
+            }
+            "prompt.queue" => return Some(self.submit_queued()),
+            "prompt.editor" => return Some(self.run_local(Local::Editor)),
+            "prompt.images.view" => return Some(self.run_local(Local::Images)),
+            "prompt.stash" => return Some(self.run_local(Local::Stash)),
+            "prompt.stash.pop" => return Some(self.run_local(Local::StashPop)),
+            "prompt.stash.list" => return Some(self.run_local(Local::StashList)),
+            // The old TUI's ctrl+v when the terminal sends the key, not a paste: the register.
+            "prompt.paste" => {
+                let r = e.register.clone();
+                e.insert_str(&r);
+            }
+            // The old TUI's history keys: from anywhere in the prompt.
+            "prompt.history.previous" => self.recall(-1),
+            "prompt.history.next" => self.recall(1),
+            "prompt.history.search" => self.start_search(),
+            "input.submit" => return Some(self.submit()),
+            "input.newline" => e.newline(),
+            "input.move.left" => e.left(false),
+            "input.move.right" => e.right(false),
+            // Up and down move through the rows, then recall history (OpenCode's `prompt.history.*` share them).
+            "input.move.up" => self.history_move(-1),
+            "input.move.down" => self.history_move(1),
+            "input.select.left" => e.left(true),
+            "input.select.right" => e.right(true),
+            "input.select.up" => {
+                e.up(w, true);
+            }
+            "input.select.down" => {
+                e.down(w, true);
+            }
+            "input.line.home" => e.line_home(false),
+            "input.line.end" => e.line_end_(false),
+            "input.select.line.home" => e.line_home(true),
+            "input.select.line.end" => e.line_end_(true),
+            "input.visual.line.home" => e.visual_home(w, false),
+            "input.visual.line.end" => e.visual_end(w, false),
+            "input.select.visual.line.home" => e.visual_home(w, true),
+            "input.select.visual.line.end" => e.visual_end(w, true),
+            "input.buffer.home" => e.buffer_home(false),
+            "input.buffer.end" => e.buffer_end(false),
+            "input.select.buffer.home" => e.buffer_home(true),
+            "input.select.buffer.end" => e.buffer_end(true),
+            "input.delete.line" => e.delete_line(),
+            "input.delete.to.line.end" => e.delete_to_line_end(),
+            "input.delete.to.line.start" => e.delete_to_line_start(),
+            "input.backspace" => e.backspace(),
+            "input.delete" => e.delete(),
+            "input.undo" => {
+                e.undo();
+            }
+            "input.redo" => {
+                e.redo();
+            }
+            "input.word.forward" => e.word_forward(false),
+            "input.word.backward" => e.word_backward(false),
+            "input.select.word.forward" => e.word_forward(true),
+            "input.select.word.backward" => e.word_backward(true),
+            "input.delete.word.forward" => e.delete_word_forward(),
+            "input.delete.word.backward" => e.delete_word_backward(),
+            "input.select.all" => e.select_all(),
+            // A list's or a dialog's own: not here.
+            _ => return None,
         }
+        Some(self.refresh_menu())
     }
 
-    fn dialog_key(&mut self, key: &KeyEvent, page: usize) -> Vec<Action> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    fn dialog_key(&mut self, key: &KeyEvent, now: Instant, page: usize) -> Vec<Action> {
         let Some(dialog) = self.dialog.clone() else { return Vec::new() };
-        if key.code == KeyCode::Esc {
+        let ids = self.keymap.matches(key, false);
+        let has = |id: &str| ids.contains(&id);
+        if let Dialog::Palette { query, selected } = dialog {
+            return self.palette_key(key, &ids, query, selected, now, page);
+        }
+        if has("dialog.close") {
             self.dialog = None;
             return Vec::new();
         }
         let step = |sel: usize, n: usize, up: bool| if n == 0 { 0 } else if up { (sel + n - 1) % n } else { (sel + 1) % n };
+        let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
+            Dialog::Palette { .. } => {}
+            Dialog::Help { scroll } => {
+                let scroll = if prev {
+                    scroll.saturating_sub(1)
+                } else if next {
+                    scroll + 1
+                } else if has("dialog.select.page_up") {
+                    scroll.saturating_sub(page)
+                } else if has("dialog.select.page_down") {
+                    scroll + page
+                } else if has("dialog.select.home") {
+                    0
+                } else if has("dialog.select.submit") {
+                    self.dialog = None;
+                    return Vec::new();
+                } else {
+                    scroll
+                };
+                self.dialog = Some(Dialog::Help { scroll: scroll.min(self.help_rows().saturating_sub(1)) });
+            }
             Dialog::Queue { selected } => {
                 let n = self.queue.len();
-                match key.code {
-                    KeyCode::Up => self.dialog = Some(Dialog::Queue { selected: step(selected, n, true) }),
-                    KeyCode::Down => self.dialog = Some(Dialog::Queue { selected: step(selected, n, false) }),
+                if prev || next {
+                    self.dialog = Some(Dialog::Queue { selected: step(selected, n, prev) });
+                } else if has("dialog.select.submit") {
                     // Steers the turn with it now.
-                    KeyCode::Enter => {
-                        let text = self.queue.remove(selected);
-                        self.close_if_empty(n - 1, selected);
-                        return match (self.session.clone(), self.link == Link::Ready) {
-                            (Some(session), true) => vec![Action::Prompt { session, text }],
-                            _ => {
-                                self.queue.insert(0, text);
-                                Vec::new()
-                            }
-                        };
-                    }
-                    // `queued_prompt.undo` ctrl+u: back into the prompt box.
-                    KeyCode::Char('u') if ctrl => {
-                        let text = self.queue.remove(selected);
-                        self.editor.set(&text);
-                        self.dialog = None;
-                    }
-                    // `queued_prompt.delete` ctrl+d.
-                    KeyCode::Char('d') if ctrl => {
-                        self.queue.remove(selected);
-                        self.close_if_empty(n - 1, selected);
-                    }
-                    KeyCode::Delete => {
-                        self.queue.remove(selected);
-                        self.close_if_empty(n - 1, selected);
-                    }
-                    _ => {}
+                    let text = self.queue.remove(selected);
+                    self.close_if_empty(n - 1, selected);
+                    return match (self.session.clone(), self.link == Link::Ready) {
+                        (Some(session), true) => vec![Action::Prompt { session, text }],
+                        _ => {
+                            self.queue.insert(0, text);
+                            Vec::new()
+                        }
+                    };
+                } else if has("queued_prompt.undo") {
+                    // Back into the prompt box.
+                    let text = self.queue.remove(selected);
+                    self.editor.set(&text);
+                    self.dialog = None;
+                } else if has("queued_prompt.delete") {
+                    self.queue.remove(selected);
+                    self.close_if_empty(n - 1, selected);
                 }
             }
             Dialog::Stash { selected } => {
                 let n = self.stash.entries.len();
                 // Shown newest first.
                 let index = n.saturating_sub(1 + selected);
-                match key.code {
-                    KeyCode::Up => self.dialog = Some(Dialog::Stash { selected: step(selected, n, true) }),
-                    KeyCode::Down => self.dialog = Some(Dialog::Stash { selected: step(selected, n, false) }),
-                    KeyCode::Enter => {
-                        if let Some(e) = self.stash.take(index) {
-                            self.editor.set(&e.text);
-                        }
-                        self.dialog = None;
+                if prev || next {
+                    self.dialog = Some(Dialog::Stash { selected: step(selected, n, prev) });
+                } else if has("dialog.select.submit") {
+                    if let Some(e) = self.stash.take(index) {
+                        self.editor.set(&e.text);
                     }
-                    // `stash.delete` ctrl+d.
-                    KeyCode::Char('d') if ctrl => {
-                        self.stash.take(index);
-                        self.close_if_empty(n - 1, selected);
-                    }
-                    KeyCode::Delete => {
-                        self.stash.take(index);
-                        self.close_if_empty(n - 1, selected);
-                    }
-                    _ => {}
+                    self.dialog = None;
+                } else if has("stash.delete") {
+                    self.stash.take(index);
+                    self.close_if_empty(n - 1, selected);
                 }
             }
             Dialog::Images { index } => {
                 let n = self.editor.images().len();
-                match key.code {
-                    KeyCode::Left | KeyCode::Up => self.dialog = Some(Dialog::Images { index: step(index, n, true) }),
-                    KeyCode::Right | KeyCode::Down => self.dialog = Some(Dialog::Images { index: step(index, n, false) }),
-                    KeyCode::Enter => self.dialog = None,
-                    _ => {}
+                // `dialog-image-preview.tsx`: left and right too.
+                if prev || key.code == KeyCode::Left {
+                    self.dialog = Some(Dialog::Images { index: step(index, n, true) });
+                } else if next || key.code == KeyCode::Right {
+                    self.dialog = Some(Dialog::Images { index: step(index, n, false) });
+                } else if has("dialog.select.submit") {
+                    self.dialog = None;
                 }
             }
-            Dialog::Aside { answer, .. } => match key.code {
-                // btw.tsx: `c` copies the answer.
-                KeyCode::Char('c') if !ctrl => {
+            Dialog::Aside { answer, .. } => {
+                if has("aside.copy") {
+                    // btw.tsx: `c` copies the answer.
                     if let Ok(text) = answer {
                         self.notice = Some("copied the answer".into());
                         return vec![Action::Copy(text)];
                     }
+                } else if has("dialog.select.submit") {
+                    self.dialog = None;
+                } else if prev {
+                    self.on_scroll(true, 1);
+                } else if next {
+                    self.on_scroll(false, 1);
+                } else if has("dialog.select.page_up") {
+                    self.on_scroll(true, page);
+                } else if has("dialog.select.page_down") {
+                    self.on_scroll(false, page);
                 }
-                KeyCode::Enter | KeyCode::Char('q') => self.dialog = None,
-                KeyCode::Up | KeyCode::Char('k') => self.on_scroll(true, 1),
-                KeyCode::Down | KeyCode::Char('j') => self.on_scroll(false, 1),
-                KeyCode::PageUp => self.on_scroll(true, page),
-                KeyCode::PageDown => self.on_scroll(false, page),
-                _ => {}
-            },
+            }
         }
         Vec::new()
+    }
+
+    /// The palette's rows for its query: every action that runs from anywhere, ranked as OpenCode's
+    /// `dialog-select.tsx` does (the title counts twice the group and the name).
+    pub fn palette(&self, query: &str) -> Vec<&'static keymap::Def> {
+        // `command-palette.tsx` leaves the palette's own action out.
+        let defs = keymap::DEFS.iter().filter(|d| keymap::in_palette(d.group) && d.id != "command.palette.show");
+        if query.is_empty() {
+            let mut all: Vec<&keymap::Def> = defs.collect();
+            all.sort_by_key(|d| keymap::GROUPS.iter().position(|g| *g == d.group));
+            return all;
+        }
+        let mut scored: Vec<(u32, &keymap::Def)> = defs
+            .filter_map(|d| {
+                let parts = [menu::score(query, d.title).map(|s| s * 2), menu::score(query, d.group), menu::score(query, d.id)];
+                parts.iter().any(Option::is_some).then(|| (parts.iter().flatten().sum(), d))
+            })
+            .collect();
+        scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+        scored.into_iter().map(|(_, d)| d).collect()
+    }
+
+    fn palette_key(&mut self, key: &KeyEvent, ids: &[&str], mut query: String, selected: usize, now: Instant, page: usize) -> Vec<Action> {
+        let has = |id: &str| ids.contains(&id);
+        let n = self.palette(&query).len();
+        let mut selected = selected;
+        if has("dialog.close") {
+            self.dialog = None;
+            return Vec::new();
+        } else if has("dialog.select.submit") {
+            let Some(id) = self.palette(&query).get(selected).map(|d| d.id) else { return Vec::new() };
+            self.dialog = None;
+            // From the palette an action runs whatever the prompt holds.
+            return match id {
+                "app.exit" => vec![Action::Quit],
+                _ => self.run(id, now, page).unwrap_or_default(),
+            };
+        } else if has("dialog.select.prev") {
+            selected = if n == 0 { 0 } else { (selected + n - 1) % n };
+        } else if has("dialog.select.next") {
+            selected = if n == 0 { 0 } else { (selected + 1) % n };
+        } else if has("dialog.select.page_up") {
+            selected = selected.saturating_sub(page);
+        } else if has("dialog.select.page_down") {
+            selected = (selected + page).min(n.saturating_sub(1));
+        } else if key.code == KeyCode::Backspace {
+            query.pop();
+            selected = 0;
+        } else if let KeyCode::Char(c) = key.code {
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+                query.push(c);
+                selected = 0;
+            }
+        }
+        self.dialog = Some(Dialog::Palette { query, selected });
+        Vec::new()
+    }
+
+    /// How many rows the help lists: a heading per group and a row per action, the leader first.
+    pub fn help_rows(&self) -> usize {
+        1 + keymap::GROUPS.len() + keymap::DEFS.len()
     }
 
     /// After removing item `removed` from a list now `n` long: close the dialog when empty, else keep the
@@ -588,46 +695,35 @@ impl App {
 
     /// `None` when the key is not the search's: it ends the search and is dropped, as the old TUI does.
     fn search_key(&mut self, key: &KeyEvent) -> Option<Vec<Action>> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let ids = self.keymap.matches(key, false);
         let s = self.search.as_mut()?;
-        match key.code {
-            KeyCode::Char('r') if ctrl => {
-                if !s.matches.is_empty() {
-                    s.index = (s.index + 1) % s.matches.len();
-                    let text = s.matches[s.index].clone();
-                    self.editor.set(&text);
-                }
-                Some(Vec::new())
+        if ids.contains(&"prompt.history.search") {
+            if !s.matches.is_empty() {
+                s.index = (s.index + 1) % s.matches.len();
+                let text = s.matches[s.index].clone();
+                self.editor.set(&text);
             }
-            KeyCode::Enter if key.modifiers.is_empty() => {
-                self.search = None;
-                Some(self.submit())
-            }
-            _ => {
-                self.search = None;
-                Some(Vec::new())
-            }
+            return Some(Vec::new());
         }
+        self.search = None;
+        Some(if ids.contains(&"input.submit") { self.submit() } else { Vec::new() })
     }
 
-    fn menu_key(&mut self, key: &KeyEvent, ctrl: bool) -> Option<Vec<Action>> {
+    fn menu_key(&mut self, key: &KeyEvent) -> Option<Vec<Action>> {
+        let ids = self.keymap.matches(key, false);
         let m = self.menu.as_mut()?;
         let n = m.entries.len().max(1);
-        match key.code {
-            // `prompt.autocomplete.prev` up, ctrl+p; `.next` down, ctrl+n.
-            KeyCode::Up => m.selected = (m.selected + n - 1) % n,
-            KeyCode::Char('p') if ctrl => m.selected = (m.selected + n - 1) % n,
-            KeyCode::Down => m.selected = (m.selected + 1) % n,
-            KeyCode::Char('n') if ctrl => m.selected = (m.selected + 1) % n,
-            // `.hide` escape.
-            KeyCode::Esc => {
+        let id = ids.into_iter().find(|id| id.starts_with("prompt.autocomplete."))?;
+        match id {
+            "prompt.autocomplete.prev" => m.selected = (m.selected + n - 1) % n,
+            "prompt.autocomplete.next" => m.selected = (m.selected + 1) % n,
+            "prompt.autocomplete.hide" => {
                 self.dismissed = Some(m.at);
                 self.menu = None;
             }
-            // `.select` return runs a command of the prompt's own; `.complete` tab only inserts.
-            KeyCode::Enter if key.modifiers.is_empty() => return Some(self.pick(true)),
-            KeyCode::Tab => return Some(self.pick(false)),
-            _ => return None,
+            // `.select` runs a command of the prompt's own; `.complete` only inserts.
+            "prompt.autocomplete.select" => return Some(self.pick(true)),
+            _ => return Some(self.pick(false)),
         }
         Some(Vec::new())
     }
@@ -707,6 +803,7 @@ impl App {
             Local::Images => self.dialog = Some(Dialog::Images { index: 0 }),
             Local::Editor => return vec![Action::Editor(self.editor.expanded())],
             Local::Btw => self.notice = Some("/btw needs a question".into()),
+            Local::Help => self.dialog = Some(Dialog::Help { scroll: 0 }),
         }
         Vec::new()
     }
@@ -1031,6 +1128,63 @@ mod tests {
         press(&mut app, ctrl('u'));
         assert_eq!(app.editor.text(), "after");
         assert!(app.queue.is_empty() && app.dialog.is_none());
+    }
+
+    #[test]
+    fn ctrl_p_lists_every_action_search_narrows_and_enter_runs_it() {
+        let mut app = idle();
+        typed(&mut app, "hello");
+        press(&mut app, ctrl('p'));
+        assert_eq!(app.dialog, Some(Dialog::Palette { query: String::new(), selected: 0 }));
+        let all = app.palette("");
+        assert!(all.iter().any(|d| d.id == "input.select.all") && all.iter().all(|d| d.id != "command.palette.show" && keymap::in_palette(d.group)));
+        typed(&mut app, "selall");
+        let Some(Dialog::Palette { query, .. }) = &app.dialog else { panic!("still open") };
+        assert_eq!(app.palette(query)[0].id, "input.select.all");
+        assert!(app.palette(query).len() < all.len());
+        press(&mut app, key(KeyCode::Backspace));
+        assert!(matches!(&app.dialog, Some(Dialog::Palette { query, .. }) if query == "selal"));
+        press(&mut app, key(KeyCode::Char('l')));
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.editor.selection(), Some((0, 5)), "select all ran");
+        assert_eq!(app.editor.text(), "hello", "what was typed in the palette stayed out of the prompt");
+    }
+
+    #[test]
+    fn the_palette_runs_exit_whatever_the_prompt_holds() {
+        let mut app = idle();
+        typed(&mut app, "draft");
+        press(&mut app, ctrl('p'));
+        typed(&mut app, "exit the");
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![Action::Quit]);
+    }
+
+    #[test]
+    fn a_config_layer_rebinds_unbinds_and_the_help_says_where() {
+        let mut app = idle();
+        app.on_keybinds(Ok(serde_json::json!({ "keybinds": {
+            "input.submit": { "value": "ctrl+s", "source": "project (C:/w/.lykos/config.yaml)" },
+            "app.exit": { "value": false, "source": "global (C:/u/.lykos/config.yaml)" },
+            "leader": { "value": "ctrl+o", "source": "global (C:/u/.lykos/config.yaml)" },
+            "prompt.editor": { "value": ["<leader>e", "f4"], "source": "project (C:/w/.lykos/config.yaml)" },
+        }})));
+        assert_eq!(app.notice, None);
+        typed(&mut app, "hi");
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![], "return no longer submits");
+        assert_eq!(press(&mut app, ctrl('s')), vec![Action::Prompt { session: "s1".into(), text: "hi".into() }]);
+        assert_eq!(press(&mut app, ctrl('c')), vec![], "exit unbound: ctrl+c on an empty prompt does nothing");
+        assert_eq!(press(&mut app, key(KeyCode::F(4))), vec![Action::Editor(String::new())]);
+        press(&mut app, ctrl('o'));
+        assert_eq!(press(&mut app, key(KeyCode::Char('e'))), vec![Action::Editor(String::new())], "the new leader");
+        press(&mut app, ctrl('x'));
+        assert_eq!(press(&mut app, key(KeyCode::Char('e'))), vec![], "ctrl+x is no longer the leader");
+        assert_eq!(app.keymap.keys("prompt.editor"), "ctrl+o e, f4");
+        assert_eq!(app.keymap.source("input.submit"), "project (C:/w/.lykos/config.yaml)");
+        app.on_keybinds(Ok(serde_json::json!({ "keybinds": { "nope": { "value": "ctrl+q", "source": "project (p)" } } })));
+        assert_eq!(app.notice.as_deref(), Some("unknown keybind nope (project (p))"));
+        app.run_local(Local::Help);
+        assert_eq!(app.dialog, Some(Dialog::Help { scroll: 0 }));
     }
 
     #[test]

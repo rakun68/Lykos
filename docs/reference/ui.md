@@ -197,10 +197,48 @@ deletes), `/stash pop`.
 | `Ctrl+X` (with a selection), `Ctrl+V` | Cut, paste what was cut or copied |
 | `Ctrl+Z`, `Ctrl+-`; `Ctrl+Y`, `Ctrl+.`, `Ctrl+Shift+Z` | Undo; redo (200 steps, at most 16 MiB) |
 | Click, drag, double click | Place the cursor, select, select a word |
-| `PageUp`, `PageDown`, mouse wheel | Scroll the transcript |
-| `Ctrl+G`, `Ctrl+Alt+G` | Oldest, newest |
+| `PageUp`, `PageDown`, `Ctrl+Alt+B`, `Ctrl+Alt+F`, mouse wheel | Scroll the transcript a page |
+| `Ctrl+Alt+Y`, `Ctrl+Alt+E`; `Ctrl+Alt+U`, `Ctrl+Alt+D` | Scroll a line; half a page |
+| `Ctrl+G`, `Alt+Home`; `Ctrl+Alt+G` | Oldest, newest |
+| `Ctrl+P` | The command palette |
+| `Ctrl+H` | Delete a word back, as `Ctrl+W` |
 
 Copying writes OSC 52, so it reaches the system clipboard where the terminal allows it.
+
+**Keybinds (#39).** Every key above is an action with an id, named as OpenCode's `config/keybind.ts`
+names it (`input.undo`, `session.page.up`, `prompt.autocomplete.next`), plus Lykos's own
+(`prompt.copy`, `prompt.cut`, `prompt.history.search`, `dialog.close`, `aside.copy`). The table is
+in `crates/tui/src/keymap.rs`. `tui.keybinds` in any config layer rebinds an action:
+
+```yaml
+tui:
+  keybinds:
+    leader: ctrl+o              # the leader; default ctrl+x
+    app.exit: ctrl+q            # a key list: "a,b"
+    input.undo: [ctrl+z, alt+u] # or a list of keys
+    session.aside: <leader>b    # <leader> then a key
+    input.redo: none            # "none" or false unbinds
+```
+
+The last layer to name an action wins. A key reads `ctrl+`, `alt+`, `shift+`, `super+` before a key
+name (`return`, `escape`, `pageup`, `a`, `-`). An unknown action or a key that does not parse is
+skipped, and the TUI says so in a notice. Where two actions share a key, the first that applies
+runs: `Ctrl+C` copies a selection, else clears the prompt, else quits.
+
+`Ctrl+P` opens the palette: every action of the App, Session, Prompt and Input groups, with its keys
+and, where it is not a default, the layer that set it. Typing filters it by title, group and id
+(the title weighted twice); `Enter` runs the selected action. `/help` lists every key of every
+group and the layer that set it.
+
+Where the keybinds differ from OpenCode on purpose:
+
+- Lykos's defaults are this table's: `app.exit` has no `<leader>q` (that is the queue), and the
+  input actions keep the readline keys of section 2.1 (`Ctrl+A` line start, `Ctrl+Z` undo).
+- A value is a string or a list of strings; OpenCode's key stroke objects are not read.
+- The palette has no category headers and no suggested section, and leaves out the palette itself.
+- OpenCode's help dialog only points at the palette; Lykos's lists every key.
+- The keys inside the images list (`Left`, `Right`), the aside dialog (`j`, `k`, `q`), the history
+  search and the answer digits are fixed.
 
 Where it differs from OpenCode on purpose: the context use is always on screen rather than in a
 sidebar, the metadata row has no agent name (Lykos has no agents to switch), the footer shows the

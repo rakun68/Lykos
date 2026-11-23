@@ -59,6 +59,7 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `session.answer` | `{session, requestId, answer}` | `{ok: true}`: answers an approval or a question |
 | `session.close` | `{session}` | `{ok: true}` |
 | `session.aside` | `{session, text}` | `{answer, model}`: a side question (`/btw`) answered from the session's context with no tools. It enters no transcript and no turn; its call is in the session's usage and its ledger row has `phase` `aside` |
+| `config.keybinds` | `{cwd}` | `{keybinds: {<action>: {value, source}}}`: each action's `tui.keybinds` value from the last config layer that names it, and that layer (`project (path)`). Not validated against the action table: the TUI owns it |
 | `subscribe` | `{sessions?, after?: {<id>: seq}}` | `{sessions: SessionSummary[]}`, then the replay |
 
 ### 2.3 Events
