@@ -12,6 +12,8 @@ pub enum Action {
     Start,
     Prompt { session: String, text: String },
     Interrupt { session: String },
+    /// Answers the session's oldest waiting request (an approval or a question).
+    Answer { session: String, request_id: String, answer: String },
     Quit,
 }
 
@@ -101,16 +103,14 @@ impl App {
         self.flush()
     }
 
-    pub fn failed(&mut self, message: String) {
+    /// A request failed. `prompt` is the text of a `session.prompt` that did not go through.
+    pub fn failed(&mut self, message: String, prompt: Option<String>) {
         self.starting = false;
-        if self.session.is_none() {
-            // Nothing took the prompt: put it back, as the user typed it.
-            if let Some(text) = self.queued.take() {
-                if self.input.is_empty() {
-                    self.input = text;
-                    self.cursor = self.input.chars().count();
-                }
-            }
+        // Nothing took the prompt: put it back, as the user typed it, ahead of anything typed since.
+        let lost = prompt.or_else(|| if self.session.is_none() { self.queued.take() } else { None });
+        if let Some(text) = lost {
+            self.input = if self.input.is_empty() { text } else { format!("{text}\n{}", self.input) };
+            self.cursor = self.input.chars().count();
         }
         self.notice = Some(message);
     }
@@ -132,6 +132,10 @@ impl App {
     fn flush(&mut self) -> Vec<Action> {
         if self.queued.is_none() || self.link != Link::Ready {
             return Vec::new();
+        }
+        // A session that closed (its child exited) takes no more prompts: the next one starts a new session.
+        if self.status() == Some(SessionStatus::Closed) {
+            self.session = None;
         }
         let Some(id) = self.session.clone() else {
             if self.starting {
@@ -165,6 +169,9 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if let Some(answer) = self.answer_key(&key, ctrl || alt) {
+            return answer;
+        }
         match key.code {
             // `prompt.clear` is ctrl+c and wins while there is text; `app.exit` is ctrl+c and ctrl+d.
             KeyCode::Char('c') if ctrl => {
@@ -210,6 +217,28 @@ impl App {
         Vec::new()
     }
 
+    /// While the session waits on a request: an option's key (its value, when one character) picks it with the
+    /// prompt empty, and Enter sends what is typed, or the first option when nothing is. The dialogs are #46.
+    fn answer_key(&mut self, key: &KeyEvent, modified: bool) -> Option<Vec<Action>> {
+        let id = self.session.clone()?;
+        let request = self.current()?.requests.first()?.clone();
+        let answer = match key.code {
+            KeyCode::Char(ch) if !modified && self.input.is_empty() => request.options.iter().find(|o| o.value.chars().eq(std::iter::once(ch)))?.value.clone(),
+            KeyCode::Enter if !modified => {
+                let typed = self.input.trim().to_string();
+                if typed.is_empty() {
+                    request.options.first()?.value.clone()
+                } else {
+                    typed
+                }
+            }
+            _ => return None,
+        };
+        self.input.clear();
+        self.cursor = 0;
+        Some(vec![Action::Answer { session: id, request_id: request.request_id, answer }])
+    }
+
     fn escape(&mut self, now: Instant) -> Vec<Action> {
         let Some(id) = self.session.clone() else { return Vec::new() };
         if !matches!(self.status(), Some(SessionStatus::Running | SessionStatus::Waiting)) {
@@ -236,6 +265,9 @@ impl App {
         self.cursor = 0;
         self.notice = None;
         self.scroll = 0;
+        if self.status() == Some(SessionStatus::Closed) {
+            self.session = None;
+        }
         if let (Some(id), Some(SessionStatus::Idle | SessionStatus::Running | SessionStatus::Waiting)) = (self.session.clone(), self.status()) {
             if self.link == Link::Ready {
                 return vec![Action::Prompt { session: id, text }];
@@ -355,9 +387,58 @@ mod tests {
         app.connected();
         typed(&mut app, "hi");
         assert_eq!(app.on_key(key(KeyCode::Enter), Instant::now(), 10), vec![Action::Start]);
-        app.failed("untrusted workspace: /w".into());
+        app.failed("untrusted workspace: /w".into(), None);
         assert_eq!(app.input, "hi");
         assert!(app.queued.is_none());
         assert_eq!(app.notice.as_deref(), Some("untrusted workspace: /w"));
+    }
+
+    #[test]
+    fn a_failed_prompt_puts_its_text_back_ahead_of_what_was_typed_since() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.started("s1".into());
+        status(&mut app, 1, SessionStatus::Idle);
+        typed(&mut app, "first");
+        assert_eq!(app.on_key(key(KeyCode::Enter), Instant::now(), 10), vec![Action::Prompt { session: "s1".into(), text: "first".into() }]);
+        typed(&mut app, "second");
+        app.failed("Closed".into(), Some("first".into()));
+        assert_eq!(app.input, "first\nsecond");
+    }
+
+    #[test]
+    fn a_prompt_after_the_session_closed_starts_a_new_one() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.started("s1".into());
+        status(&mut app, 1, SessionStatus::Closed);
+        typed(&mut app, "again");
+        assert_eq!(app.on_key(key(KeyCode::Enter), Instant::now(), 10), vec![Action::Start]);
+        assert!(app.session.is_none());
+        assert_eq!(app.started("s2".into()), vec![]);
+    }
+
+    #[test]
+    fn an_option_key_or_enter_answers_a_waiting_request() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.started("s1".into());
+        status(&mut app, 1, SessionStatus::Waiting);
+        let request = lykos_client::RequestData {
+            request_id: "r1".into(),
+            kind: "question".into(),
+            title: "which?".into(),
+            detail: String::new(),
+            body: None,
+            options: vec![lykos_client::RequestOption { value: "1".into(), label: "a".into() }, lykos_client::RequestOption { value: "2".into(), label: "b".into() }],
+            assumption: None,
+        };
+        app.on_event(&Event { event: "request".into(), session: "s1".into(), seq: 2, data: EventData::Request { request } });
+        let answer = |a: &str| vec![Action::Answer { session: "s1".into(), request_id: "r1".into(), answer: a.into() }];
+        assert_eq!(app.on_key(key(KeyCode::Char('2')), Instant::now(), 10), answer("2"));
+        assert_eq!(app.on_key(key(KeyCode::Enter), Instant::now(), 10), answer("1"), "enter with nothing typed: the first option");
+        typed(&mut app, "x");
+        assert_eq!(app.input, "x", "a key that is no option types");
+        assert_eq!(app.on_key(key(KeyCode::Enter), Instant::now(), 10), answer("x"));
     }
 }

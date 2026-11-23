@@ -36,11 +36,25 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
 /// What a client connects to: the pipe name on Windows (a hash of the run directory), the socket on Linux.
 pub fn engine_path(dir: &Path) -> PathBuf {
     if cfg!(windows) {
-        let digest = Sha256::digest(dir.to_string_lossy().to_lowercase().as_bytes());
+        let digest = Sha256::digest(pipe_key(&dir.to_string_lossy()).as_bytes());
         PathBuf::from(format!(r"\\.\pipe\lykos-engine-{}", &hex(&digest)[..16]))
     } else {
         dir.join("engine.sock")
     }
+}
+
+/// The string the pipe name hashes, as the server computes it: Node's `path.resolve` drops a trailing separator
+/// (except a drive root's), which `std::path::absolute` keeps.
+fn pipe_key(dir: &str) -> String {
+    let lower = dir.to_lowercase();
+    let trimmed = lower.trim_end_matches(['\\', '/']);
+    if trimmed.len() == lower.len() || trimmed.ends_with(':') {
+        if trimmed.ends_with(':') {
+            return format!("{trimmed}\\");
+        }
+        return lower;
+    }
+    trimmed.to_string()
 }
 
 /// The key, which the server writes on its first start. A client never creates it: it starts the server instead.
@@ -60,6 +74,13 @@ mod tests {
         assert_eq!(hex(&[0, 15, 255]), "000fff");
         assert_eq!(unhex("000fff"), Some(vec![0, 15, 255]));
         assert_eq!(unhex("0g"), None);
+    }
+
+    #[test]
+    fn a_trailing_separator_names_the_same_pipe() {
+        assert_eq!(pipe_key(r"C:\Run\"), r"c:\run");
+        assert_eq!(pipe_key(r"C:\Run"), r"c:\run");
+        assert_eq!(pipe_key(r"C:\"), r"c:\");
     }
 
 }

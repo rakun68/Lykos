@@ -62,6 +62,8 @@ export class EngineServer {
   private readonly key: Buffer;
   private readonly sessions = new Map<string, LiveSession>();
   private readonly clients = new Set<Client>();
+  /** Every open connection, authenticated or not: stop() must close them all, or server.close() never returns. */
+  private readonly sockets = new Set<Socket>();
   private server: Server | undefined;
   private idleTimer: NodeJS.Timeout | undefined;
   private stopping: Promise<void> | undefined;
@@ -91,7 +93,11 @@ export class EngineServer {
       if (await answers(this.address.path)) throw Object.assign(new Error(`an engine server already listens on ${this.address.path}`), { code: "EADDRINUSE" });
       rmSync(this.address.path, { force: true });
     }
-    const server = createServer((socket) => void this.accept(socket));
+    const server = createServer((socket) => {
+      this.sockets.add(socket);
+      socket.on("close", () => this.sockets.delete(socket));
+      void this.accept(socket);
+    });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(this.address.path, () => {
@@ -111,6 +117,11 @@ export class EngineServer {
     if (!hs.ok) {
       this.log(`refused a client: ${hs.reason}`);
       socket.end();
+      setTimeout(() => socket.destroy(), 1000).unref();
+      return;
+    }
+    if (this.stopping) {
+      socket.destroy();
       return;
     }
     const client: Client = { socket, name: hs.client, follows: null };
@@ -307,16 +318,16 @@ export class EngineServer {
   private subscribe(client: Client, params: Record<string, unknown>): { sessions: SessionSummary[] } {
     const wanted = Array.isArray(params.sessions) ? new Set(params.sessions.filter((v): v is string => typeof v === "string")) : "all";
     const after = typeof params.after === "object" && params.after !== null ? (params.after as Record<string, unknown>) : {};
-    client.follows = wanted;
-    const replay: Event[] = [];
-    for (const s of this.sessions.values()) {
-      if (wanted !== "all" && !wanted.has(s.summary.id)) continue;
-      const from = typeof after[s.summary.id] === "number" ? (after[s.summary.id] as number) : 0;
-      replay.push(...s.events.slice(from));
-    }
-    // The response goes first so the client knows the subscription took; the replay follows it in order.
+    // The response goes first so the client knows the subscription took. The replay follows it, read when it is
+    // sent, and only then does the client follow live events: an event emitted in between is in the replay, never
+    // ahead of it (a live event before the replay would leave the client with a gap it never fills).
     setImmediate(() => {
-      for (const e of replay) send(client.socket, e);
+      for (const s of this.sessions.values()) {
+        if (wanted !== "all" && !wanted.has(s.summary.id)) continue;
+        const from = typeof after[s.summary.id] === "number" ? (after[s.summary.id] as number) : 0;
+        for (const e of s.events.slice(from)) send(client.socket, e);
+      }
+      client.follows = wanted;
     });
     return { sessions: [...this.sessions.values()].filter((s) => wanted === "all" || wanted.has(s.summary.id)).map((s) => s.summary) };
   }
@@ -355,9 +366,9 @@ export class EngineServer {
       this.log(`stopping: ${reason}`);
       // close() waits for every open connection, so the clients are told to go first; one that does not is dropped.
       const closed = new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
-      for (const c of this.clients) {
-        c.socket.end();
-        setTimeout(() => c.socket.destroy(), 1000).unref();
+      for (const socket of this.sockets) {
+        socket.end();
+        setTimeout(() => socket.destroy(), 1000).unref();
       }
       await closed;
       const exits = [...this.sessions.values()].map((s) => {

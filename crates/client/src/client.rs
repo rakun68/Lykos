@@ -59,6 +59,11 @@ fn try_connect(opts: &Options) -> Result<Option<(Conn, Welcome)>> {
     }
 }
 
+/// Whether a server answers now, without starting one: tests that wait for one to stop.
+pub fn try_connect_only(opts: &Options) -> Option<Welcome> {
+    try_connect(opts).ok().flatten().map(|(_, w)| w)
+}
+
 /// Starts `lykos serve` outside this process's console and process group, so it outlives the client.
 fn start_server(opts: &Options) -> Result<()> {
     let mut cmd = Command::new(&opts.serve[0]);
@@ -111,10 +116,41 @@ impl Client {
     }
 
     /// One request and its response. The request connection never subscribes, so nothing else arrives on it.
+    ///
+    /// A connection that broke (the server restarted, or exited idle and a new one started) is replaced: a request
+    /// whose write failed never reached the server and is sent again on the new connection. One whose write went
+    /// through and whose answer was lost is not resent, since it may have run: the caller sees the error, and the
+    /// next request goes out on a new connection.
     pub fn request(&mut self, method: &str, params: Value) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
-        self.conn.send(&json!({ "id": id, "method": method, "params": params }))?;
+        let msg = json!({ "id": id, "method": method, "params": params });
+        if let Err(e) = self.conn.send(&msg) {
+            if !broken(&e) {
+                return Err(e);
+            }
+            self.reconnect()?;
+            self.conn.send(&msg)?;
+        }
+        match self.answer(id) {
+            Err(e) if broken(&e) => {
+                // Best effort: if no server answers now, the next request tries again.
+                let _ = self.reconnect();
+                Err(e)
+            }
+            other => other,
+        }
+    }
+
+    fn reconnect(&mut self) -> Result<()> {
+        let (conn, welcome, started) = connect_or_start(&self.opts)?;
+        self.conn = conn;
+        self.welcome = welcome;
+        self.started |= started;
+        Ok(())
+    }
+
+    fn answer(&mut self, id: u64) -> Result<Value> {
         loop {
             let v = self.conn.recv()?.ok_or(Error::Closed)?;
             if v["id"].as_u64() != Some(id) {
@@ -131,6 +167,11 @@ impl Client {
     pub fn subscribe(&self, after: BTreeMap<String, u64>) -> Events {
         Events::start(self.opts.clone(), after)
     }
+}
+
+/// Whether an error means the connection is gone, as opposed to the server refusing the request.
+fn broken(e: &Error) -> bool {
+    matches!(e, Error::Io(_) | Error::Closed)
 }
 
 /// What the event thread hands the UI.

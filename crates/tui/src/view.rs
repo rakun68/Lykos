@@ -100,7 +100,7 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
             buf.text(x + row.indent, y, inner_w.saturating_sub(2 + row.indent), &row.text, style);
         }
         if scroll > 0 {
-            let label = " Jump to latest ↓ (end) ";
+            let label = " Jump to latest ↓ (ctrl+alt+g) ";
             let lw = label.chars().count() as u16;
             buf.text(pad + inner_w.saturating_sub(lw + 1), box_h - 1, lw, label, Style::fg(PINE));
         }

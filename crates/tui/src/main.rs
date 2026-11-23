@@ -28,7 +28,8 @@ enum Msg {
     Connected,
     ConnectFailed(String),
     Started(String),
-    Failed(String),
+    /// A request failed; for a prompt, its text, to put back.
+    Failed(String, Option<String>),
 }
 
 struct Args {
@@ -172,8 +173,8 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             Vec::new()
         }
         Msg::Started(id) => app.started(id),
-        Msg::Failed(m) => {
-            app.failed(m);
+        Msg::Failed(m, text) => {
+            app.failed(m, text);
             Vec::new()
         }
     }
@@ -213,12 +214,13 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
             }
             Action::Prompt { session, text } => client.request("session.prompt", json!({ "session": session, "text": text })).map(|_| Msg::Connected),
             Action::Interrupt { session } => client.request("session.interrupt", json!({ "session": session })).map(|_| Msg::Connected),
+            Action::Answer { session, request_id, answer } => client.request("session.answer", json!({ "session": session, "requestId": request_id, "answer": answer })).map(|_| Msg::Connected),
             Action::Quit => return,
         };
         let msg = match reply {
             Ok(Msg::Connected) => continue,
             Ok(m) => m,
-            Err(e) => Msg::Failed(e.to_string()),
+            Err(e) => Msg::Failed(e.to_string(), if let Action::Prompt { text, .. } = action { Some(text) } else { None }),
         };
         if tx.send(msg).is_err() {
             return;

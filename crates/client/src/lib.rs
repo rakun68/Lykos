@@ -6,7 +6,7 @@ pub mod conn;
 pub mod protocol;
 pub mod store;
 
-pub use client::{connect_or_start, Client, Events, Options, Update};
+pub use client::{connect_or_start, try_connect_only, Client, Events, Options, Update};
 pub use conn::{Conn, Error, Result};
 pub use protocol::*;
 pub use store::{Item, Session, Store, ToolState};

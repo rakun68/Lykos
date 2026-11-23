@@ -2,12 +2,12 @@
 // resync after a drop, and when it exits.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir, userInfo } from "node:os";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { engineAddress, readOrCreateKey } from "./address.js";
+import { aclIsOwnerOnly, engineAddress, readOrCreateKey } from "./address.js";
 import { connectEngine, type EngineConnection } from "./client.js";
 import { EngineServer } from "./server.js";
 import { PROTOCOL_VERSION, type Event, type SessionSummary } from "./protocol.js";
@@ -227,6 +227,26 @@ describe("engine server", () => {
       .filter((l) => l.includes(":("));
     assert.deepEqual(entries.map((e) => e.split(":(")[0]!.split("\\").at(-1)), [userInfo().username], entries.join("; "));
     assert.ok(!entries[0]!.includes("(I)"), "not inherited");
+  });
+
+  // Outside the profile, where a directory's ACL lets other signed-in users read what it inherits (the checkout,
+  // when it is not under the profile itself).
+  const outside = join(fileURLToPath(new URL("../../", import.meta.url)), ".scratch");
+  it("replaces an existing key file whose ACL is not owner-only, on Windows outside the profile", { skip: process.platform !== "win32" || !relative(homedir(), outside).startsWith("..") }, () => {
+    mkdirSync(outside, { recursive: true });
+    const address = engineAddress(mkdtempSync(join(outside, "lykos-engine-")));
+    writeFileSync(address.keyPath, "00".repeat(32));
+    assert.ok(!aclIsOwnerOnly(address.keyPath), "the planted key inherits its directory's ACL");
+    const key = readOrCreateKey(address);
+    assert.notDeepEqual(key, Buffer.alloc(32, 0));
+    assert.ok(aclIsOwnerOnly(address.keyPath));
+  });
+
+  it("starts over a temp key file a dead server left under this pid", () => {
+    const address = engineAddress(mkdtempSync(join(tmpdir(), "lykos-engine-")));
+    mkdirSync(address.dir, { recursive: true });
+    writeFileSync(`${address.keyPath}.${process.pid}.tmp`, "");
+    assert.equal(readOrCreateKey(address).length, 32);
   });
 });
 

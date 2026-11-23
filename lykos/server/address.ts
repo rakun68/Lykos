@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 export interface EngineAddress {
   /** The run directory: the key file, the server's log, and on Linux the socket. */
@@ -45,12 +45,20 @@ export function ensureEngineDir(dir: string): void {
 /** The 32-byte key, created on first use. A key file anyone else can read is refused: it would prove nothing. */
 export function readOrCreateKey(address: EngineAddress): Buffer {
   ensureEngineDir(address.dir);
+  // On Windows a key outside the profile (whose ACL already keeps other users out) may have been left with an
+  // inherited ACL, or put there by someone else: one that is not owner-only is replaced, so no one else knows it.
+  // Inside the profile this costs nothing; outside it, one icacls run.
+  if (process.platform === "win32" && existsSync(address.keyPath) && !isInside(address.keyPath, homedir()) && !aclIsOwnerOnly(address.keyPath)) {
+    rmSync(address.keyPath, { force: true });
+  }
   if (!existsSync(address.keyPath)) {
     // Written whole under a private name, then linked into place: a client never reads a half-written key, and
     // of two servers started at once the second link fails and both use the first key.
     const tmp = `${address.keyPath}.${process.pid}.tmp`;
-    writeFileSync(tmp, "", { mode: 0o600, flag: "wx" });
+    // A file of this name is a dead server's whose pid this one reused: no live process owns it.
+    rmSync(tmp, { force: true });
     try {
+      writeFileSync(tmp, "", { mode: 0o600, flag: "wx" });
       // Windows ignores the mode: the file inherits its directory's ACL, which outside the profile (a
       // LYKOS_ENGINE_DIR under C:\Workspace, say) can let every signed-in user read it. Owner-only before the key is in it.
       if (process.platform === "win32") ownerOnly(tmp);
@@ -68,6 +76,25 @@ export function readOrCreateKey(address: EngineAddress): Buffer {
   const key = Buffer.from(readFileSync(address.keyPath, "utf8").trim(), "hex");
   if (key.length !== 32) throw new Error(`${address.keyPath} does not hold a 32-byte key`);
   return key;
+}
+
+function isInside(path: string, dir: string): boolean {
+  const rel = relative(dir, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+/**
+ * Whether a Windows file's ACL is one entry, not inherited, for the current user. icacls prints the path, then one
+ * "<account>:<rights>" entry per line, then a summary line.
+ */
+export function aclIsOwnerOnly(path: string): boolean {
+  const entries = execFileSync("icacls", [path], { encoding: "utf8", windowsHide: true })
+    .replace(path, "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.includes(":("));
+  const only = entries[0];
+  return entries.length === 1 && only !== undefined && only.split(":(")[0]?.split("\\").at(-1) === userInfo().username && !only.includes("(I)");
 }
 
 /** Replaces a Windows file's ACL with one entry: full control for the current user. */

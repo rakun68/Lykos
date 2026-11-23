@@ -50,6 +50,11 @@ try {
   await step("the first esc arms", () => s.screen().includes("esc again to interrupt"));
   s.press("esc");
   await step("the second esc interrupts", () => s.screen().includes("interrupted"));
+  s.write("ask");
+  s.press("enter");
+  await step("a question shows with its options", () => s.screen().includes("which?") && s.screen().includes("1 a"));
+  s.write("1");
+  await step("an option's key answers it", () => !s.screen().includes("which?") && !s.screen().includes("esc interrupt"));
   s.write("bye");
   await step("bye is typed", () => s.screen().includes("bye"));
   // One key at a time, as a person types: ConPTY delivers only the first of two ctrl+c bytes sent together.

@@ -115,5 +115,22 @@ fn starts_reuses_resyncs_and_refuses_an_old_protocol() {
         Ok(_) => panic!("an old protocol was let in"),
     }
 
+    // The server goes away; the next request starts a new one on a new connection instead of failing for good.
+    let before = a.welcome.pid;
+    a.request("server.shutdown", json!({})).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while lykos_client::try_connect_only(&opts).is_some() {
+        assert!(Instant::now() < deadline, "the server never stopped");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The first request may go out on the old connection before the old server lets go of it, and come back
+    // Closed: it is not resent, since it may have run. The one after it reaches a new server.
+    let list = match a.request("sessions.list", json!({})) {
+        Err(Error::Closed | Error::Io(_)) => a.request("sessions.list", json!({})),
+        other => other,
+    }
+    .expect("a request after the server restarted");
+    assert_eq!(list, json!([]), "a new server, with no sessions");
+    assert_ne!(a.welcome.pid, before, "the request connection moved to the new server");
     a.request("server.shutdown", json!({})).unwrap();
 }
