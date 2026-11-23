@@ -25,12 +25,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalToolName } from "../tools/tool-surface.js";
 import type { Ledger } from "../ledger/ledger.js";
+import type { PendingUndos } from "./rewind.js";
 import { priceCall, type PriceCallResult } from "../ledger/prices.js";
 import { estimateTokensChars4 } from "../ledger/tool-schema.js";
 import { currentGitCommit } from "./identity.js";
 import { hostGit } from "../git/host-git.js";
 import { buildReplay, interruptedToolCalls, type ReplayBundle, type TranscriptRecord } from "./replay.js";
-import { activeBranch, nextTurn } from "./active-branch.js";
+import { activeBranch, nextTurn, pendingUndos } from "./active-branch.js";
 import {
   readSessionMeta,
   readTranscript,
@@ -95,7 +96,7 @@ export interface ResumePreflight {
    * T266: the records `replay` was built from — the transcript without the turns a rewind undid (T264: a
    * resume's too, not only a fork's) — and the last turn on them. Absent when the transcript could not be read.
    */
-  branch?: { records: TranscriptRecord[]; turn?: number };
+  branch?: { records: TranscriptRecord[]; turn?: number; undos?: PendingUndos };
   /** T264: the turn the continuing process starts at: one past the highest in the whole transcript. */
   nextTurn?: number;
 }
@@ -391,7 +392,8 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   if (records.length > 0) {
     let turn: number | undefined;
     for (const r of kept) if (r.kind === "turn_start") turn = r.turn;
-    branch = { records: kept, ...(turn !== undefined ? { turn } : {}) };
+    const undos = pendingUndos(records);
+    branch = { records: kept, ...(turn !== undefined ? { turn } : {}), ...(undos !== undefined ? { undos } : {}) };
   }
   if (records.length > 0) {
     const tail: TranscriptRecord[] =

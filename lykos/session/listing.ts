@@ -44,6 +44,8 @@ export interface SessionListRow {
   forkedFromTurn?: number | null;
   closedUtc?: string | null;
   deletedUtc?: string | null;
+  /** P5 #42: when a person archived it from lykos-tui's session list; it stays everywhere else. */
+  archivedUtc?: string | null;
   /** T128: fresh live.json heartbeat, when the browser source can read it. */
   heartbeatUtc?: string | null;
   /**
@@ -76,7 +78,7 @@ const SELECT = `
          s.model, s.execution_shape, s.outcome, s.outcome_source, s.archive_state,
          s.capture_mode, s.resumable, s.not_resumable_reason,
          s.parent_session_id, s.resumed_from, s.forked_from, s.forked_from_turn, s.total_cost_usd,
-         s.closed_utc, s.deleted_utc,
+         s.closed_utc, s.deleted_utc, s.archived_utc,
          (SELECT COUNT(*) FROM calls c WHERE c.session_id = s.id) AS call_count
     FROM sessions s
     LEFT JOIN tasks t ON t.id = s.task_id`;
@@ -103,6 +105,7 @@ interface Raw {
   total_cost_usd: number | null;
   closed_utc: string | null;
   deleted_utc: string | null;
+  archived_utc: string | null;
   call_count: number;
 }
 
@@ -137,6 +140,7 @@ function toRow(r: Raw): SessionListRow {
     forkedFromTurn: r.forked_from_turn,
     closedUtc: r.closed_utc,
     deletedUtc: r.deleted_utc,
+    archivedUtc: r.archived_utc,
     callCount: r.call_count,
     costUsd: r.total_cost_usd,
     durationSeconds: durationSeconds(r.started_utc, r.ended_utc),

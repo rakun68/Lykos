@@ -1337,6 +1337,8 @@ function migrateSessionsTable(db: Database.Database): void {
     ["trust_source", "TEXT"],
     ["closed_utc", "TEXT"],
     ["deleted_utc", "TEXT"],
+    // P5 #42: no DEFAULT and no backfill. Set when a person archives the session from lykos-tui's session list.
+    ["archived_utc", "TEXT"],
     ["browser_fanout_ms", "INTEGER"],
     ["browser_projects_scanned", "INTEGER"],
     ["browser_rows_returned", "INTEGER"],
@@ -2464,6 +2466,24 @@ export class Ledger {
     const result = this.db
       .prepare(`UPDATE sessions SET brief = @brief WHERE id = @id`)
       .run({ id, brief: optionalRedact(trimmed) ?? trimmed });
+    return result.changes > 0;
+  }
+
+  /**
+   * P5 #42: lykos-tui's "delete" (OpenCode `session.delete`). Nothing is deleted: the session is closed as
+   * `closeSession` closes it and leaves the TUI's session list; its row, transcript and calls stay, `lykos session`
+   * lists it, and `lykos resume` reopens it. Returns false for an unknown id.
+   */
+  archiveSession(id: string, atUtc = new Date().toISOString()): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE sessions
+            SET archived_utc = COALESCE(archived_utc, @at),
+                closed_utc = COALESCE(closed_utc, @at),
+                ended_utc  = COALESCE(ended_utc, @at)
+          WHERE id = @id`,
+      )
+      .run({ id, at: atUtc });
     return result.changes > 0;
   }
 

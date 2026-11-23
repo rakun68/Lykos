@@ -38,10 +38,20 @@
 // replayed after it, and the prompt in the input box. Summarize from here does
 // not reach past a resume: Pi's summarizer reads Pi's tree, which does not
 // hold those turns.
+//
+// UNDO AND REDO (P5 #42, OpenCode `session.undo` and `session.redo`): undo is a
+// rewind of code and conversation to before the last prompt, its event marked
+// `undo`; each undo goes one prompt further back. Redo takes back every undo
+// since the last prompt at once, as OpenCode clears its whole revert: the tree
+// from the first undo's safety checkpoint, the conversation by moving Pi's leaf
+// back to where it was (the undone entries are still in Pi's tree). A prompt
+// sent after an undo ends the chain, and redo then refuses, as OpenCode's does.
+// Past a rebuild the chain is the transcript's (`pendingUndos`): the redo event
+// is written and the session rebuilt, since the active branch honours it.
 
 import { createCheckpoint, restoreCheckpointByHash, shortHash } from "../loop/checkpoint.js";
 import type { TranscriptRecord } from "./replay.js";
-import type { RewindEvent } from "./transcript.js";
+import type { RedoEvent, RewindEvent } from "./transcript.js";
 
 /** What is put back: both, the conversation alone, or the files alone; or the conversation from the prompt on, summarized. */
 export type RewindRestore = "both" | "conversation" | "code" | "summarize";
@@ -92,7 +102,7 @@ interface BranchEntry {
 
 /** The slice of Pi's `AgentSession` a rewind needs; the real class satisfies it. */
 export interface RewindableSession {
-  readonly sessionManager?: { getLeafId(): string | null; getBranch(): BranchEntry[] };
+  readonly sessionManager?: { getLeafId(): string | null; getBranch(): BranchEntry[]; getEntry?(id: string): BranchEntry | undefined };
   navigateTree?(
     targetId: string,
     options?: { summarize?: boolean; customInstructions?: string },
@@ -102,6 +112,7 @@ export interface RewindableSession {
 /** Where the rewind is written down. */
 export interface RewindRecorder {
   rewind?(event: Omit<RewindEvent, "kind">): void;
+  redo?(event: Omit<RedoEvent, "kind">): void;
 }
 
 /** One earlier prompt the picker offers. */
@@ -120,6 +131,24 @@ export interface RewindReport {
   inputText?: string;
   /** T264: the conversation went back past this process's own prompts; the session is rebuilt from its transcript. */
   rebuild?: true;
+  /** The checkpoint holding the tree just before the code was restored; absent when it was not. */
+  safety?: string;
+}
+
+/** P5 #42: the undos since the last prompt, as a transcript has them; what a redo past a rebuild takes back. */
+export interface PendingUndos {
+  count: number;
+  /** The first code-moving undo's safety checkpoint: the tree before the chain. Absent when none moved the code. */
+  safety?: string;
+}
+
+/** What one live undo replaced: put back by a redo. */
+interface UndoRecord {
+  leaf: string | null;
+  prompts: PromptRecord[];
+  lastTurn: number | undefined;
+  lastCheckpoint: string | undefined;
+  safety: string | undefined;
 }
 
 /** T264: a prompt from before this process, as the transcript's active branch has it. */
@@ -146,6 +175,10 @@ export class LiveRewind {
   /** T264: the last turn before this process; undefined when there was none. */
   private turnBefore: number | undefined;
   private readonly summarizerListeners = new Set<(call: SummarizerCall) => void>();
+  /** P5 #42: this process's undos since the last prompt, oldest first. */
+  private undos: UndoRecord[] = [];
+  /** P5 #42: the undos a rebuilt or resumed session's transcript ends with. */
+  private undosBefore: PendingUndos | undefined;
 
   /** `cwd` is the repository the session checkpoints; undefined when it takes none, and code cannot be restored. */
   constructor(private readonly cwd: string | undefined) {}
@@ -167,13 +200,16 @@ export class LiveRewind {
   }
 
   /** T264: a resumed session's prompts from before this process, and the turn it starts at. */
-  continues(plan: { earlierPrompts?: readonly EarlierPrompt[]; firstTurn?: number }): void {
+  continues(plan: { earlierPrompts?: readonly EarlierPrompt[]; firstTurn?: number; undos?: PendingUndos }): void {
     this.earlier = [...(plan.earlierPrompts ?? [])];
+    this.undosBefore = plan.undos;
     this.turnBefore = plan.firstTurn !== undefined && plan.firstTurn > 0 ? plan.firstTurn - 1 : undefined;
   }
 
   /** The loop, just before it sends a prompt the person typed. */
   promptSent(session: RewindableSession, text: string): void {
+    this.undos = [];
+    this.undosBefore = undefined;
     this.prompts.push({ text, turn: undefined, leafBefore: session.sessionManager?.getLeafId(), checkpoint: undefined });
   }
 
@@ -198,8 +234,14 @@ export class LiveRewind {
     restore: RewindRestore,
     recorder?: RewindRecorder,
     note?: string,
+    undo = false,
   ): Promise<RewindReport> {
-    if (index < this.earlier.length) return this.rewindEarlier(index, restore, recorder);
+    // Any other rewind ends an undo chain: a redo would put back what it did not take.
+    if (!undo) {
+      this.undos = [];
+      this.undosBefore = undefined;
+    }
+    if (index < this.earlier.length) return this.rewindEarlier(index, restore, recorder, undo);
     const live = index - this.earlier.length;
     const prompt = this.prompts[live];
     if (prompt === undefined) return { ok: false, lines: [`lykos: no prompt ${index + 1} to rewind to`] };
@@ -285,8 +327,112 @@ export class LiveRewind {
       ...(summary !== undefined ? { summary } : {}),
       ...(code ? { checkpoint: prompt.checkpoint! } : {}),
       ...(safety !== undefined ? { safety_checkpoint: safety } : {}),
+      ...(undo ? { undo: true as const } : {}),
     });
-    return { ok: true, lines, ...(inputText !== undefined ? { inputText } : {}) };
+    return { ok: true, lines, ...(inputText !== undefined ? { inputText } : {}), ...(safety !== undefined ? { safety } : {}) };
+  }
+
+  /** P5 #42: OpenCode `session.undo`: the code and the conversation back to before the last prompt. */
+  async undo(session: RewindableSession, recorder?: RewindRecorder): Promise<RewindReport> {
+    const points = this.points();
+    if (points.length === 0) return { ok: false, lines: ["lykos: nothing to undo"] };
+    const index = points.length - 1;
+    const prompt = index < this.earlier.length ? this.earlier[index]! : this.prompts[index - this.earlier.length]!;
+    // As OpenCode reverts the conversation where it has no snapshot of the files.
+    const code = this.cwd !== undefined && prompt.checkpoint !== undefined;
+    const before: Omit<UndoRecord, "safety"> = {
+      leaf: session.sessionManager?.getLeafId() ?? null,
+      prompts: [...this.prompts],
+      lastTurn: this.lastTurn,
+      lastCheckpoint: this.lastCheckpoint,
+    };
+    const report = await this.rewind(session, index, code ? "both" : "conversation", recorder, undefined, true);
+    if (report.ok && report.rebuild !== true) this.undos.push({ ...before, safety: report.safety });
+    return report;
+  }
+
+  /**
+   * P5 #42: OpenCode `session.redo`: every undo since the last prompt taken back, the files and the conversation
+   * where they were before the first. Refused once a prompt has been sent since.
+   */
+  async redo(session: RewindableSession, recorder?: RewindRecorder): Promise<RewindReport> {
+    if (this.undosBefore !== undefined) return this.redoEarlier(this.undosBefore, recorder);
+    const first = this.undos[0];
+    if (first === undefined) return { ok: false, lines: ["lykos: nothing to redo — no undo since the last prompt"] };
+    const entry = first.leaf === null ? undefined : session.sessionManager?.getEntry?.(first.leaf);
+    if (
+      session.navigateTree === undefined ||
+      entry === undefined ||
+      (entry.type === "message" && entry.message?.role === "user") ||
+      entry.type === "custom_message"
+    ) {
+      return { ok: false, lines: ["lykos: this session cannot redo its conversation; nothing was changed"] };
+    }
+    const code = this.undos.find((u) => u.safety !== undefined)?.safety;
+    const lines: string[] = [];
+    let safety: string | undefined;
+    if (code !== undefined) {
+      const restored = this.restoreTree(code, "before redo", lines);
+      if (typeof restored !== "string") return restored;
+      safety = restored;
+    }
+    await session.navigateTree(first.leaf!);
+    const back = first.prompts.slice(this.prompts.length);
+    const from = back[0]?.turn;
+    const range =
+      from !== undefined && first.lastTurn !== undefined && first.lastTurn >= from ? ([from, first.lastTurn] as [number, number]) : undefined;
+    const count = this.undos.length;
+    this.prompts.length = 0;
+    this.prompts.push(...first.prompts);
+    this.lastTurn = first.lastTurn;
+    this.lastCheckpoint = first.lastCheckpoint;
+    this.undos = [];
+    lines.push(
+      `redid ${count === 1 ? "the undo" : `${count} undos`}: the conversation${code !== undefined ? " and the files are back where they were" : " is back where it was"}`,
+    );
+    recorder?.redo?.({
+      undos: count,
+      ...(code !== undefined ? { checkpoint: code } : {}),
+      ...(safety !== undefined ? { safety_checkpoint: safety } : {}),
+      ...(range !== undefined ? { redone_turns: range } : {}),
+    });
+    return { ok: true, lines, ...(safety !== undefined ? { safety } : {}) };
+  }
+
+  /** P5 #42: a redo of undos from before this process: the event is written and the session rebuilt from it. */
+  private redoEarlier(chain: PendingUndos, recorder: RewindRecorder | undefined): RewindReport {
+    const lines: string[] = [];
+    let safety: string | undefined;
+    if (chain.safety !== undefined) {
+      if (this.cwd === undefined) {
+        return { ok: false, lines: ["lykos: this session takes no checkpoints, so its code cannot be redone; nothing was changed"] };
+      }
+      const restored = this.restoreTree(chain.safety, "before redo", lines);
+      if (typeof restored !== "string") return restored;
+      safety = restored;
+    }
+    this.undosBefore = undefined;
+    lines.push(`redid ${chain.count === 1 ? "the undo" : `${chain.count} undos`}; rebuilding the session from its transcript, as \`lykos resume\` does`);
+    recorder?.redo?.({
+      undos: chain.count,
+      ...(chain.safety !== undefined ? { checkpoint: chain.safety } : {}),
+      ...(safety !== undefined ? { safety_checkpoint: safety } : {}),
+    });
+    return { ok: true, lines, rebuild: true, inputText: "", ...(safety !== undefined ? { safety } : {}) };
+  }
+
+  /** Restores the whole tree from `checkpoint` after a safety checkpoint labelled `label`, whose hash it returns. */
+  private restoreTree(checkpoint: string, label: string, lines: string[]): string | RewindReport {
+    const before = createCheckpoint({ cwd: this.cwd! }, label);
+    if (before.status === "skipped") return { ok: false, lines: [`lykos: redo failed — ${before.reason}; nothing was changed`] };
+    const restored = restoreCheckpointByHash({ cwd: this.cwd! }, checkpoint);
+    if (restored.status === "error") return { ok: false, lines: [`lykos: redo failed — ${restored.message}; nothing was changed`] };
+    lines.push(`restored the code from checkpoint ${shortHash(restored.commit)}`);
+    lines.push(`  the tree you had is checkpoint ${shortHash(before.commit)} — \`lykos rewind ${shortHash(before.commit)}\` puts it back`);
+    if (restored.extras.length > 0) {
+      lines.push(`  ${restored.extras.length} file(s) the checkpoint did not have were left in place: ${restored.extras.join(", ")}`);
+    }
+    return before.commit;
   }
 
   /**
@@ -294,7 +440,7 @@ export class LiveRewind {
    * process's own; the conversation is the transcript's, so the event that cuts it is written and the
    * session asks to be rebuilt from it.
    */
-  private rewindEarlier(index: number, restore: RewindRestore, recorder: RewindRecorder | undefined): RewindReport {
+  private rewindEarlier(index: number, restore: RewindRestore, recorder: RewindRecorder | undefined, undo = false): RewindReport {
     const prompt = this.earlier[index]!;
     if (restore === "summarize") {
       return {
@@ -332,8 +478,14 @@ export class LiveRewind {
       ...(conversation && range !== undefined ? { undone_turns: range } : {}),
       ...(code ? { checkpoint: prompt.checkpoint! } : {}),
       ...(safety !== undefined ? { safety_checkpoint: safety } : {}),
+      ...(undo ? { undo: true as const } : {}),
     });
-    return { ok: true, lines, ...(conversation ? { inputText: prompt.text, rebuild: true as const } : {}) };
+    return {
+      ok: true,
+      lines,
+      ...(conversation ? { inputText: prompt.text, rebuild: true as const } : {}),
+      ...(safety !== undefined ? { safety } : {}),
+    };
   }
 
   /** Why the code cannot be rewound to `checkpoint`; undefined when it can. */

@@ -129,7 +129,7 @@ import { setStderrSink, stdoutWrite, stderrWrite } from "../tui/io-mode.js";
 import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
-import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
+import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type PendingUndos, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
 import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type AgentUiOptions, type SystemPart } from "../tui/s0.js";
 import type { AsideAnswer } from "./aside.js";
 import { runInteractiveSurface } from "../tui/interactive-surface.js";
@@ -908,6 +908,27 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         if (report.inputText !== undefined) putBack(report.inputText);
         return "ok";
       }
+      case "undo":
+      case "redo": {
+        // P5 #42: the person's, as /rewind is.
+        if (!opts.rewind) {
+          chrome(`lykos: /${parsed.kind} is not available on this session`);
+          return "ok";
+        }
+        if (!session.isIdle) {
+          chrome(`lykos: /${parsed.kind} cannot run while a turn is in flight`);
+          return "ok";
+        }
+        const report =
+          parsed.kind === "undo" ? await opts.rewind.undo(session, opts.recorder) : await opts.rewind.redo(session, opts.recorder);
+        chrome(report.lines.join("\n"));
+        if (report.rebuild === true) {
+          rewindRebuild = { inputText: report.inputText ?? "" };
+          return "exit";
+        }
+        if (report.inputText !== undefined) putBack(report.inputText);
+        return "ok";
+      }
       case "verbose": {
         if (ui) ui.view.toolsCollapsed = !ui.view.toolsCollapsed;
         const collapsed = ui?.view.toolsCollapsed ?? true;
@@ -1385,6 +1406,8 @@ export interface ResumePlan {
   firstTurn?: number;
   /** T264: the prompts on the active branch before this process, which the rewind picker offers too. */
   earlierPrompts?: readonly EarlierPrompt[];
+  /** P5 #42: the undos the transcript ends with, which `/redo` can take back. */
+  undos?: PendingUndos;
   /** T264: what goes back in the input box when the session starts: a rewind past a resume's prompt. */
   inputText?: string;
 }

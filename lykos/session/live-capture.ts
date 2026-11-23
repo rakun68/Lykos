@@ -45,6 +45,7 @@ import {
   type CaptureMode,
   type RecoveryEvent,
   type ResumeEvent,
+  type RedoEvent,
   type RewindEvent,
   type SessionMeta,
   type TranscriptEventInput,
@@ -75,6 +76,8 @@ export interface TranscriptRecorder {
   intervention(action: string, detail?: string): void;
   /** T263: optional, so a test's recorder need not write rewinds. */
   rewind?(event: Omit<RewindEvent, "kind">): void;
+  /** P5 #42: optional for the same reason. */
+  redo?(event: Omit<RedoEvent, "kind">): void;
 }
 
 interface AgentEventish {
@@ -212,6 +215,11 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
   /** T263: a rewind of this live session, at the moment it happened. */
   rewind(event: Omit<RewindEvent, "kind">): void {
     this.append({ kind: "rewind", ...event });
+  }
+
+  /** P5 #42: a redo of this live session's undos. */
+  redo(event: Omit<RedoEvent, "kind">): void {
+    this.append({ kind: "redo", ...event });
   }
 
   /** T238: the working tree a resume found, after the marker and before the replay. */

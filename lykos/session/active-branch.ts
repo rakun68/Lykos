@@ -21,13 +21,33 @@
 // transcript from before that has each process count from 0 again, and nothing
 // is renumbered; a rewind then reached only its own process's turns, which are
 // the latest with their numbers, so a turn is looked for from the end.
+//
+// P5 #42: an undo is a rewind marked `undo`; a `redo` takes back the last
+// `undos` of them, so the branch is again what it was before the earliest. A
+// prompt ends the chain: no redo is written after one.
 
 import type { TranscriptRecord } from "./replay.js";
+import type { PendingUndos } from "./rewind.js";
 
 /** The records still on the conversation, in order. Pure: nothing is read or written. */
 export function activeBranch(records: readonly TranscriptRecord[]): TranscriptRecord[] {
   const branch: TranscriptRecord[] = [];
+  /** The branch as it stood before each undo since the last prompt. */
+  const beforeUndo: TranscriptRecord[][] = [];
   for (const record of records) {
+    if (record.kind === "user_message") beforeUndo.length = 0;
+    if (record.kind === "redo") {
+      const back = beforeUndo.length - record.undos;
+      if (record.undos > 0 && back >= 0) {
+        branch.splice(0, branch.length, ...beforeUndo[back]!);
+        beforeUndo.length = back;
+      }
+      continue;
+    }
+    if (record.kind === "rewind") {
+      if (record.undo === true) beforeUndo.push([...branch]);
+      else beforeUndo.length = 0;
+    }
     if (record.kind === "rewind" && record.restore !== "code") {
       const cut = promptStarting(branch, record.to_turn);
       if (cut !== undefined) {
@@ -39,6 +59,18 @@ export function activeBranch(records: readonly TranscriptRecord[]): TranscriptRe
     branch.push(record);
   }
   return branch;
+}
+
+/** P5 #42: the undos a transcript ends with since its last prompt, which a redo can take back; undefined when none. */
+export function pendingUndos(records: readonly TranscriptRecord[]): PendingUndos | undefined {
+  let chain: Array<Extract<TranscriptRecord, { kind: "rewind" }>> = [];
+  for (const r of records) {
+    if (r.kind === "user_message" || r.kind === "redo") chain = [];
+    else if (r.kind === "rewind") chain = r.undo === true ? [...chain, r] : [];
+  }
+  if (chain.length === 0) return undefined;
+  const safety = chain.find((r) => r.safety_checkpoint !== undefined)?.safety_checkpoint;
+  return { count: chain.length, ...(safety !== undefined ? { safety } : {}) };
 }
 
 /** T264: the turn the next process of a session starts at: one past the highest its transcript has. */

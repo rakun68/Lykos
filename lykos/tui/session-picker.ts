@@ -314,7 +314,7 @@ export function renderPickerFallback(
       outcomeLabel(row),
       fmtUsd(row.costUsd),
     ].join(" · ");
-    const mark = row.resumable ? "" : "  [not resumable]";
+    const mark = (row.resumable ? "" : "  [not resumable]") + (row.archivedUtc ? "  [archived from lykos-tui]" : "");
     return `${pad(`${i + 1})`, 4)} ${row.id.slice(0, 8)}  ${indent(row, ascii)}${truncate(label, 48, ascii)}  ${when(row.startedUtc, now)}  ${flags}${forkedLabel(row)}${mark}`;
   });
   if (rows.length > shown.length) {

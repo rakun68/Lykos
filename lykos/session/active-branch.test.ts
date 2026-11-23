@@ -164,3 +164,31 @@ describe("earlierPrompts", () => {
     );
   });
 });
+
+describe("undo and redo on the active branch (P5 #42)", () => {
+  it("a redo puts back the turns the undos since the last prompt took", async () => {
+    const { pendingUndos } = await import("./active-branch.js");
+    const ledgerPath = tempLedgerPath();
+    const p = liveProcess(ledgerPath, "u1");
+    p.prompt("first", "one");
+    p.prompt("second", "two");
+    p.prompt("third", "three");
+    p.recorder.rewind({ restore: "both", prompt: "third", to_turn: 2, undone_turns: [2, 2], checkpoint: "c3", safety_checkpoint: "s1", undo: true });
+    p.recorder.rewind({ restore: "both", prompt: "second", to_turn: 1, undone_turns: [1, 1], checkpoint: "c2", safety_checkpoint: "s2", undo: true });
+    assert.deepEqual(said(activeBranch(records(ledgerPath, "u1"))), ["first", "one"]);
+    assert.deepEqual(pendingUndos(records(ledgerPath, "u1")), { count: 2, safety: "s1" });
+    p.recorder.redo({ undos: 2, checkpoint: "s1" });
+    assert.deepEqual(said(activeBranch(records(ledgerPath, "u1"))), ["first", "one", "second", "two", "third", "three"]);
+    assert.equal(pendingUndos(records(ledgerPath, "u1")), undefined);
+  });
+
+  it("a prompt ends the chain", async () => {
+    const { pendingUndos } = await import("./active-branch.js");
+    const ledgerPath = tempLedgerPath();
+    const p = liveProcess(ledgerPath, "u2");
+    p.prompt("first", "one");
+    p.recorder.rewind({ restore: "conversation", prompt: "first", to_turn: 0, undone_turns: [0, 0], undo: true });
+    p.prompt("again", "two");
+    assert.equal(pendingUndos(records(ledgerPath, "u2")), undefined);
+  });
+});

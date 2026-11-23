@@ -60,6 +60,9 @@ export type ParsedInput =
   | { kind: "verbose" }
   /** T263: open the rewind picker over this session's earlier prompts. */
   | { kind: "rewind" }
+  /** P5 #42: OpenCode `session.undo` and `session.redo`: back before the last prompt, and all of it taken back. */
+  | { kind: "undo" }
+  | { kind: "redo" }
   | { kind: "thinking" }
   | { kind: "compact"; hint: string }
   | { kind: "followup"; text: string }
@@ -171,6 +174,8 @@ export function parseInteractiveInput(line: string): ParsedInput {
   if (name === "export") return { kind: "export", file: arg };
   if (name === "verbose") return { kind: "verbose" };
   if (name === "rewind") return { kind: "rewind" };
+  if (name === "undo") return { kind: "undo" };
+  if (name === "redo") return { kind: "redo" };
   if (name === "thinking") return { kind: "thinking" };
   if (name === "effort") return { kind: "effort", level: arg.toLowerCase() };
   if (name === "usage") return { kind: "usage" };

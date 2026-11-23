@@ -201,6 +201,7 @@ export function planFromPreflight(
     ...(pre.recovery !== undefined ? { recovery: pre.recovery } : {}),
     ...(pre.nextTurn !== undefined ? { firstTurn: pre.nextTurn } : {}),
     ...(pre.branch !== undefined ? { earlierPrompts: earlierPrompts(pre.branch.records) } : {}),
+    ...(pre.branch?.undos !== undefined ? { undos: pre.branch.undos } : {}),
   };
 }
 

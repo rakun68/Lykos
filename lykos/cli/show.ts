@@ -304,7 +304,12 @@ export function fileChangingTurns(
 
 /** T263: one rewind of the live session, with the branch it undid. */
 export interface SessionRewind {
-  restore: RewindEvent["restore"];
+  /** P5 #42: "redo" for a redo, which takes back the last `undos` undos. */
+  restore: RewindEvent["restore"] | "redo";
+  /** P5 #42: a rewind made by `/undo`. */
+  undo?: true;
+  /** P5 #42: a redo's count of the undos it took back. */
+  undos?: number;
   to_turn?: number;
   /** The undone branch: its first and last turn, and the prompts that started them. Absent when only code was restored. */
   undone?: { turns: [number, number]; prompts: string[] };
@@ -332,12 +337,15 @@ export function sessionRewinds(events: ReadonlyArray<TranscriptEventInput>): Ses
       const promptsIn = (r: [number, number]) => promptTurns.filter((p) => p.turn >= r[0] && p.turn <= r[1]).map((p) => p.text);
       out.push({
         restore: e.restore,
+        ...(e.undo === true ? { undo: true as const } : {}),
         ...(e.to_turn !== undefined ? { to_turn: e.to_turn } : {}),
         ...(range !== undefined ? { undone: { turns: range, prompts: promptsIn(range) } } : {}),
         ...(summarized !== undefined
           ? { summarized: { turns: summarized, prompts: promptsIn(summarized), ...(e.note !== undefined ? { note: e.note } : {}) } }
           : {}),
       });
+    } else if (e.kind === "redo") {
+      out.push({ restore: "redo", undos: e.undos });
     }
   }
   return out;
@@ -346,6 +354,11 @@ export function sessionRewinds(events: ReadonlyArray<TranscriptEventInput>): Ses
 /** T263: each rewind, and the undone branch it left in the transcript. Nothing when there was none. */
 function writeRewinds(rewinds: readonly SessionRewind[]): void {
   for (const r of rewinds) {
+    if (r.restore === "redo") {
+      stdoutWrite(` redo       took back ${r.undos === 1 ? "the undo" : `${r.undos} undos`} before it
+`);
+      continue;
+    }
     const what =
       r.restore === "both"
         ? "code and conversation"
@@ -355,7 +368,7 @@ function writeRewinds(rewinds: readonly SessionRewind[]): void {
             ? "summarized"
             : "conversation only";
     const where = r.restore === "summarize" ? ` from turn ${r.to_turn}` : ` to before turn ${r.to_turn}`;
-    stdoutWrite(` rewind     ${what}${r.to_turn !== undefined ? where : ""}\n`);
+    stdoutWrite(` ${r.undo === true ? "undo  " : "rewind"}     ${what}${r.to_turn !== undefined ? where : ""}\n`);
     if (r.undone !== undefined) {
       stdoutWrite(`            undone branch: turns ${r.undone.turns[0]}-${r.undone.turns[1]}, kept in the transcript and the cost\n`);
       for (const p of r.undone.prompts) stdoutWrite(`              ${p.split("\n")[0]}\n`);
@@ -669,7 +682,9 @@ function formatEventBlock(record: TranscriptEventRecord & TranscriptEventInput):
     }
     case "rewind": {
       // T263: the turns above it stay where they are; this says which were undone.
-      lines.push(`${head}  ${record.restore}${record.to_turn !== undefined ? `  to turn ${record.to_turn}` : ""}`);
+      lines.push(
+        `${head}  ${record.restore}${record.undo === true ? "  (undo)" : ""}${record.to_turn !== undefined ? `  to turn ${record.to_turn}` : ""}`,
+      );
       lines.push(`    prompt: ${record.prompt}`);
       if (record.undone_turns !== undefined) lines.push(`    undone: turns ${record.undone_turns[0]}-${record.undone_turns[1]}`);
       // T265: the summarized turns stay above it too; the model is sent the summary in their place.
@@ -678,6 +693,13 @@ function formatEventBlock(record: TranscriptEventRecord & TranscriptEventInput):
       }
       if (record.note !== undefined) lines.push(`    note: ${record.note}`);
       if (record.summary !== undefined) lines.push(`    summary: ${record.summary.split("\n")[0]}`);
+      if (record.checkpoint !== undefined) lines.push(`    code from checkpoint ${shortHash(record.checkpoint)}`);
+      if (record.safety_checkpoint !== undefined) lines.push(`    the tree before it: checkpoint ${shortHash(record.safety_checkpoint)}`);
+      break;
+    }
+    case "redo": {
+      // P5 #42: the undos it took back stay above it.
+      lines.push(`${head}  took back ${record.undos} undo(s)${record.redone_turns !== undefined ? `  turns ${record.redone_turns[0]}-${record.redone_turns[1]}` : ""}`);
       if (record.checkpoint !== undefined) lines.push(`    code from checkpoint ${shortHash(record.checkpoint)}`);
       if (record.safety_checkpoint !== undefined) lines.push(`    the tree before it: checkpoint ${shortHash(record.safety_checkpoint)}`);
       break;

@@ -227,3 +227,43 @@ describe("summarize from here (T265)", () => {
     assert.match(show, /summariz/i);
   });
 });
+
+describe("undo and redo (P5 #42)", () => {
+  it("undo twice: the last two prompts' files and turns gone, the second prompt in the input box", async () => {
+    let next: ModelContext | undefined;
+    const r = await run(["/undo", "/undo", "fourth"], [
+      (ctx) => {
+        next = ctx;
+        return reply(say("ok"));
+      },
+    ]);
+    assert.equal(r.unusedSteps, 0, r.out);
+    assert.deepEqual([r.file("a.txt"), r.file("b.txt"), r.file("c.txt")], ["a1\n", "b0\n", "c0\n"]);
+    assert.deepEqual(r.lines.prefilled, ["third: change c", "second: change b"]);
+    const said = userTexts(next!);
+    assert.ok(!said.some((t) => t.includes("second: change b") || t.includes("third: change c")), JSON.stringify(said));
+    assert.match(r.show(), /undo .*code and conversation/);
+  });
+
+  it("redo after two undos: the files and the conversation as they were before the first", async () => {
+    let next: ModelContext | undefined;
+    const r = await run(["/undo", "/undo", "/redo", "fourth"], [
+      (ctx) => {
+        next = ctx;
+        return reply(say("ok"));
+      },
+    ]);
+    assert.equal(r.unusedSteps, 0, r.out);
+    assert.deepEqual([r.file("a.txt"), r.file("b.txt"), r.file("c.txt")], ["a1\n", "b2\n", "c3\n"]);
+    assert.match(r.out, /redid 2 undos/);
+    const said = userTexts(next!);
+    assert.ok(said.some((t) => t.includes("third: change c")), JSON.stringify(said));
+    assert.match(r.show(), /redo .*took back 2 undos/);
+  });
+
+  it("a prompt after an undo ends the chain: redo refuses and changes nothing", async () => {
+    const r = await run(["/undo", "fourth", "/redo"], [reply(say("ok"))]);
+    assert.match(r.out, /nothing to redo/);
+    assert.deepEqual([r.file("a.txt"), r.file("b.txt"), r.file("c.txt")], ["a1\n", "b2\n", "c0\n"]);
+  });
+});

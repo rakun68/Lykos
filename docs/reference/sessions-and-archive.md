@@ -170,13 +170,26 @@ only, code only, summarize from here, or cancel. Only the person can rewind; the
   summarizer's call is a `calls` row of phase `compact`, as a compaction's is, and in the session's
   cost; it writes no `compactions` row. The prompt goes back in the input box, as Claude Code does,
   and the files are not touched. A summarizer that fails changes nothing.
-- **Nothing is deleted and there is no redo.** The transcript gets a `rewind` event (what was
+- **Nothing is deleted.** `/rewind` has no redo; `/redo` takes back `/undo`s only (below). The transcript gets a `rewind` event (what was
   restored, the prompt, `to_turn`, `undone_turns`, `checkpoint`, `safety_checkpoint`; for a
   summarize, `restore: "summarize"`, `summarized_turns`, `note` and `summary`); the undone or
   summarized turns stay in the transcript before it and their calls stay in the ledger and in the
   session's cost. `lykos show` prints each rewind and the undone branch's, or the summarized turns',
   turns and prompts (`--json`: `rewinds`, with `undone` or `summarized`). The session keeps its id
   and its row.
+
+**Undo and redo (P5 #42).** `/undo` (OpenCode's `session.undo`, `<leader>u` in `lykos-tui`) is a
+rewind to before the last prompt, code and conversation, or the conversation alone when the session
+takes no checkpoints; its `rewind` event has `undo: true` and the prompt goes back in the input box.
+Each `/undo` goes one prompt further back. `/redo` (`<leader>r`) takes back every undo since the
+last prompt at once, as OpenCode clears its whole revert: the tree from the first undo's safety
+checkpoint (the current tree checkpointed first, `before redo`), the conversation by moving Pi's
+leaf back, since the undone entries are still in Pi's tree. It writes a `redo` event (`undos`,
+`checkpoint`, `safety_checkpoint`, `redone_turns`), and the active branch is again what it was
+before the first undo. A prompt sent after an undo ends the chain and `/redo` refuses, as OpenCode's
+does; so does any other rewind. A chain from before a resume is read from the transcript: the redo
+is written and the session rebuilt from it, as a rewind past a resume is. `lykos show` prints an
+undo as `undo` and a redo as `redo`.
 
 **Past a resume (T264).** A resumed session's picker lists the prompts from before the resume too,
 read from its transcript's active branch, then its own. Choosing one of those rebuilds the session

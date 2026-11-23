@@ -288,6 +288,24 @@ export interface RewindEvent {
   checkpoint?: string;
   /** The checkpoint holding the tree as it was just before the restore. Absent when the code was not rewound. */
   safety_checkpoint?: string;
+  /** P5 #42: an undo (`/undo`, OpenCode `session.undo`): to before the last prompt, which `/redo` can take back. */
+  undo?: true;
+}
+
+/**
+ * P5 #42: a redo (`/redo`, OpenCode `session.redo`): the last `undos` undos taken back, so the conversation and the
+ * files are where they were before the first of them. Written only while no prompt has been sent since those undos.
+ */
+export interface RedoEvent {
+  kind: "redo";
+  /** How many undos it takes back, newest first; the active branch returns to before the earliest. */
+  undos: number;
+  /** The checkpoint the tree was restored from: the first undo's safety checkpoint. Absent when no undo moved the code. */
+  checkpoint?: string;
+  /** The checkpoint holding the tree just before the redo. Absent when the code was not restored. */
+  safety_checkpoint?: string;
+  /** The first and last turn back on the conversation. Absent when unknown. */
+  redone_turns?: [number, number];
 }
 
 export interface ErrorEvent {
@@ -321,6 +339,7 @@ export type TranscriptEventInput =
   | ShakeEvent
   | RecoveryEvent
   | RewindEvent
+  | RedoEvent
   | ErrorEvent
   | OutcomeEvent;
 
