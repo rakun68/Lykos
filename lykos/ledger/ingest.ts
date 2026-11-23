@@ -1136,6 +1136,8 @@ function ingestSnapshotBody(
         ts: callTimestamp,
         agent,
         ...(call.source === "compaction" ? { phase: "compact", compactionTriggered: true } : {}),
+        // P5 #38: a `/btw` side question, a call outside every turn.
+        ...(call.source === "aside" ? { phase: "aside" } : {}),
         provider: ref.provider,
         model: ref.model,
         authMode: accounting.authMode,

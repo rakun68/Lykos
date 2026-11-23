@@ -58,6 +58,7 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `session.interrupt` | `{session}` | `{ok: true}` |
 | `session.answer` | `{session, requestId, answer}` | `{ok: true}`: answers an approval or a question |
 | `session.close` | `{session}` | `{ok: true}` |
+| `session.aside` | `{session, text}` | `{answer, model}`: a side question (`/btw`) answered from the session's context with no tools. It enters no transcript and no turn; its call is in the session's usage and its ledger row has `phase` `aside` |
 | `subscribe` | `{sessions?, after?: {<id>: seq}}` | `{sessions: SessionSummary[]}`, then the replay |
 
 ### 2.3 Events
@@ -70,7 +71,8 @@ applied, so an overlapping replay changes nothing and a gap waits.
 `data.type`: `session.status` (with the whole `SessionSummary`), `message.user`, `message.followup`,
 `message.delta`, `thinking.delta`, `message.end`, `tool.start`, `tool.end` (preview capped at 8 KB,
 `diff?` for a file change), `request`, `request.resolved`, `usage`, `system` (a notice line, compaction
-among them) and `turn.end`. The types
+among them), `turn.end` and `commands` (the slash commands the session runs, `{name, description, source}`,
+sent once it has booted: what a client completes `/` from). The types
 are `lykos/server/protocol.ts`; `crates/client/src/protocol.rs` mirrors them, and reads a type it
 does not know as `Unknown`.
 

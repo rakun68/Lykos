@@ -122,6 +122,31 @@ describe("engine server", () => {
     }
   });
 
+  it("sends the session's commands once it boots, and answers an aside without an event", async () => {
+    const { server, key } = setup();
+    await server.listen();
+    try {
+      const a = await connectEngine(server.address, key);
+      await a.request("subscribe");
+      const got = collect(a, (ev) => ev.some((e) => e.event === "commands"));
+      const s = await a.request<SessionSummary>("session.start", { cwd: process.cwd() });
+      const commands = (await got).find((e) => e.event === "commands")!.data as { commands: { name: string }[] };
+      assert.deepEqual(commands.commands.map((c) => c.name), ["/help", "/skill:tdd"]);
+      await waitStatus(a, s.id, "idle");
+      const before = (await a.request<SessionSummary[]>("sessions.list"))[0];
+      const seen: Event[] = [];
+      a.onEvent((e) => seen.push(e));
+      assert.deepEqual(await a.request("session.aside", { session: s.id, text: "why?" }), { answer: "aside: why?", model: "faux/scripted" });
+      await assert.rejects(a.request("session.aside", { session: s.id, text: "fail" }), /overloaded/);
+      await assert.rejects(a.request("session.aside", { session: s.id, text: " " }), /needs text/);
+      assert.deepEqual(seen, [], "an aside sends no event");
+      assert.deepEqual((await a.request<SessionSummary[]>("sessions.list"))[0], before);
+      a.close();
+    } finally {
+      await server.stop("test");
+    }
+  });
+
   it("refuses an untrusted workspace unless the start says trust", async () => {
     const { server, key } = setup(60, false);
     await server.listen();

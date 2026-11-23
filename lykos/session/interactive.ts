@@ -130,6 +130,7 @@ import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
 import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
 import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type AgentUiOptions, type SystemPart } from "../tui/s0.js";
+import type { AsideAnswer } from "./aside.js";
 import { runInteractiveSurface } from "../tui/interactive-surface.js";
 import { effortToken } from "../tui/effort.js";
 import { fmtUsd } from "../tui/format.js";
@@ -1406,7 +1407,8 @@ export interface RunInteractiveStandaloneSessionInput {
   /** P5 #35: the engine server's session asks over its own channel, not on `lineSource`. Default: `TerminalAsk` on `lineSource`. */
   askHuman?: AskHuman;
   /** P5 #35: the engine server's session turns what the surface shows into protocol events. Default: `createAgentUi`. */
-  createUi?: (opts: AgentUiOptions, session: InteractiveSession) => AgentUi;
+  /** P5 #38: `aside` answers a side question from this session's context, its call counted in the session's usage. */
+  createUi?: (opts: AgentUiOptions, session: InteractiveSession, aside: (question: string) => Promise<AsideAnswer>) => AgentUi;
   /**
    * T162: native providers registered on this run's model runtime — tests
    * only, as for `runStandaloneTask`. The scripted-model session's faux

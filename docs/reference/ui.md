@@ -160,20 +160,70 @@ names the file.
   and `esc interrupt` (`esc again to interrupt` once armed) while a turn runs, else the workspace;
   on the right, `N tokens · P% used` from the last `usage` event.
 
+- **Completion:** `/` at the start of the prompt lists the TUI's own commands, then the session's
+  (from its `commands` event); `@` at the start or after a space lists the workspace's files
+  (`git ls-files -co --exclude-standard`, else a walk capped at 20,000 that skips dot directories,
+  `node_modules` and `target`). Up, Down, `Ctrl+P`, `Ctrl+N` move; `Tab` inserts; `Enter` runs a TUI
+  command and inserts anything else; `Esc` hides. A picked image file becomes an image chip.
+- **Chips:** a paste of 3 lines or more, or over 150 characters, is one `[Pasted ~N lines]` chip,
+  sent expanded. Pasting the same text again right after it, or clicking it, expands it in place.
+- **Queue:** `Ctrl+X Enter` queues the prompt; it shows as `queued: ...` and goes when the session is
+  idle. `Enter` while a turn runs sends the prompt at once as a steer.
+- **History:** the workspace's `.lykos/history.json`, the last 500 prompts, shared by every TUI in it.
+- **Stash:** `~/.lykos/tui/prompt-stash.jsonl` (or `$LYKOS_TUI_DIR`), the last 50.
+
+TUI commands: `/btw <question>` (asks aside: the answer opens in a dialog, `c` copies it, `Esc`
+closes; the transcript is untouched), `/editor`, `/images`, `/queue` (`Ctrl+U` takes a queued prompt
+back into the box, `Ctrl+D` deletes it), `/stash`, `/stash list` (`Enter` restores, `Ctrl+D`
+deletes), `/stash pop`.
+
 | Key | Action |
 | --- | --- |
-| `Enter` | Submit. While a session starts, the prompt waits and shows as `queued` |
+| `Enter` | Submit. Before a session is up, the prompt waits and shows as `queued` |
 | `Shift+Enter`, `Ctrl+Enter`, `Alt+Enter`, `Ctrl+J` | New line |
+| `Ctrl+X` then, within 2 s, `Enter` / `E` / `I` / `Q` | Queue the prompt / open `$VISUAL` or `$EDITOR` / the images / the queue |
 | `Esc`, then `Esc` within 5 s | Interrupt the running turn |
-| `Ctrl+C` | Clear the prompt; on an empty prompt, quit |
-| `Ctrl+D` | Quit on an empty prompt |
+| `Ctrl+C` | Copy the selection; else clear the prompt; on an empty prompt, quit |
+| `Ctrl+D` | Delete forward; on an empty prompt, quit |
+| `Left`, `Right`, `Ctrl+B`, `Ctrl+F`; with `Shift` to select | Move a character |
+| `Up`, `Down` | Move a row; at the first row, the start, then the previous prompt (`Down` mirrors) |
+| `Ctrl+Up`, `Ctrl+Down` | Previous, next prompt |
+| `Ctrl+R` | Search the history by what is typed, newest first; again for the next, `Enter` submits, `Esc` keeps |
+| `Home`, `End`, `Ctrl+A`, `Ctrl+E`; `Alt+A`, `Alt+E` | Line start, end; visual row start, end (`Shift` selects) |
+| `Shift+Home`, `Shift+End`, `Super+A`, triple click | Select to the start, to the end, all |
+| `Alt+F`, `Alt+B`, `Ctrl+Right`, `Ctrl+Left` | Word forward, back (`Shift` selects) |
+| `Alt+D`, `Ctrl+Delete`; `Ctrl+W`, `Ctrl+Backspace`, `Alt+Backspace` | Delete a word forward; back |
+| `Ctrl+K`, `Ctrl+U`, `Ctrl+Shift+D` | Delete to the line end, to the line start, the line |
+| `Ctrl+X` (with a selection), `Ctrl+V` | Cut, paste what was cut or copied |
+| `Ctrl+Z`, `Ctrl+-`; `Ctrl+Y`, `Ctrl+.`, `Ctrl+Shift+Z` | Undo; redo (200 steps, at most 16 MiB) |
+| Click, drag, double click | Place the cursor, select, select a word |
 | `PageUp`, `PageDown`, mouse wheel | Scroll the transcript |
 | `Ctrl+G`, `Ctrl+Alt+G` | Oldest, newest |
+
+Copying writes OSC 52, so it reaches the system clipboard where the terminal allows it.
 
 Where it differs from OpenCode on purpose: the context use is always on screen rather than in a
 sidebar, the metadata row has no agent name (Lykos has no agents to switch), the footer shows the
 workspace without its git branch (reading it would cost a process at startup), and
-`--trust-workspace` replaces a trust dialog until the dialogs land (#46).
+`--trust-workspace` replaces a trust dialog until the dialogs land (#46). In the prompt:
+
+- `Ctrl+X` cuts when text is selected, and is the leader otherwise.
+- `Ctrl+R` searches the history, as the old TUI did, where OpenCode renames the session.
+- `Home` and `End` are line start and end; OpenCode's are buffer start and end.
+- `Ctrl+A` is line start, so select all is `Super+A` or a triple click.
+- `Enter` steers a running turn even with prompts queued; only `Ctrl+X Enter` queues.
+- `/images` lists the attached images by path, without a pixel preview, to keep the binary small.
+- `/btw` takes its question on the command line; there is no question dialog.
+- On Windows, ConPTY drops the bracketed-paste markers, so keys that arrive together (two or more
+  already waiting, then gaps under 15 ms) are read as one paste and its returns as newlines.
+- Undo keeps at most 16 MiB of snapshots, so a large paste cannot hold memory without bound.
+
+1 MB in the prompt (in-process, release build, 2026-11-23, Windows 10:
+`cargo test --release -p lykos-tui -- --ignored --nocapture one_megabyte`): a keystroke's handling
+and frame take 12 us at the median with the paste as a chip, and 6.93 ms (p95 10.57 ms) with it
+expanded into the buffer. End to end in a pty on Linux (`node scripts/tui/paste-measure.mjs`,
+podman, 2026-11-23), keystroke to screen at the median: 10.84 ms with no paste, 10.66 ms with the
+chip, 10.60 ms with 1 MB of text; the paste reaches the screen as a chip in 40 ms.
 
 Speed (rule 10): `node scripts/tui/gate.mjs target/release/lykos-tui.exe --ready "Ask anything"`
 holds startup, keystroke latency, frame time, idle CPU, peak memory and binary size against

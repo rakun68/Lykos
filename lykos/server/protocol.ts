@@ -67,6 +67,8 @@ export type Method =
   | "session.interrupt"
   | "session.answer"
   | "session.close"
+  /** A side question (`/btw`): one answer from the session's context, with no tools, kept out of the conversation. */
+  | "session.aside"
   | "subscribe";
 
 // --- Events ------------------------------------------------------------------------------------------------------
@@ -125,7 +127,23 @@ export type EventData =
   | { type: "system"; text: string }
   | { type: "usage"; usage: UsageData }
   | { type: "request"; request: RequestData }
-  | { type: "request.resolved"; requestId: string; answer: string };
+  | { type: "request.resolved"; requestId: string; answer: string }
+  /** The slash commands the session runs, sent once it has booted: what a client completes `/` from. */
+  | { type: "commands"; commands: CommandInfo[] };
+
+export interface CommandInfo {
+  /** As typed, with its slash. */
+  name: string;
+  description: string;
+  /** "builtin", "skill", "extension" or "pi-extension". */
+  source: string;
+}
+
+/** What `session.aside` answers. */
+export interface AsideResult {
+  answer: string;
+  model: string;
+}
 
 /** One event, in order: `seq` counts from 1 per session, so a client that has seen `seq` asks for what came after. */
 export interface Event {

@@ -185,15 +185,7 @@ pub struct TerminalGuard;
 
 impl TerminalGuard {
     pub fn enter() -> io::Result<TerminalGuard> {
-        crossterm::terminal::enable_raw_mode()?;
-        let mut out = io::stdout();
-        // Through crossterm, so Windows turns on its VT processing; every frame after is raw bytes.
-        crossterm::execute!(
-            out,
-            crossterm::terminal::EnterAlternateScreen,
-            crossterm::event::EnableBracketedPaste,
-            crossterm::event::EnableMouseCapture
-        )?;
+        resume()?;
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             restore();
@@ -201,6 +193,24 @@ impl TerminalGuard {
         }));
         Ok(TerminalGuard)
     }
+}
+
+/// Raw mode, the alternate screen, bracketed paste and the mouse: what `enter` turns on, and `resume` turns back
+/// on after `suspend` (the external editor runs in between).
+pub fn resume() -> io::Result<()> {
+    crossterm::terminal::enable_raw_mode()?;
+    // Through crossterm, so Windows turns on its VT processing; every frame after is raw bytes.
+    crossterm::execute!(
+        io::stdout(),
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableBracketedPaste,
+        crossterm::event::EnableMouseCapture
+    )
+}
+
+/// The terminal as it was before `enter`, while the guard still lives.
+pub fn suspend() {
+    restore();
 }
 
 fn restore() {

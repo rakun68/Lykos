@@ -19,7 +19,7 @@ import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
-import { PROTOCOL_VERSION, type Event, type EventData, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type AsideResult, type Event, type EventData, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
 import { LineReader, send, serverHandshake } from "./wire.js";
 
 export interface EngineServerOptions {
@@ -44,6 +44,8 @@ interface LiveSession {
   child: ChildProcess;
   events: Event[];
   exited: Promise<void>;
+  /** `session.aside` calls waiting on the child, by id. */
+  asides: Map<string, (msg: Extract<FromChild, { kind: "aside" }>) => void>;
 }
 
 interface Client {
@@ -62,6 +64,7 @@ export class EngineServer {
   private readonly key: Buffer;
   private readonly sessions = new Map<string, LiveSession>();
   private readonly clients = new Set<Client>();
+  private asideSeq = 0;
   /** Every open connection, authenticated or not: stop() must close them all, or server.close() never returns. */
   private readonly sockets = new Set<Socket>();
   private server: Server | undefined;
@@ -191,6 +194,19 @@ export class EngineServer {
         this.toChild(this.session(params), { kind: "answer", requestId: params.requestId, answer: params.answer });
         return { ok: true };
       }
+      case "session.aside": {
+        if (typeof params.text !== "string" || params.text.trim() === "") throw new Error("session.aside needs text");
+        const s = this.session(params);
+        if (s.summary.status === "starting" || s.summary.status === "closed") throw new Error(`the session is ${s.summary.status}`);
+        const id = `a${++this.asideSeq}`;
+        const reply = await new Promise<Extract<FromChild, { kind: "aside" }>>((resolve) => {
+          s.asides.set(id, resolve);
+          this.toChild(s, { kind: "aside", id, text: params.text as string });
+        });
+        s.asides.delete(id);
+        if (reply.error !== undefined) throw new Error(reply.error);
+        return { answer: reply.answer ?? "", model: reply.model ?? s.summary.model } satisfies AsideResult;
+      }
       case "session.close": {
         const s = this.session(params);
         this.toChild(s, { kind: "close" });
@@ -245,12 +261,15 @@ export class EngineServer {
       child,
       events: [],
       exited: new Promise((resolve) => child.once("exit", () => resolve())),
+      asides: new Map(),
     };
     this.sessions.set(id, live);
     child.on("message", (msg: FromChild) => this.fromChild(live, msg));
     child.once("exit", (code) => {
       this.log(`[${tag}] exited ${String(code)}`);
       if (live.summary.status !== "closed") this.setStatus(live, "closed");
+      for (const settle of live.asides.values()) settle({ kind: "aside", id: "", error: "the session ended" });
+      live.asides.clear();
       this.sessions.delete(id);
       this.checkIdle();
     });
@@ -287,6 +306,9 @@ export class EngineServer {
         if (msg.ledgerSessionId !== undefined) s.summary.ledgerSessionId = msg.ledgerSessionId;
         if (msg.model !== undefined) s.summary.model = msg.model;
         this.setStatus(s, msg.status);
+        return;
+      case "aside":
+        s.asides.get(msg.id)?.(msg);
         return;
       case "exit":
         if (!msg.ok) this.emit(s, { type: "system", text: `the session could not start: ${msg.message ?? "unknown error"}` });

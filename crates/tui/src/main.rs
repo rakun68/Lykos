@@ -2,17 +2,25 @@
 //! thread (starting one when none runs), and from then on waits on one channel for keys, server events and
 //! request replies. It sleeps while nothing on screen moves and draws only after a change.
 mod app;
+mod editor;
+mod history;
+mod menu;
+mod paste;
+mod stash;
 mod theme;
 mod view;
 mod wrap;
 
 use std::collections::BTreeMap;
-use std::io;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event as TermEvent, MouseEventKind};
+use crossterm::event::Event as TermEvent;
 use lykos_client::{Client, Event, EventData, Options, SessionStatus, SessionSummary, Update};
 use lykos_term::{Terminal, TerminalGuard};
 use serde_json::{json, Value};
@@ -30,7 +38,19 @@ enum Msg {
     Started(String),
     /// A request failed; for a prompt, its text, to put back.
     Failed(String, Option<String>),
+    Files(Vec<String>),
+    /// A side question and its answer.
+    Aside(String, Result<String, String>),
 }
+
+/// The input thread reads the terminal unless `pause` is set, and says so in `parked`: the external editor owns
+/// the terminal meanwhile. It polls a fifth of a second at a time so it can see the flag.
+struct Input {
+    pause: AtomicBool,
+    parked: AtomicBool,
+}
+
+const INPUT_POLL: Duration = Duration::from_millis(200);
 
 struct Args {
     cwd: String,
@@ -83,6 +103,9 @@ fn run(args: Args) -> io::Result<()> {
     let guard = TerminalGuard::enter()?;
     let mut term = Terminal::new(io::stdout(), w, h);
     let mut app = App::new(args.cwd.clone());
+    app.history = history::History::load(Some(PathBuf::from(&args.cwd).join(".lykos").join("history.json")));
+    app.stash = stash::Stash::load(state_dir().map(|d| d.join("prompt-stash.jsonl")));
+    app.input_cols = view::input_cols(&app, w);
     if std::env::var_os("BENCH_STREAM").is_some() {
         bench(&mut app, &mut term);
         drop(guard);
@@ -91,16 +114,35 @@ fn run(args: Args) -> io::Result<()> {
     term.draw(|b| view::draw(&app, b))?;
 
     let (tx, rx) = mpsc::channel::<Msg>();
-    let input = tx.clone();
+    let input = Arc::new(Input { pause: AtomicBool::new(false), parked: AtomicBool::new(false) });
+    let reader = (tx.clone(), input.clone());
     thread::Builder::new().name("lykos-input".into()).spawn(move || {
-        while let Ok(ev) = crossterm::event::read() {
-            if input.send(Msg::Input(ev)).is_err() {
+        let (tx, flags) = reader;
+        let send = |evs: Vec<TermEvent>| evs.into_iter().all(|ev| tx.send(Msg::Input(ev)).is_ok());
+        loop {
+            if flags.pause.load(Ordering::SeqCst) {
+                flags.parked.store(true, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            flags.parked.store(false, Ordering::SeqCst);
+            match crossterm::event::poll(INPUT_POLL) {
+                Ok(false) => continue,
+                Ok(true) if flags.pause.load(Ordering::SeqCst) => continue,
+                Ok(true) => {}
+                Err(_) => return,
+            }
+            let Ok(ev) = crossterm::event::read() else { return };
+            let events = if cfg!(windows) { paste::gather(ev, paste::waiting) } else { Ok(vec![ev]) };
+            let Ok(evs) = events else { return };
+            if !send(evs) {
                 return;
             }
         }
     })?;
     let (act_tx, act_rx) = mpsc::channel::<Action>();
     let opts = Options::from_env("lykos-tui")?;
+    let side = (opts.clone(), tx.clone(), args.cwd.clone());
     thread::Builder::new().name("lykos-requests".into()).spawn(move || requests(opts, args, act_rx, tx))?;
 
     let mut last_tick = Instant::now();
@@ -124,6 +166,7 @@ fn run(args: Args) -> io::Result<()> {
                 term.resize(w, h);
                 continue;
             }
+            app.input_cols = view::input_cols(&app, term.size().0);
             actions.extend(handle(&mut app, msg, term.size().1 as usize));
         }
         if app.animating() && last_tick.elapsed() >= TICK {
@@ -131,10 +174,33 @@ fn run(args: Args) -> io::Result<()> {
             last_tick = Instant::now();
         }
         for a in actions {
-            if a == Action::Quit {
-                quit = true;
-            } else {
-                let _ = act_tx.send(a);
+            match a {
+                Action::Quit => quit = true,
+                Action::Copy(text) => copy(&mut term, &text),
+                Action::ListFiles => {
+                    let (tx, cwd) = (side.1.clone(), side.2.clone());
+                    let _ = thread::Builder::new().name("lykos-files".into()).spawn(move || {
+                        let _ = tx.send(Msg::Files(list_files(&cwd)));
+                    });
+                }
+                Action::Aside { session, text } => {
+                    let (opts, tx) = (side.0.clone(), side.1.clone());
+                    let _ = thread::Builder::new().name("lykos-aside".into()).spawn(move || {
+                        let answer = Client::connect(opts)
+                            .and_then(|mut c| c.request("session.aside", json!({ "session": session, "text": text })))
+                            .map(|v| v["answer"].as_str().unwrap_or_default().to_string())
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(Msg::Aside(text, answer));
+                    });
+                }
+                Action::Editor(text) => {
+                    let (out, err) = external_editor(&input, &text);
+                    app.edited_externally(out, err);
+                    term.invalidate();
+                }
+                a => {
+                    let _ = act_tx.send(a);
+                }
             }
         }
         if quit {
@@ -149,16 +215,9 @@ fn run(args: Args) -> io::Result<()> {
 fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
     match msg {
         Msg::Input(TermEvent::Key(k)) => app.on_key(k, Instant::now(), (height / 2).max(1)),
-        Msg::Input(TermEvent::Paste(text)) => {
-            app.on_paste(&text);
-            Vec::new()
-        }
+        Msg::Input(TermEvent::Paste(text)) => app.on_paste(&text),
         Msg::Input(TermEvent::Mouse(m)) => {
-            match m.kind {
-                MouseEventKind::ScrollUp => app.on_scroll(true, 3),
-                MouseEventKind::ScrollDown => app.on_scroll(false, 3),
-                _ => {}
-            }
+            app.on_mouse(m, Instant::now());
             Vec::new()
         }
         Msg::Input(_) => Vec::new(),
@@ -177,7 +236,103 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             app.failed(m, text);
             Vec::new()
         }
+        Msg::Files(files) => app.on_files(files),
+        Msg::Aside(question, answer) => {
+            app.on_aside(question, answer);
+            Vec::new()
+        }
     }
+}
+
+/// Where the TUI keeps what is the user's, not the workspace's: `LYKOS_TUI_DIR`, or `~/.lykos/tui`.
+fn state_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("LYKOS_TUI_DIR").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).filter(|v| !v.is_empty())?;
+    Some(PathBuf::from(home).join(".lykos").join("tui"))
+}
+
+/// OSC 52: the terminal puts the text on the system clipboard, over SSH too.
+fn copy(term: &mut Terminal<io::Stdout>, text: &str) {
+    let w = term.writer();
+    let _ = write!(w, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
+    let _ = w.flush();
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | (*b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+/// The files `@` completes: git's tracked and untracked-but-not-ignored files, as OpenCode lists them through
+/// ripgrep's ignore rules; outside a repository, a walk that skips dot directories, capped at 20,000.
+fn list_files(cwd: &str) -> Vec<String> {
+    let git = std::process::Command::new("git")
+        .args(["ls-files", "-co", "--exclude-standard"])
+        .current_dir(cwd)
+        .stderr(std::process::Stdio::null())
+        .output();
+    if let Some(out) = git.ok().filter(|o| o.status.success()) {
+        return String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect();
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::from(cwd)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "node_modules" || name == "target" {
+                continue;
+            }
+            let path = e.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(rel) = path.strip_prefix(cwd) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+                if out.len() >= 20_000 {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// OpenCode `prompt.editor`: the prompt goes to `$VISUAL` or `$EDITOR` in a file, and the file comes back as the
+/// prompt. The TUI leaves the screen and stops reading keys while the editor runs.
+fn external_editor(input: &Input, text: &str) -> (Option<String>, Option<String>) {
+    let Some(cmd) = ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty())) else {
+        return (None, Some("set $VISUAL or $EDITOR to open the prompt in an editor".into()));
+    };
+    let path = std::env::temp_dir().join(format!("lykos-prompt-{}.md", std::process::id()));
+    if let Err(e) = std::fs::write(&path, text) {
+        return (None, Some(format!("cannot write {}: {e}", path.display())));
+    }
+    input.pause.store(true, Ordering::SeqCst);
+    let waited = Instant::now();
+    while !input.parked.load(Ordering::SeqCst) && waited.elapsed() < INPUT_POLL * 3 {
+        thread::sleep(Duration::from_millis(5));
+    }
+    lykos_term::suspend();
+    let mut parts = cmd.split_whitespace();
+    let status = std::process::Command::new(parts.next().unwrap_or_default()).args(parts).arg(&path).status();
+    let _ = lykos_term::resume();
+    input.pause.store(false, Ordering::SeqCst);
+    let result = match status {
+        Ok(s) if s.success() => (std::fs::read_to_string(&path).ok(), None),
+        Ok(s) => (None, Some(format!("the editor exited with {s}"))),
+        Err(e) => (None, Some(format!("cannot run {cmd}: {e}"))),
+    };
+    let _ = std::fs::remove_file(&path);
+    result
 }
 
 /// The request thread: connects (starting a server when none runs), follows events, then sends each action.
@@ -216,6 +371,8 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
             Action::Interrupt { session } => client.request("session.interrupt", json!({ "session": session })).map(|_| Msg::Connected),
             Action::Answer { session, request_id, answer } => client.request("session.answer", json!({ "session": session, "requestId": request_id, "answer": answer })).map(|_| Msg::Connected),
             Action::Quit => return,
+            // The main loop does these itself.
+            Action::Aside { .. } | Action::ListFiles | Action::Copy(_) | Action::Editor(_) => continue,
         };
         let msg = match reply {
             Ok(Msg::Connected) => continue,

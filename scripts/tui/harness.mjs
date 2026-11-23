@@ -120,7 +120,15 @@ export class TuiSession {
   }
 
   async close() {
-    if (this.exit) return this.exit;
+    if (this.exit) {
+      // On Windows node-pty keeps its ConPTY pipes open after the child exits, and they hold the event loop.
+      try {
+        this.proc.kill();
+      } catch {
+        // Already released.
+      }
+      return this.exit;
+    }
     try {
       this.proc.kill();
     } catch {

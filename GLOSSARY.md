@@ -560,3 +560,22 @@ _Avoid_: landing page, start screen
 **Session screen**:
 What `lykos-tui` shows once a session runs: its transcript in one box, the prompt box under it.
 _Avoid_: chat view, conversation pane
+
+**Aside**:
+A side question asked with `/btw`, answered from the session's context with no tools. It enters no
+transcript and no turn; its call counts in the session's usage, with ledger phase `aside`.
+_Avoid_: side chat, ephemeral prompt
+
+**Chip**:
+One character in the prompt that stands for a large paste (`[Pasted ~N lines]`) or an attached image
+(`[Image N]`), and is sent expanded.
+_Avoid_: token, pill, placeholder
+
+**Queued prompt**:
+A prompt held by `lykos-tui` until its session is idle, then sent; queued with `Ctrl+X Enter`.
+_Avoid_: pending message
+
+**Prompt stash**:
+Prompts set aside with `/stash` and brought back with `/stash pop` or `/stash list`, kept across
+runs.
+_Avoid_: drafts, saved prompts

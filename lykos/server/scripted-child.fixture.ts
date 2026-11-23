@@ -15,6 +15,12 @@ process.on("message", (msg: ToChild) => {
   switch (msg.kind) {
     case "start":
       send({ kind: "status", status: "idle", ledgerSessionId: "ledger-1", model: msg.params.model ?? "faux/scripted" });
+      send({ kind: "event", data: { type: "commands", commands: [{ name: "/help", description: "list commands", source: "builtin" }, { name: "/skill:tdd", description: "test first", source: "skill" }] } });
+      break;
+    case "aside":
+      // An answer that names the question, and nothing in the conversation.
+      if (msg.text === "fail") send({ kind: "aside", id: msg.id, error: "overloaded" });
+      else send({ kind: "aside", id: msg.id, answer: `aside: ${msg.text}`, model: "faux/scripted" });
       break;
     case "prompt": {
       if (holding && msg.text === "release") {

@@ -2,7 +2,7 @@
 //! the same store; an event already applied (a replay overlapping what was seen) is skipped by its `seq`.
 use std::collections::BTreeMap;
 
-use crate::protocol::{DiffData, Event, EventData, RequestData, SessionSummary, UsageData};
+use crate::protocol::{CommandInfo, DiffData, Event, EventData, RequestData, SessionSummary, UsageData};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToolState {
@@ -28,6 +28,8 @@ pub struct Session {
     pub usage: Option<UsageData>,
     /// Requests still waiting on an answer, oldest first.
     pub requests: Vec<RequestData>,
+    /// The slash commands the session runs, once it has said.
+    pub commands: Vec<CommandInfo>,
     pub last_seq: u64,
     /// True while an assistant message is streaming into the last item.
     open_assistant: bool,
@@ -36,7 +38,7 @@ pub struct Session {
 
 impl Session {
     fn new(summary: SessionSummary) -> Self {
-        Session { summary, items: Vec::new(), usage: None, requests: Vec::new(), last_seq: 0, open_assistant: false, open_thinking: false }
+        Session { summary, items: Vec::new(), usage: None, requests: Vec::new(), commands: Vec::new(), last_seq: 0, open_assistant: false, open_thinking: false }
     }
 
     fn close_stream(&mut self) {
@@ -97,6 +99,7 @@ impl Session {
             EventData::Usage { usage } => self.usage = Some(usage.clone()),
             EventData::Request { request } => self.requests.push(request.clone()),
             EventData::RequestResolved { request_id, .. } => self.requests.retain(|r| &r.request_id != request_id),
+            EventData::Commands { commands } => self.commands = commands.clone(),
             EventData::Unknown => {}
         }
     }

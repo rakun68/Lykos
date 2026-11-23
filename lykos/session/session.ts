@@ -739,6 +739,41 @@ export function subscribeStandaloneUsage(
   };
 }
 
+/**
+ * A model call made outside a turn (a `/btw` aside, P5 #38), counted as `subscribeStandaloneUsage` counts a
+ * compaction's: in the totals, and as a `calls` row of its own source, so the ledger ingests it with the rest.
+ */
+export function addSideCall(
+  state: StandaloneSessionState,
+  msg: { provider?: string; model?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number; reasoning?: number; cost?: { total?: number } } },
+  source: string,
+  latencyMs?: number,
+): void {
+  const u = msg.usage ?? {};
+  state.usage.input += u.input ?? 0;
+  state.usage.output += u.output ?? 0;
+  state.usage.cacheRead += u.cacheRead ?? 0;
+  state.usage.cacheWrite += u.cacheWrite ?? 0;
+  state.usage.cacheWrite1h += u.cacheWrite1h ?? 0;
+  state.usage.reasoning += u.reasoning ?? 0;
+  state.usage.calls.push({
+    hop: "direct",
+    source,
+    ...(msg.provider !== undefined ? { provider: msg.provider } : {}),
+    ...(msg.model !== undefined ? { model: msg.model } : {}),
+    input: u.input ?? 0,
+    output: u.output ?? 0,
+    cacheRead: u.cacheRead ?? 0,
+    cacheWrite: u.cacheWrite ?? 0,
+    cacheWrite1h: u.cacheWrite1h ?? 0,
+    reasoning: u.reasoning ?? 0,
+    // No price from the provider means no figure: never a zero-dollar default.
+    ...(u.cost?.total !== undefined ? { costUsd: u.cost.total } : {}),
+    ts: Date.now(),
+    ...(latencyMs !== undefined ? { latencyMs } : {}),
+  });
+}
+
 /** Builds the same `DelegateSnapshot` shape the one-shot and interactive paths both feed to `ingestDelegateSnapshot()`. */
 export function buildStandaloneSnapshot(opts: {
   booted: BootedStandaloneSession;

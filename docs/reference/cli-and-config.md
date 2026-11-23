@@ -15,12 +15,13 @@ It never writes its own state to `.pi/`.
   config.yaml                  User global configuration overrides
   run/                         The engine server: engine.key, engine.log, engine.sock (Linux)
   projects.json                Registry of known projects and roots
+  tui/prompt-stash.jsonl       lykos-tui's stashed prompts, the last 50 (`LYKOS_TUI_DIR` moves tui/)
 
 .lykos/                        Project-local state (gitignored except tracked policies)
   config.yaml                  Project configuration overrides
   ledger.db                    SQLite telemetry ledger (WAL mode)
   today.json                   Ephemeral daily spend cache
-  history.json                 Interactive composer prompt history
+  history.json                 Prompt history, the last 500: the old TUI and lykos-tui share it
   memory/
     failed-approaches.md       Active human-accepted mistake memories
     proposals.jsonl            Agent-proposed memory queue
@@ -90,7 +91,7 @@ The `lykos` executable provides the following commands:
 ([ui.md](ui.md) §5). `--cwd` is the workspace (default: the current directory), `--model` the
 model its sessions start with (default: the config's), and `--trust-workspace` starts a session in
 a workspace not yet trusted. It finds the engine server through `LYKOS_ENGINE_DIR` and starts it
-with `LYKOS_SERVE_CMD` when none answers.
+with `LYKOS_SERVE_CMD` when none answers. It keeps its stash in `LYKOS_TUI_DIR` (default `~/.lykos/tui`).
 
 ## 2. Configuration Precedence
 
@@ -822,6 +823,7 @@ These environment variables participate in the standard config precedence hierar
 - `LYKOS_TRUST_SOURCE`: Set by `lykos mcp` for each `session-child` it starts: how the server established trust (`stored`, `flag` or `prompt`). A claim only: the child checks the user trust store itself, so it can pass the gate as `flag` and never upgrades to `stored` ([mcp.md](mcp.md#trust)).
 - `LYKOS_SESSION_PROGRESS_MS`: The heartbeat interval, in milliseconds, of an MCP call's progress notifications (default 15000).
 - `LYKOS_TRUST_WORKSPACE`: If `1`, a headless run passes the trust gate for this run without writing the store. It never authorises running a workspace's own binaries or loading its own extensions in a delegated session: only the user-level trust store does (see [lsp.md](lsp.md#trust-and-workspace-binaries-t171)). A project already in the store reports `stored` even with this set.
+- `LYKOS_TUI_DIR`: lykos-tui's own state directory (default `~/.lykos/tui`): its prompt stash. Tests point it at a temporary directory.
 - `LYKOS_ENGINE_DIR`: The engine server's run directory (default `~/.lykos/run`): its key, its log, and on Linux its socket. A second directory is a second server ([engine-server.md](engine-server.md) §5).
 - `LYKOS_SERVE_CMD`: The command the Rust client starts a server with, as a JSON array.
 - `LYKOS_ENGINE_CHILD`, `LYKOS_RECORD_EVENTS`: Tests only (engine-server.md §5).

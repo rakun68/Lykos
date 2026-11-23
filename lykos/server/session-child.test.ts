@@ -63,6 +63,7 @@ describe("a real session on the engine server", () => {
     const w = world();
     model.script.set("pooled-key", [
       { kind: "ok", text: "pong" },
+      { kind: "ok", text: "an aside" },
       { kind: "tool", name: "write", input: { path: "note.txt", content: "hi\n" } },
       { kind: "ok", text: "written" },
     ]);
@@ -100,6 +101,13 @@ describe("a real session on the engine server", () => {
       const reply = events.filter((e) => e.seq < turn.seq && e.data.type === "message.delta").map((e) => (e.data as { text: string }).text).join("");
       assert.match(reply, /pong/);
       await until((e) => e.data.type === "usage", "usage");
+      const commands = await until((e) => e.data.type === "commands", "the commands event");
+      assert.ok(commands.data.type === "commands" && commands.data.commands.some((c) => c.name === "/help" && c.source === "builtin"));
+
+      // A side question: answered by the model, and kept out of the conversation the next turn sends.
+      const before = events.length;
+      assert.deepEqual(await c.request("session.aside", { session: s.id, text: "What did you just say?" }), { answer: "an aside", model: `${PROVIDER}/m1` });
+      assert.equal(events.length, before, "an aside adds no event");
 
       await c.request("session.prompt", { session: s.id, text: "Write note.txt." });
       const req = await until((e) => e.data.type === "request", "an approval request");
@@ -109,6 +117,7 @@ describe("a real session on the engine server", () => {
       await c.request("session.answer", { session: s.id, requestId: req.data.request.requestId, answer: "y" });
       await until((e) => e.data.type === "request.resolved", "request.resolved");
       await until((e) => e.data.type === "tool.end" && e.data.ok, "the write finishing");
+      assert.ok(model.bodies.at(-1)!.includes("Write note.txt.") && !model.bodies.at(-1)!.includes("What did you just say?"), "the aside is not in the conversation");
 
       await c.request("session.close", { session: s.id });
       const closed = await until(status("closed"), "closed");
@@ -124,6 +133,8 @@ describe("a real session on the engine server", () => {
         assert.ok(row, "the session has its ledger row");
         assert.ok(row.session.ended_utc, "and it was ended when the session closed");
         assert.ok(row.session.turns >= 2, `both turns recorded: ${row.session.turns}`);
+        const asides = ledger.db.prepare("SELECT COUNT(*) AS n FROM calls WHERE session_id = ? AND phase = 'aside'").get(ledgerId) as { n: number };
+        assert.equal(asides.n, 1, "the aside's call is in the ledger");
       } finally {
         ledger.close();
       }

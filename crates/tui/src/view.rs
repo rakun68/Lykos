@@ -3,9 +3,10 @@
 //! and its metadata row (`component/prompt/metadata.tsx`). Differences are listed in #37's closing comment.
 use lykos_client::{Item, Session, SessionStatus, ToolState};
 use lykos_term::{Attr, Buffer, Cell, Style};
-use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, Link};
+use crate::app::{App, Dialog, InputArea, Link};
+use crate::editor::{Chip, Editor};
+use crate::menu::Menu;
 use crate::theme::{self, ACCENT, GOLD, LOVE, MUTED, OVERLAY, PINE, SURFACE};
 use crate::wrap::wrap;
 
@@ -38,10 +39,22 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
         return None;
     }
     let pad: u16 = if w < 44 { 1 } else { 2 };
-    match app.current() {
+    let cursor = match app.current() {
         None => home(app, buf, pad),
         Some(session) => session_screen(app, session, buf, pad),
+    };
+    if app.dialog.is_some() {
+        dialog(app, buf);
+        return None;
     }
+    cursor
+}
+
+/// The input's width at this screen width: what up and down move through.
+pub fn input_cols(app: &App, w: u16) -> usize {
+    let pad: u16 = if w < 44 { 1 } else { 2 };
+    let width = w.saturating_sub(2 * pad);
+    input_width(if app.current().is_none() { width.min(75) } else { width })
 }
 
 /// `routes/home.tsx`: the logo and the prompt box centred, the prompt at most 75 columns wide.
@@ -116,7 +129,7 @@ fn first_line(s: &str) -> &str {
 /// and the footer.
 fn prompt_height(app: &App, width: u16, screen_h: u16) -> u16 {
     let max = max_input_rows(screen_h);
-    let rows = input_rows(&app.input, input_width(width)).len().max(1) as u16;
+    let rows = app.editor.layout(input_width(width)).len().max(1) as u16;
     rows.min(max) + 5 + request_rows(app)
 }
 
@@ -133,49 +146,14 @@ fn request_rows(app: &App) -> u16 {
     app.current().and_then(|s| s.requests.first()).map_or(0, |_| 3)
 }
 
-/// The input as rows, wrapped at characters so the cursor maps to one cell, and where the cursor is.
-fn input_rows(input: &str, width: usize) -> Vec<String> {
-    layout_input(input, width, usize::MAX).0
-}
-
-fn layout_input(input: &str, width: usize, cursor: usize) -> (Vec<String>, (usize, usize)) {
-    let mut rows = vec![String::new()];
-    let mut col = 0;
-    let mut at = (0, 0);
-    for (i, ch) in input.chars().enumerate() {
-        if i == cursor {
-            at = (rows.len() - 1, col);
-        }
-        if ch == '\n' {
-            rows.push(String::new());
-            col = 0;
-            continue;
-        }
-        let cw = ch.width().unwrap_or(0);
-        if col + cw > width {
-            rows.push(String::new());
-            col = 0;
-        }
-        rows.last_mut().unwrap().push(ch);
-        col += cw;
-    }
-    if cursor >= input.chars().count() {
-        if col >= width {
-            rows.push(String::new());
-            col = 0;
-        }
-        at = (rows.len() - 1, col);
-    }
-    (rows, at)
-}
-
 /// `component/prompt/index.tsx`: a left bar in the accent colour on a raised background, the input with a row of
 /// padding above, the metadata row, a half-block bottom edge, and the footer under it.
 fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h: u16) -> Option<(u16, u16)> {
     let raised = Style::default().on(SURFACE);
     let bar = Style::fg(if app.running() { GOLD } else { ACCENT }).on(SURFACE);
     let iw = input_width(width);
-    let (rows, (crow, ccol)) = layout_input(&app.input, iw, app.cursor);
+    let rows = app.editor.layout(iw);
+    let (crow, ccol) = app.editor.locate(&rows, app.editor.cursor());
     let max = max_input_rows(screen_h) as usize;
     let shown = rows.len().min(max);
     // Keep the cursor's row in view when the input is taller than the box.
@@ -196,16 +174,21 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
         ty += req;
     }
     let mut cursor = None;
-    if app.input.is_empty() {
+    if app.editor.is_empty() {
         let hint = if app.current().is_some() { "Ask anything…" } else { "Ask anything… \"Fix a TODO in the codebase\"" };
         buf.text(tx, ty, width.saturating_sub(4), hint, Style::fg(MUTED).on(SURFACE));
         cursor = Some((tx, ty));
     }
+    let selection = app.editor.selection();
     for (i, row) in rows[first..first + shown].iter().enumerate() {
-        buf.text(tx, ty + i as u16, iw as u16, row, theme::text().on(SURFACE));
+        input_row(&app.editor, buf, tx, ty + i as u16, iw as u16, *row, selection);
     }
-    if !app.input.is_empty() {
+    app.input_area.set(Some(InputArea { x: tx, y: ty, width: iw as u16, height: shown as u16, first }));
+    if !app.editor.is_empty() {
         cursor = Some((tx + ccol as u16, ty + (crow - first) as u16));
+    }
+    if let Some(m) = &app.menu {
+        completion(m, buf, x, y, width);
     }
     let meta_y = y + body;
     buf.fill(x, meta_y, width, 1, raised);
@@ -224,6 +207,103 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
         return None;
     }
     cursor
+}
+
+/// One visual row of the input: a chip draws as its label, the selection on the overlay colour.
+fn input_row(editor: &Editor, buf: &mut Buffer, x: u16, y: u16, max: u16, row: crate::editor::Row, selection: Option<(usize, usize)>) {
+    let mut col = x;
+    let end = x + max;
+    let mut one = [0u8; 4];
+    for (i, ch) in editor.text()[row.start..row.end].char_indices() {
+        let at = row.start + i;
+        let mut style = theme::text().on(SURFACE);
+        if selection.is_some_and(|(s, e)| at >= s && at < e) {
+            style = style.on(OVERLAY);
+        }
+        col = match editor.chip(ch) {
+            Some(chip) => buf.text(col, y, end.saturating_sub(col), &chip.label(), Style { fg: ACCENT, ..style }.bold()),
+            None => buf.text(col, y, end.saturating_sub(col), ch.encode_utf8(&mut one), style),
+        };
+    }
+}
+
+/// OpenCode `component/prompt/autocomplete.tsx`: the matches in a box over the prompt, the selected one raised.
+fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
+    let n = m.entries.len() as u16;
+    if prompt_y < n || n == 0 {
+        return;
+    }
+    let top = prompt_y - n;
+    let label_w = m.entries.iter().map(|e| e.label.chars().count()).max().unwrap_or(0).min(width as usize / 2) as u16;
+    for (i, e) in m.entries.iter().enumerate() {
+        let y = top + i as u16;
+        let on = i == m.selected;
+        let bg = if on { ACCENT } else { OVERLAY };
+        buf.fill(x, y, width, 1, Style::default().on(bg));
+        buf.text(x + 1, y, label_w, &e.label, Style::fg(if on { SURFACE } else { theme::TEXT }).on(bg));
+        if !e.detail.is_empty() {
+            buf.text(x + label_w + 3, y, width.saturating_sub(label_w + 4), first_line(&e.detail), Style::fg(if on { SURFACE } else { MUTED }).on(bg));
+        }
+    }
+}
+
+/// A centred dialog over everything, as OpenCode's `DialogLayout`: a title, the body, the keys it takes.
+fn dialog(app: &App, buf: &mut Buffer) {
+    let Some(d) = &app.dialog else { return };
+    let (w, h) = (buf.width, buf.height);
+    let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. }) { 100 } else { 72 });
+    let inner = dw.saturating_sub(4) as usize;
+    let room = h.saturating_sub(6) as usize;
+    let (title, lines, selected, keys): (String, Vec<(String, Style)>, Option<usize>, &str) = match d {
+        Dialog::Queue { selected } => (
+            "Queued prompts".into(),
+            app.queue.iter().map(|q| (first_line(q).to_string(), theme::text())).collect(),
+            Some(*selected),
+            "enter steer · ctrl+u edit · ctrl+d delete · esc close",
+        ),
+        Dialog::Stash { selected } => (
+            "Stashed prompts".into(),
+            app.stash.entries.iter().rev().map(|e| (first_line(&e.text).to_string(), theme::text())).collect(),
+            Some(*selected),
+            "enter restore · ctrl+d delete · esc close",
+        ),
+        Dialog::Images { index } => {
+            let images = app.editor.images();
+            let path = match images.get(*index) {
+                Some(Chip::Image { path, .. }) => path.clone(),
+                _ => String::new(),
+            };
+            let keys = if images.len() > 1 { "← previous · next → · esc close" } else { "esc close" };
+            (format!("Image {} of {}", index + 1, images.len()), vec![(path, theme::text())], None, keys)
+        }
+        Dialog::Aside { question, answer, scroll } => {
+            let (text, style) = match answer {
+                Ok(a) => (a.as_str(), theme::text()),
+                Err(e) => (e.as_str(), Style::fg(LOVE)),
+            };
+            let all = wrap(text, inner.max(1));
+            let start = (*scroll).min(all.len().saturating_sub(room));
+            let shown = all.into_iter().skip(start).take(room).map(|l| (l, style)).collect();
+            (format!("/btw {}", first_line(question)), shown, None, "c copy · ↑↓ scroll · esc close")
+        }
+    };
+    // A list longer than the dialog scrolls with its selection.
+    let skip = selected.map_or(0, |s| (s + 1).saturating_sub(room));
+    let body = (lines.len().min(room) as u16).max(1);
+    let dh = body + 4;
+    let (x, y) = ((w - dw) / 2, h.saturating_sub(dh) / 2);
+    buf.fill(x, y, dw, dh, Style::default().on(SURFACE));
+    buf.text(x + 2, y + 1, dw.saturating_sub(4), &title, theme::text().on(SURFACE).bold());
+    for (i, (line, style)) in lines.iter().enumerate().skip(skip).take(body as usize) {
+        let ly = y + 2 + (i - skip) as u16;
+        if selected == Some(i) {
+            buf.fill(x + 1, ly, dw.saturating_sub(2), 1, Style::default().on(ACCENT));
+            buf.text(x + 2, ly, inner as u16, line, Style::fg(SURFACE).on(ACCENT));
+        } else {
+            buf.text(x + 2, ly, inner as u16, line, style.on(SURFACE));
+        }
+    }
+    buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), keys, theme::muted().on(SURFACE));
 }
 
 /// `component/prompt/metadata.tsx`: model, then ` · ` and the thinking effort in bold warning colour.
@@ -264,7 +344,24 @@ fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16
             buf.text(col, y, left_w, rest, if app.armed.is_some() { Style::fg(GOLD) } else { theme::muted() });
         }
         Link::Ready => {
-            buf.text(x + 1, y, left_w, &app.cwd, theme::muted());
+            let (text, style) = if app.leader.is_some() {
+                ("ctrl+x  enter queue · e editor · i images · q queued".to_string(), Style::fg(GOLD))
+            } else if app.search.is_some() {
+                ("history search · ctrl+r older · enter send · any key keeps it".to_string(), Style::fg(GOLD))
+            } else if let Some(n) = &app.notice {
+                (n.clone(), Style::fg(LOVE))
+            } else {
+                (app.cwd.clone(), theme::muted())
+            };
+            buf.text(x + 1, y, left_w, &text, style);
+        }
+    }
+    // btw.tsx's footer slot: `/btw` and a spinner while an aside waits.
+    if app.asides > 0 && app.link == Link::Ready {
+        let label = format!("{} /btw", SPINNER[(app.tick % 10) as usize]);
+        let lw = label.chars().count() as u16;
+        if lw + rw + 4 <= width {
+            buf.text(x + width - rw - lw - 3, y, lw, &label, Style::fg(ACCENT));
         }
     }
     if let Some(r) = right.filter(|_| rw + 2 <= width) {
@@ -346,7 +443,7 @@ fn transcript(app: &App, session: &Session, width: u16) -> Vec<Row> {
     if session.summary.status == SessionStatus::Starting {
         rows.push(Row::plain(3, format!("{} starting the session", SPINNER[(app.tick % 10) as usize]), theme::muted()));
     }
-    if let Some(q) = &app.queued {
+    for q in &app.queue {
         rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
     }
     rows
@@ -438,7 +535,7 @@ mod tests {
     #[test]
     fn typed_text_and_the_cursor_land_in_the_box() {
         let mut app = app_with_session();
-        app.on_paste("hello");
+        app.editor.insert_str("hello");
         let mut buf = Buffer::new(60, 20);
         let (cx, cy) = draw(&app, &mut buf).unwrap();
         assert!(screen(&buf).contains("hello"));
@@ -448,7 +545,7 @@ mod tests {
     #[test]
     fn a_tiny_terminal_draws_without_panicking() {
         let mut busy = app_with_session();
-        busy.on_paste(&"long words in the prompt ".repeat(20));
+        busy.editor.insert_str(&"long words in the prompt ".repeat(20));
         for app in [&app_with_session(), &busy, &App::new("C:/work".into())] {
             for w in 1..60 {
                 for h in 1..20 {
@@ -457,6 +554,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// #38's 1 MB paste, in-process: each keystroke's handling, paint, diff and write, with the paste as a chip and
+    /// then expanded into the buffer. A measurement, not a check: it prints.
+    #[test]
+    #[ignore = "a measurement: cargo test --release -p lykos-tui -- --ignored --nocapture one_megabyte"]
+    fn one_megabyte_paste_then_typing() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use std::time::Instant;
+        let line = "0123456789 the quick brown fox jumps over the lazy dog 0123456789
+";
+        let big = line.repeat((1 << 20) / line.len() + 1)[..1 << 20].to_string();
+        let mut app = App::new("C:/work".into());
+        app.connected();
+        let mut term = lykos_term::Terminal::new(Vec::<u8>::new(), 120, 40);
+        let mut frame = |app: &App| {
+            term.draw(|b| draw(app, b)).unwrap();
+            term.writer().clear();
+        };
+        let report = |name: &str, mut t: Vec<u128>| {
+            t.sort();
+            println!("{name}: p50 {} us, p95 {} us, max {} us (n={})", t[t.len() / 2], t[t.len() * 95 / 100], t[t.len() - 1], t.len());
+        };
+        let keys = [KeyCode::Char('a'), KeyCode::Char('b'), KeyCode::Left, KeyCode::Backspace, KeyCode::Up, KeyCode::Down, KeyCode::Right];
+        let mut run = |app: &mut App, frame: &mut dyn FnMut(&App)| {
+            let mut out = Vec::new();
+            for i in 0..210 {
+                let t = Instant::now();
+                app.input_cols = input_cols(app, 120);
+                app.on_key(KeyEvent::new(keys[i % keys.len()], KeyModifiers::NONE), Instant::now(), 10);
+                frame(app);
+                out.push(t.elapsed().as_micros());
+            }
+            out
+        };
+        let t = Instant::now();
+        app.on_paste(&big);
+        frame(&app);
+        println!("paste to chip on screen: {} us", t.elapsed().as_micros());
+        let chip = run(&mut app, &mut frame);
+        report("keystroke with the chip", chip);
+        app.editor.set("");
+        app.on_paste(&big);
+        let t = Instant::now();
+        app.on_paste(&big);
+        frame(&app);
+        assert!(app.editor.text().len() > 1 << 19, "expanded");
+        println!("expanding it: {} us", t.elapsed().as_micros());
+        let text = run(&mut app, &mut frame);
+        report("keystroke with 1 MB of text", text);
     }
 
     #[test]

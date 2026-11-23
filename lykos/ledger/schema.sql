@@ -747,7 +747,7 @@ CREATE TABLE IF NOT EXISTS calls (
 
   agent                 TEXT NOT NULL,          -- worker | scout | watcher | ...
   phase                 TEXT,                   -- plan|explore|implement|verify|
-                                                -- compact|route|draft|verify_draft
+                                                -- compact|route|draft|verify_draft|aside
   provider              TEXT NOT NULL,
   model                 TEXT NOT NULL,
   model_version         TEXT,

@@ -44,6 +44,15 @@ pub struct UsageData {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CommandInfo {
+    /// As typed, with its slash.
+    pub name: String,
+    pub description: String,
+    /// "builtin", "skill", "extension" or "pi-extension".
+    pub source: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RequestOption {
     pub value: String,
     pub label: String,
@@ -114,6 +123,9 @@ pub enum EventData {
     Request { request: RequestData },
     #[serde(rename = "request.resolved", rename_all = "camelCase")]
     RequestResolved { request_id: String, answer: String },
+    /// The slash commands the session runs, sent once it has booted.
+    #[serde(rename = "commands")]
+    Commands { commands: Vec<CommandInfo> },
     /// An event a newer server sends that this client does not know: kept in order, shown as nothing.
     #[serde(other)]
     Unknown,

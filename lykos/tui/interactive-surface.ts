@@ -83,6 +83,7 @@ import {
 import { resolveProject } from "../session/identity.js";
 import { resolveGatePolicy } from "../gate/verify-gate.js";
 import type { BootedStandaloneSession, StandaloneSessionState } from "../session/session.js";
+import { askAside } from "../session/aside.js";
 import type { LiveTranscriptRecorder } from "../session/live-capture.js";
 import { renderOutcomeResult, renderOutcomePrompt, parseOutcomeAnswer } from "./outcome.js";
 import { type RunInteractiveStandaloneSessionResult as Result } from "../session/interactive.js";
@@ -368,7 +369,7 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
     config,
     startedUtc: booted.startedAt,
   };
-  ui = input.createUi !== undefined ? input.createUi(uiOptions, session) : createAgentUi(uiOptions);
+  ui = input.createUi !== undefined ? input.createUi(uiOptions, session, (question) => askAside(session, state, question)) : createAgentUi(uiOptions);
   const unsubUi = session.subscribe
     ? ui.attach({ subscribe: (fn) => session.subscribe!((ev) => fn(ev as import("../tui/s0.js").StreamEvent)) }, () => state)
     : undefined;
