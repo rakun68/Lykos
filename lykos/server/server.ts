@@ -19,6 +19,9 @@ import { loadConfig } from "../config/load.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
+import { createNamedWorktree, listNamedWorktrees, removeNamedWorktree } from "../git/worktree.js";
+import { resolveProject } from "../session/identity.js";
+import { archiveHistorySession, exportHistorySession, historyRows, ledgerFor, projectRoot, renameHistorySession } from "./history.js";
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
 import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type EventData, type SessionOptions, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
@@ -39,6 +42,10 @@ export interface EngineServerOptions {
   trust?: (cwd: string, trustFlag: boolean) => Promise<ChildStartParams["trustSource"]>;
   /** The global config directory `config.keybinds` reads. Default `~/.lykos`; tests pass their own. */
   globalDir?: string;
+  /** The project registry `sessions.history` with `all` reads. Default `~/.lykos/projects.json`; tests pass their own. */
+  registryPath?: string;
+  /** Where `worktree.create` makes worktrees. Default `~/.lykos/worktrees`; tests pass their own. */
+  worktreesRoot?: string;
   /** Called once the server has stopped listening and every child has exited. */
   onExit?: (reason: string) => void;
 }
@@ -225,6 +232,81 @@ export class EngineServer {
         this.toChild(s, { kind: "close" });
         return { ok: true };
       }
+      case "sessions.history": {
+        const cwd = needCwd(params, method);
+        const rows = historyRows(cwd, {
+          all: params.all === true,
+          archived: params.archived === true,
+          ...(this.opts.registryPath !== undefined ? { registryPath: this.opts.registryPath } : {}),
+        });
+        const live: Record<string, string> = {};
+        for (const s of this.sessions.values()) if (s.summary.ledgerSessionId !== null) live[s.summary.ledgerSessionId] = s.summary.id;
+        return { rows, live };
+      }
+      case "session.rename": {
+        const cwd = needCwd(params, method);
+        const id = needString(params, "ledgerSessionId", method);
+        if (typeof params.title !== "string") throw new Error("session.rename needs title");
+        renameHistorySession(cwd, id, params.title);
+        for (const s of this.sessions.values()) {
+          if (s.summary.ledgerSessionId !== id) continue;
+          s.summary.title = params.title.trim();
+          this.emit(s, { type: "session.status", session: { ...s.summary } });
+        }
+        return { ok: true };
+      }
+      case "session.archive": {
+        const cwd = needCwd(params, method);
+        const id = needString(params, "ledgerSessionId", method);
+        // A live session ends first, as OpenCode's delete of an open session does; its row is then archived.
+        for (const s of [...this.sessions.values()]) {
+          if (s.summary.ledgerSessionId !== id) continue;
+          this.toChild(s, { kind: "close" });
+          await s.exited;
+        }
+        archiveHistorySession(cwd, id);
+        return { ok: true };
+      }
+      case "session.export": {
+        const cwd = needCwd(params, method);
+        const id = needString(params, "ledgerSessionId", method);
+        return exportHistorySession(cwd, id, typeof params.file === "string" ? params.file : undefined);
+      }
+      case "session.move": {
+        // OpenCode `session.move`: the session continues in another directory, a worktree of the project or another.
+        const s = this.session(params);
+        const cwd = needCwd(params, method);
+        const id = s.summary.ledgerSessionId;
+        if (id === null) throw new Error("the session has not started");
+        if (s.summary.status === "running" || s.summary.status === "waiting") throw new Error(`the session is ${s.summary.status}`);
+        const ledgerPath = ledgerFor(s.summary.cwd);
+        this.toChild(s, { kind: "close" });
+        await s.exited;
+        return this.start({ cwd, resume: id, model: s.summary.model, origin: s.summary.origin }, ledgerPath);
+      }
+      case "worktree.list": {
+        const cwd = needCwd(params, method);
+        const busy = new Set([...this.sessions.values()].map((s) => s.summary.cwd.toLowerCase()));
+        return listNamedWorktrees(projectRoot(cwd)).map((w) => ({ ...w, sessions: busy.has(w.path.toLowerCase()) }));
+      }
+      case "worktree.create": {
+        const root = projectRoot(needCwd(params, method));
+        const name = needString(params, "name", method);
+        return createNamedWorktree({
+          workspace: root,
+          projectId: resolveProject(root).id,
+          name,
+          ...(this.opts.worktreesRoot !== undefined ? { root: this.opts.worktreesRoot } : {}),
+        });
+      }
+      case "worktree.remove": {
+        const root = projectRoot(needCwd(params, method));
+        const path = resolvePath(needString(params, "path", method));
+        for (const s of this.sessions.values()) {
+          if (s.summary.cwd.toLowerCase() === path.toLowerCase()) throw new Error("a session runs in that worktree; move or close it first");
+        }
+        return removeNamedWorktree(root, path);
+      }
       case "subscribe":
         return this.subscribe(client, params);
       default:
@@ -232,7 +314,7 @@ export class EngineServer {
     }
   }
 
-  private async start(params: Record<string, unknown>): Promise<SessionSummary> {
+  private async start(params: Record<string, unknown>, ledgerPathOverride?: string): Promise<SessionSummary> {
     if (this.stopping) throw new Error("the server is stopping");
     if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("session.start needs cwd");
     const cwd = resolvePath(params.cwd);
@@ -291,6 +373,9 @@ export class EngineServer {
     const start: ChildStartParams = {
       cwd,
       trustSource,
+      ledgerPath: ledgerPathOverride ?? ledgerFor(cwd),
+      ...(typeof params.resume === "string" && params.resume !== "" ? { resume: params.resume } : {}),
+      ...(params.fork === true ? { fork: true } : {}),
       ...(typeof params.model === "string" ? { model: params.model } : {}),
       ...(typeof params.mode === "string" ? { mode: params.mode as InteractionMode } : {}),
       ...(params.autoApprove === true ? { autoApprove: true } : {}),
@@ -431,6 +516,16 @@ export class EngineServer {
     })();
     return this.stopping;
   }
+}
+
+function needString(params: Record<string, unknown>, key: string, method: string): string {
+  const v = params[key];
+  if (typeof v !== "string" || v === "") throw new Error(`${method} needs ${key}`);
+  return v;
+}
+
+function needCwd(params: Record<string, unknown>, method: string): string {
+  return resolvePath(needString(params, "cwd", method));
 }
 
 /** Whether something accepts connections at `path`. */

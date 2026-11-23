@@ -81,6 +81,8 @@ export interface ResumeOptions {
   fork?: boolean;
   /** Injected by tests; production reads the real terminal. */
   lineSource?: LineSource;
+  /** P5 #42: asks for the agreement a `confirm` preflight needs, given the preflight; the engine server asks its client. */
+  confirm?: (preflight: string) => Promise<boolean>;
   /** Called with the reason, once, whenever resume refuses or is declined, in addition to saying it on stderr. A caller with no one reading stderr (an MCP continuation) reports it itself. */
   onRefusal?: (reason: string) => void;
   /** T264: what goes in the input box when the session starts: the prompt a rewind past a resume went back to. */
@@ -205,6 +207,19 @@ export function planFromPreflight(
   };
 }
 
+/**
+ * P5 #42: `sessions.model` is a bare id, and an interactive session records no model path, so a model of a provider
+ * other than the default resolved against the default and the resume failed to boot. The session's own calls name the
+ * provider that served it.
+ */
+function qualifiedModel(ledger: Ledger, sessionId: string, model: string | null): string | null {
+  if (model === null || model.includes("/")) return model;
+  const row = ledger.db
+    .prepare(`SELECT provider FROM calls WHERE session_id = ? AND model = ? AND provider IS NOT NULL AND provider != '' ORDER BY ts_utc LIMIT 1`)
+    .get(sessionId, model) as { provider: string } | undefined;
+  return row !== undefined ? `${row.provider}/${model}` : model;
+}
+
 async function confirm(lineSource: LineSource | undefined, question: string): Promise<boolean> {
   if (!lineSource) return false;
   process.stderr.write(`${question} [y/N] `);
@@ -281,7 +296,7 @@ export async function runResume(
     // Never resume a paid context without showing the price first. The
     // preflight has already printed it; this is the agreement.
     if (pre.overall === "confirm" && opts?.yes !== true) {
-      const ok = await confirm(opts?.lineSource, "lykos resume: proceed?");
+      const ok = opts?.confirm ? await opts.confirm(formatPreflight(pre)) : await confirm(opts?.lineSource, "lykos resume: proceed?");
       if (!ok) {
         refuse("lykos resume: cancelled. Nothing was spent.\n");
         return 1;
@@ -317,7 +332,7 @@ export async function runResume(
     // A substitute model is always the caller's explicit choice — the
     // preflight refuses rather than picking one.
     // The full path (`provider/model`) when one was recorded: the row's bare id can resolve to another provider.
-    model = opts?.model ?? sessionModelPath(ledger, sessionId) ?? identity.model ?? undefined;
+    model = opts?.model ?? sessionModelPath(ledger, sessionId) ?? qualifiedModel(ledger, sessionId, identity.model) ?? undefined;
 
     // 2026-09-07 (UI feedback item 1): reopen the row this resume is about
     // to continue. `endSession()` refuses to end a session that has already

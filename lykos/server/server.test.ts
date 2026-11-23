@@ -12,6 +12,7 @@ import { connectEngine, type EngineConnection } from "./client.js";
 import { EngineServer } from "./server.js";
 import { PROTOCOL_VERSION, type Event, type KeybindsResult, type SessionOptions, type SessionSummary } from "./protocol.js";
 import { WorkspaceTrustError } from "../gate/trust.js";
+import { Ledger } from "../ledger/ledger.js";
 
 const fixture = fileURLToPath(new URL("./scripted-child.fixture.ts", import.meta.url));
 const child = { command: process.execPath, args: ["--import", import.meta.resolve("tsx"), fixture] };
@@ -315,3 +316,74 @@ async function waitStatus(conn: EngineConnection, id: string, status: SessionSum
   }
   throw new Error(`session ${id} never reached ${status}`);
 }
+
+describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+
+  /** A project with one recorded session, "s1", and a commit. */
+  function project(): string {
+    const cwd = mkdtempSync(join(tmpdir(), "lykos-engine-project-"));
+    git(cwd, "init", "-q");
+    writeFileSync(join(cwd, "a.txt"), "a\n");
+    git(cwd, "add", "-A");
+    git(cwd, "commit", "-q", "-m", "first");
+    mkdirSync(join(cwd, ".lykos"));
+    const led = Ledger.open(join(cwd, ".lykos", "ledger.db"));
+    led.startSession({ id: "s1", brief: "first go", startedUtc: "2026-09-01T00:00:00.000Z" });
+    led.endSession({ id: "s1", endedUtc: "2026-09-01T00:30:00.000Z" });
+    led.close();
+    mkdirSync(join(cwd, ".lykos", "sessions", "s1"), { recursive: true });
+    writeFileSync(join(cwd, ".lykos", "sessions", "s1", "transcript.jsonl"), "");
+    return cwd;
+  }
+
+  it("lists, renames, exports and archives a recorded session; the archived one is listed only on request", async () => {
+    const { server, key } = setup();
+    await server.listen();
+    const cwd = project();
+    try {
+      const c = await connectEngine(server.address, key);
+      type History = { rows: { id: string; title: string | null; archived: boolean }[]; live: Record<string, string> };
+      const first = await c.request<History>("sessions.history", { cwd });
+      assert.deepEqual(first.rows.map((r) => [r.id, r.title]), [["s1", "first go"]]);
+      await c.request("session.rename", { cwd, ledgerSessionId: "s1", title: "the parser" });
+      assert.equal((await c.request<History>("sessions.history", { cwd })).rows[0]!.title, "the parser");
+      const exported = await c.request<{ markdown: string }>("session.export", { cwd, ledgerSessionId: "s1" });
+      assert.match(exported.markdown, /^# Session s1/);
+      await c.request("session.archive", { cwd, ledgerSessionId: "s1" });
+      assert.deepEqual((await c.request<History>("sessions.history", { cwd })).rows, []);
+      const all = await c.request<History>("sessions.history", { cwd, archived: true });
+      assert.deepEqual(all.rows.map((r) => [r.id, r.archived]), [["s1", true]]);
+      await assert.rejects(c.request("session.rename", { cwd, ledgerSessionId: "nope", title: "x" }), /no session nope/);
+      c.close();
+    } finally {
+      await server.stop("test");
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("creates, lists and removes a worktree; its work stays on its branch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lykos-engine-wt-"));
+    const address = engineAddress(dir);
+    const server = new EngineServer({ address, idleSeconds: 60, child, globalDir: dir, log: () => {}, worktreesRoot: join(dir, "worktrees"), trust: async () => "stored" });
+    await server.listen();
+    const cwd = project();
+    try {
+      const c = await connectEngine(server.address, readOrCreateKey(address));
+      const made = await c.request<{ path: string; branch: string }>("worktree.create", { cwd, name: "spike" });
+      assert.equal(made.branch, "lykos/spike");
+      const listed = await c.request<{ path: string; main: boolean }[]>("worktree.list", { cwd });
+      assert.equal(listed.length, 2);
+      writeFileSync(join(made.path, "a.txt"), "b\n");
+      const removed = await c.request<{ removed: boolean; savedUncommitted: boolean }>("worktree.remove", { cwd, path: made.path });
+      assert.deepEqual([removed.removed, removed.savedUncommitted], [true, true]);
+      assert.equal(git(cwd, "show", "lykos/spike:a.txt"), "b");
+      await assert.rejects(c.request("worktree.remove", { cwd, path: cwd }), /own checkout|not a worktree/);
+      c.close();
+    } finally {
+      await server.stop("test");
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});

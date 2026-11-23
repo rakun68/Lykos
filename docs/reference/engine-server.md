@@ -53,7 +53,7 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `server.shutdown` | | `{stopping: true}`; every connection is closed, every session child told to close |
 | `server.disconnect` | | `{closed}`: closes every connection except this one (tests drive reconnection with it) |
 | `sessions.list` | | `SessionSummary[]` |
-| `session.start` | `{cwd, model?, mode?, autoApprove?, trust?, origin?}` | `SessionSummary`. An untrusted workspace is refused unless `trust: true` |
+| `session.start` | `{cwd, model?, mode?, autoApprove?, trust?, origin?, resume?, fork?}` | `SessionSummary`. An untrusted workspace is refused unless `trust: true`. `resume` (a ledger session id) continues it as `lykos resume` does, `fork` as `lykos resume --fork`; a preflight that needs agreement asks it as a `question` request |
 | `session.prompt` | `{session, text}` | `{ok: true}` |
 | `session.interrupt` | `{session}` | `{ok: true}` |
 | `session.answer` | `{session, requestId, answer}` | `{ok: true}`: answers an approval or a question |
@@ -61,6 +61,14 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `session.aside` | `{session, text}` | `{answer, model}`: a side question (`/btw`) answered from the session's context with no tools. It enters no transcript and no turn; its call is in the session's usage and its ledger row has `phase` `aside` |
 | `session.options` | `{session}` | `{model, models: [{provider, id, name, contextWindow, reasoning}], effort, efforts, specialist, specialists: [{name, description}], providers: [{name, auth, reach, reason}]}`: what the TUI's lists show, from the session's own runtime. `models` are those with auth; `effort` is null where the model has none; `providers` is the `lykos providers` matrix |
 | `config.keybinds` | `{cwd}` | `{keybinds: {<action>: {value, source}}}`: each action's `tui.keybinds` value from the last config layer that names it, and that layer (`project (path)`). Not validated against the action table: the TUI owns it |
+| `sessions.history` | `{cwd, all?, archived?}` | `{rows: [{id, title, startedUtc, endedUtc, model, parentSessionId, forkedFrom, resumedFrom, depth, archived, resumable, costUsd, projectPath, projectName}], live: {<ledger id>: <server id>}}`: the project's ledger sessions, newest first and nested; every registered project's with `all`; archived ones only with `archived` (P5 #42) |
+| `session.rename` | `{cwd, ledgerSessionId, title}` | `{ok: true}`: the ledger's brief, and a live session's `title` |
+| `session.archive` | `{cwd, ledgerSessionId}` | `{ok: true}`: OpenCode's delete, as an archive. A live session is closed first. `sessions.archived_utc` is set; the row and transcript stay, `lykos session --all` lists it, and a resume clears it |
+| `session.export` | `{cwd, ledgerSessionId, file?}` | `{markdown, path?}`: `lykos export`'s Markdown, written to `file` (relative to `cwd`) when one is named |
+| `session.move` | `{session, cwd}` | `SessionSummary` of the session continued in `cwd`: the live one is closed and resumed there, same ledger session. Refused while a turn runs or a request is open |
+| `worktree.list` | `{cwd}` | `[{path, branch, head, main, sessions}]`: the repository's worktrees, the main checkout first; `sessions` when a live session runs in it |
+| `worktree.create` | `{cwd, name}` | `{path, branch, head, main}`: a worktree at `~/.lykos/worktrees/<project id>/<name>` on the branch `lykos/<name>` |
+| `worktree.remove` | `{cwd, path}` | `{removed, savedUncommitted, saved?, note?}`: uncommitted work is committed onto the branch and ignored files the sessions wrote are archived beside it, then the worktree is removed. The branch stays. Refused for the main checkout and while a session runs there |
 | `subscribe` | `{sessions?, after?: {<id>: seq}}` | `{sessions: SessionSummary[]}`, then the replay |
 
 ### 2.3 Events
@@ -74,7 +82,8 @@ applied, so an overlapping replay changes nothing and a gap waits.
 `message.delta`, `thinking.delta`, `message.end`, `tool.start`, `tool.end` (preview capped at 8 KB,
 `diff?` for a file change), `request`, `request.resolved`, `usage`, `system` (a notice line, compaction
 among them), `turn.end` and `commands` (the slash commands the session runs, `{name, description, source}`,
-sent once it has booted: what a client completes `/` from). The types
+sent once it has booted: what a client completes `/` from) and `prompt.set` (`{text}`: a prompt an undo or a
+rewind put back, for the client's prompt). The types
 are `lykos/server/protocol.ts`; `crates/client/src/protocol.rs` mirrors them, and reads a type it
 does not know as `Unknown`.
 
@@ -90,6 +99,9 @@ Each session runs in its own `lykos server-session` child, spawned with an IPC c
 interactive session the old TUI runs, with its approvals and questions sent as `request` events and
 answered by `session.answer`. Its ledger row and archive are written exactly as the old TUI's are.
 When the server goes away the child closes its session (archive and ledger), with a 30 s deadline.
+A session in one of Lykos's worktrees (`~/.lykos/worktrees/`) writes the main checkout's ledger, so
+removing the worktree takes none of its sessions with it. `/fork` and a rewind or redo past the
+process continue in the same child, through a resume, as `lykos run` continues them.
 
 ---
 

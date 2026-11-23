@@ -75,6 +75,16 @@ export type Method =
   /** `lykos-tui`'s key bindings for a workspace, each with the layer that set it (P5 #39). */
   | "config.keybinds"
   | "session.options"
+  /** P5 #42: the ledger's sessions for the session list, and which are live here. */
+  | "sessions.history"
+  | "session.rename"
+  /** OpenCode's delete, as an archive: the session stays in `lykos session --all`, resumable. */
+  | "session.archive"
+  | "session.export"
+  | "session.move"
+  | "worktree.list"
+  | "worktree.create"
+  | "worktree.remove"
   | "subscribe";
 
 // --- Events ------------------------------------------------------------------------------------------------------
@@ -135,7 +145,9 @@ export type EventData =
   | { type: "request"; request: RequestData }
   | { type: "request.resolved"; requestId: string; answer: string }
   /** The slash commands the session runs, sent once it has booted: what a client completes `/` from. */
-  | { type: "commands"; commands: CommandInfo[] };
+  | { type: "commands"; commands: CommandInfo[] }
+  /** P5 #42: what goes in the client's prompt: the prompt a rewind or an undo took back. */
+  | { type: "prompt.set"; text: string };
 
 export interface CommandInfo {
   /** As typed, with its slash. */

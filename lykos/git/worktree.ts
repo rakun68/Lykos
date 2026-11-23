@@ -20,7 +20,7 @@
 
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, rmdirSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { hostGit, probeGit, type GitRun } from "./host-git.js";
 import { unlinkLinksUnder } from "./links.js";
 
@@ -162,6 +162,47 @@ export function acquireWorktree(input: AcquireInput): WorktreeLease {
 
   const unlock = takeLock(join(projectDir, `${input.sessionId}.lock`), input.sessionId);
   try {
+    const { resumed, base, commonDir, gitDir } = prepareWorktree(input.workspace, projectDir, path, branch, input.base);
+    const lease: WorktreeLease = {
+      path,
+      branch,
+      base,
+      resumed,
+      commonDir,
+      gitDir,
+      commits() {
+        const log = hostGit(["log", "--format=%H%x1f%s", `${base}..${branch}`], input.workspace);
+        if (!log.ok || log.stdout === "") return [];
+        return log.stdout.split("\n").map((line) => {
+          const [sha = "", subject = ""] = line.split("\u001f");
+          return { sha, subject };
+        });
+      },
+      release() {
+        try {
+          return finish(path, input.workspace, input.sessionId, join(projectDir, `${input.sessionId}.ignored`));
+        } finally {
+          unlock();
+        }
+      },
+    };
+    return lease;
+  } catch (err) {
+    unlock();
+    throw err;
+  }
+}
+
+/** Creates or reuses the worktree at `path` on `branch`, from `baseRef` (default HEAD) when the branch is new. Throws `WorktreeError`. */
+function prepareWorktree(
+  workspace: string,
+  projectDir: string,
+  path: string,
+  branch: string,
+  baseRef: string | undefined,
+): { resumed: boolean; base: string; commonDir: string; gitDir: string } {
+  const input = { workspace, base: baseRef };
+  {
     const resumed = hostGit(["rev-parse", "--verify", "-q", `refs/heads/${branch}`], input.workspace).ok;
     const targetRef = !resumed && input.base !== undefined ? input.base : "HEAD";
     const head = hostGit(["rev-parse", "--verify", "-q", targetRef], input.workspace);
@@ -200,35 +241,75 @@ export function acquireWorktree(input: AcquireInput): WorktreeLease {
       throw new WorktreeError("git", `the worktree at ${path} is not usable as a git work tree`);
     }
     const commonDir = resolve(path, common.stdout);
-
-    const lease: WorktreeLease = {
-      path,
-      branch,
-      base,
-      resumed,
-      commonDir,
-      gitDir: inside.gitDir,
-      commits() {
-        const log = hostGit(["log", "--format=%H%x1f%s", `${base}..${branch}`], input.workspace);
-        if (!log.ok || log.stdout === "") return [];
-        return log.stdout.split("\n").map((line) => {
-          const [sha = "", subject = ""] = line.split("\u001f");
-          return { sha, subject };
-        });
-      },
-      release() {
-        try {
-          return finish(path, input.workspace, input.sessionId, join(projectDir, `${input.sessionId}.ignored`));
-        } finally {
-          unlock();
-        }
-      },
-    };
-    return lease;
-  } catch (err) {
-    unlock();
-    throw err;
+    return { resumed, base, commonDir, gitDir: inside.gitDir };
   }
+}
+
+/**
+ * P5 #42: `lykos-tui`'s Manage workspaces (OpenCode's `dialog-workspace-create.tsx` and the `session.move` dialog). A
+ * worktree a person names, at `~/.lykos/worktrees/<project id>/<name>` on the branch `lykos/<name>`, kept until they
+ * remove it. OpenCode's worktrees are detached; these are on a branch, so their commits stay reachable after removal.
+ */
+export interface NamedWorktree {
+  path: string;
+  branch: string | null;
+  head: string;
+  /** The project's own checkout, which is never removed from here. */
+  main: boolean;
+}
+
+/** A name a worktree directory and a branch can both carry. */
+export function validWorktreeName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(name) && !name.endsWith(".lock") && !name.includes("..");
+}
+
+export function createNamedWorktree(input: { workspace: string; projectId: string; name: string; root?: string }): NamedWorktree {
+  if (!validWorktreeName(input.name)) {
+    throw new WorktreeError("git", `"${input.name}" cannot name a worktree: letters, digits, ".", "_" and "-" only`);
+  }
+  const probe = probeGit(input.workspace);
+  if (probe.state !== "repo") throw new WorktreeError(probe.state, probe.state === "git-missing" ? "git is not installed" : "not a git repository");
+  const projectDir = join(input.root ?? defaultWorktreesRoot(), input.projectId);
+  const path = join(projectDir, input.name);
+  const branch = `${BRANCH_PREFIX}${input.name}`;
+  const made = prepareWorktree(input.workspace, projectDir, path, branch, undefined);
+  return { path, branch, head: made.base, main: false };
+}
+
+/** The repository's worktrees, the main checkout first, as `git worktree list --porcelain` has them. */
+export function listNamedWorktrees(workspace: string): NamedWorktree[] {
+  hostGit(["worktree", "prune"], workspace);
+  const listed = hostGit(["worktree", "list", "--porcelain"], workspace);
+  if (!listed.ok) throw new WorktreeError("git", `could not list the worktrees: ${listed.stderr || "git failed"}`);
+  const out: NamedWorktree[] = [];
+  for (const block of listed.stdout.split(/\r?\n\r?\n/)) {
+    const fields = new Map<string, string>();
+    for (const line of block.split(/\r?\n/)) {
+      const space = line.indexOf(" ");
+      fields.set(space < 0 ? line : line.slice(0, space), space < 0 ? "" : line.slice(space + 1));
+    }
+    const path = fields.get("worktree");
+    if (path === undefined || fields.has("bare")) continue;
+    const ref = fields.get("branch");
+    out.push({ path: resolve(path), branch: ref?.replace(/^refs\/heads\//, "") ?? null, head: fields.get("HEAD") ?? "", main: out.length === 0 });
+  }
+  return out;
+}
+
+/**
+ * Removes a worktree as a session's is released: uncommitted work committed onto its branch first, the ignored files
+ * it wrote archived beside it. The branch and its commits stay, and every session that ran there stays resumable.
+ */
+export function removeNamedWorktree(workspace: string, path: string): ReleaseResult {
+  const tree = listNamedWorktrees(workspace).find((w) => samePath(w.path, path));
+  if (tree === undefined) throw new WorktreeError("git", `${path} is not a worktree of this repository`);
+  if (tree.main) throw new WorktreeError("git", "the project's own checkout is not removed from here");
+  return finish(tree.path, workspace, basename(tree.path), `${tree.path}.ignored`);
+}
+
+/** Windows paths compare without case; git prints them with forward slashes. */
+function samePath(a: string, b: string): boolean {
+  return process.platform === "win32" ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b);
 }
 
 /**

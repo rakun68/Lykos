@@ -2428,6 +2428,7 @@ export class Ledger {
    *    refusal to overwrite it is not bypassed here.
    *  * `archive_state` returns to `recent`, because the transcript is about
    *    to be appended to again.
+   *  * P5 #42: `archived_utc` is cleared: a session someone resumed is back in lykos-tui's list.
    */
   reopenSession(id: string): void {
     const row = this.db
@@ -2440,6 +2441,7 @@ export class Ledger {
         `UPDATE sessions
             SET ended_utc = NULL,
                 closed_utc = NULL,
+                archived_utc = NULL,
                 archive_state = CASE WHEN archive_state = 'archived' THEN archive_state ELSE 'recent' END,
                 outcome = CASE WHEN @keep_outcome = 1 THEN outcome ELSE NULL END,
                 outcome_source = CASE WHEN @keep_outcome = 1 THEN outcome_source ELSE NULL END

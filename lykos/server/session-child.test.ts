@@ -147,4 +147,61 @@ describe("a real session on the engine server", () => {
       await server.stop("test");
     }
   });
+
+  it("puts an undone prompt back in the client's prompt, and resumes the session it closed under the same id (P5 #42)", async () => {
+    const w = world();
+    model.script.set("pooled-key", [
+      { kind: "ok", text: "pong" },
+      { kind: "ok", text: "again" },
+    ]);
+    const address = engineAddress(w.dir);
+    const logs: string[] = [];
+    const server = new EngineServer({ address, idleSeconds: 60, env: w.env, log: (l) => logs.push(l), trust: async () => "flag" });
+    await server.listen();
+    try {
+      const c = await connectEngine(address, readOrCreateKey(address));
+      const events: Event[] = [];
+      c.onEvent((e) => events.push(e));
+      const until = async (pred: (e: Event) => boolean, what: string): Promise<Event> => {
+        const deadline = Date.now() + 60_000;
+        for (;;) {
+          const hit = events.find(pred);
+          if (hit) return hit;
+          if (Date.now() > deadline) throw new Error(`no ${what} in ${JSON.stringify(events.map((e) => e.data), null, 1)}`);
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      };
+      await c.request("subscribe");
+      const first = await c.request<SessionSummary>("session.start", { cwd: w.workspace, model: `${PROVIDER}/m1` });
+      const mine = (id: string) => (e: Event) => e.session === id;
+      await until((e) => mine(first.id)(e) && e.data.type === "session.status" && e.data.session.status === "idle", "boot");
+      await c.request("session.prompt", { session: first.id, text: "Reply with the word pong." });
+      await until((e) => mine(first.id)(e) && e.data.type === "turn.end", "turn.end");
+      await c.request("session.prompt", { session: first.id, text: "/undo" });
+      const set = await until((e) => mine(first.id)(e) && e.data.type === "prompt.set", "prompt.set");
+      assert.ok(set.data.type === "prompt.set" && set.data.text === "Reply with the word pong.");
+      await c.request("session.close", { session: first.id });
+      const closed = await until((e) => mine(first.id)(e) && e.data.type === "session.status" && e.data.session.status === "closed", "closed");
+      const ledgerId = closed.data.type === "session.status" ? closed.data.session.ledgerSessionId! : "";
+
+      const again = await c.request<SessionSummary>("session.start", { cwd: w.workspace, resume: ledgerId });
+      const boot = (e: Event) => mine(again.id)(e) && e.data.type === "session.status" && e.data.session.status === "idle";
+      // A resume whose preflight needs agreement asks for it over the protocol.
+      while (!events.some(boot)) {
+        const ask = events.find((e) => mine(again.id)(e) && e.data.type === "request" && !events.some((r) => r.data.type === "request.resolved" && e.data.type === "request" && r.data.requestId === e.data.request.requestId));
+        if (ask && ask.data.type === "request") await c.request("session.answer", { session: again.id, requestId: ask.data.request.requestId, answer: "y" });
+        if (events.some((e) => mine(again.id)(e) && e.data.type === "session.status" && e.data.session.status === "closed")) {
+          throw new Error(`the resume ended:\n${logs.slice(-40).join("\n")}`);
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      const booted = events.find(boot)!;
+      assert.ok(booted.data.type === "session.status" && booted.data.session.ledgerSessionId === ledgerId, "the same ledger session continues");
+      await c.request("session.close", { session: again.id });
+      await until((e) => mine(again.id)(e) && e.data.type === "session.status" && e.data.session.status === "closed", "closed again");
+      c.close();
+    } finally {
+      await server.stop("test");
+    }
+  });
 });

@@ -11,7 +11,9 @@ import { TerminalApprovalGate } from "../gate/approval.js";
 import { resolveProject } from "../session/identity.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { resolveApprovalGate } from "../session/session.js";
-import type { InteractiveHandle, LineSource } from "../session/interactive.js";
+import type { InteractiveHandle, LineSource, ResumePlan } from "../session/interactive.js";
+import type { LaunchResult } from "../cli/resume.js";
+import { defaultLedgerPath } from "../ledger/ledger.js";
 import { TerminalAsk, type AskRequest } from "../tools/ask.js";
 import { slashCandidates } from "../tui/commands.js";
 import type { AsideAnswer } from "../session/aside.js";
@@ -39,6 +41,11 @@ export type FromChild =
 
 export interface ChildStartParams {
   cwd: string;
+  /** The ledger the session writes: the project's, also for a Lykos worktree (`history.ts`'s `ledgerFor`). */
+  ledgerPath?: string;
+  /** P5 #42: a ledger session to resume, as `lykos resume` does, or to fork with `fork`. */
+  resume?: string;
+  fork?: boolean;
   model?: string;
   mode?: InteractionMode;
   autoApprove?: boolean;
@@ -50,6 +57,13 @@ class QueuedLines implements LineSource {
   private readonly lines: string[] = [];
   private readonly waiting: Array<(line: string | null) => void> = [];
   private closed = false;
+
+  /** P5 #42: a prompt put back in the input box (a rewind or an undo) goes to the client's prompt. */
+  constructor(private readonly onPrefill: (text: string) => void) {}
+
+  prefill(text: string): void {
+    this.onPrefill(text);
+  }
 
   push(line: string): void {
     const w = this.waiting.shift();
@@ -91,7 +105,7 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
       if (msg.kind === "start") resolve(msg.params);
     });
   });
-  const lines = new QueuedLines();
+  const lines = new QueuedLines((text) => emit({ type: "prompt.set", text }));
   const answers = new Map<string, (answer: string | null) => void>();
   const early = new Map<string, string>();
   let handle: InteractiveHandle | undefined;
@@ -201,30 +215,87 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
   ).ask;
 
   const { runInteractiveStandaloneSession } = await import("../session/interactive.js");
-  const result = await runInteractiveStandaloneSession({
-    workspace: params.cwd,
-    ...(params.model !== undefined ? { model: params.model } : {}),
-    ...(params.mode !== undefined ? { mode: params.mode } : {}),
-    trustSource: params.trustSource,
-    lineSource: lines,
-    approvalGate: gate,
-    askHuman: ask,
-    createUi: (opts, session, askAside, listOptions) => {
-      aside = askAside;
-      options = listOptions;
-      send({ kind: "status", status: "idle", ledgerSessionId: session.sessionId, model: opts.header.model });
-      // The surface registered this session's skills and extension commands before it made the UI.
-      emit({ type: "commands", commands: slashCandidates("/skill:").map((c) => ({ name: c.name, description: c.description, source: c.source })) });
-      return createEventUi(opts, session, { emit, status });
-    },
-    onReady: (h) => {
-      handle = h;
-    },
-  });
-  if (result.status === "error") {
-    send({ kind: "exit", ok: false, message: result.message });
+  const ledgerPath = params.ledgerPath;
+  /** One process of the session on the server's seams: a new session, or the plan a resume made. */
+  const launch = async (input: { model?: string | undefined; resume?: ResumePlan }): Promise<LaunchResult> => {
+    const result = await runInteractiveStandaloneSession({
+      workspace: params.cwd,
+      ...(ledgerPath !== undefined ? { ledgerPath } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(params.mode !== undefined ? { mode: params.mode } : {}),
+      ...(input.resume?.tools !== undefined ? { tools: input.resume.tools } : {}),
+      ...(input.resume !== undefined ? { resume: input.resume } : {}),
+      trustSource: params.trustSource,
+      lineSource: lines,
+      approvalGate: gate,
+      askHuman: ask,
+      createUi: (opts, session, askAside, listOptions) => {
+        aside = askAside;
+        options = listOptions;
+        send({ kind: "status", status: "idle", ledgerSessionId: session.sessionId, model: opts.header.model });
+        // The surface registered this session's skills and extension commands before it made the UI.
+        emit({ type: "commands", commands: slashCandidates("/skill:").map((c) => ({ name: c.name, description: c.description, source: c.source })) });
+        return createEventUi(opts, session, { emit, status });
+      },
+      onReady: (h) => {
+        handle = h;
+      },
+    });
+    return result.status === "ok"
+      ? {
+          status: "ok",
+          sessionId: result.sessionId,
+          ...(result.forkRequested ? { forkRequested: true } : {}),
+          ...(result.rewindRebuild !== undefined ? { rewindRebuild: result.rewindRebuild } : {}),
+        }
+      : { status: "error", message: result.message };
+  };
+  /** P5 #42: `lykos resume` on these seams: the preflight's agreement is a question to the client. */
+  const resume = async (id: string, opts: { fork?: boolean; inputText?: string }): Promise<number> => {
+    const { runResume } = await import("../cli/resume.js");
+    let refusal: string | undefined;
+    const code = await runResume(params.cwd, ledgerPath ?? defaultLedgerPath(params.cwd), id, {
+      ...(opts.fork === true ? { fork: true } : {}),
+      ...(opts.inputText !== undefined ? { inputText: opts.inputText } : {}),
+      confirm: async (preflight) => {
+        open({ kind: "question", title: "Resume this session?", detail: preflight, options: [{ value: "y", label: "Resume" }, { value: "n", label: "Cancel" }] });
+        return (await answer()) === "y";
+      },
+      onRefusal: (reason) => {
+        refusal = reason;
+      },
+      launch: (input) => launch({ model: input.model, resume: input.resume }),
+    });
+    if (code !== 0) send({ kind: "exit", ok: false, message: refusal ?? "the session could not be resumed" });
+    return code;
+  };
+
+  try {
+    return await run();
+  } catch (err) {
+    // A session that throws while it boots still ends with a reason the client is shown.
+    send({ kind: "exit", ok: false, message: err instanceof Error ? err.message : String(err) });
     return 1;
   }
-  send({ kind: "exit", ok: true, ledgerSessionId: result.sessionId });
-  return 0;
+
+  async function run(): Promise<number> {
+    if (params.resume !== undefined) {
+      const code = await resume(params.resume, params.fork === true ? { fork: true } : {});
+      if (code === 0) send({ kind: "exit", ok: true });
+      return code;
+    }
+    const result = await launch(params.model !== undefined ? { model: params.model } : {});
+    if (result.status === "error") {
+      send({ kind: "exit", ok: false, message: result.message ?? "the session ended in error" });
+      return 1;
+    }
+    // `/fork` and a rewind past this process continue as `lykos run` continues them, through a resume.
+    let code = 0;
+    if (result.forkRequested === true && result.sessionId !== undefined) code = await resume(result.sessionId, { fork: true });
+    else if (result.rewindRebuild !== undefined && result.sessionId !== undefined) {
+      code = await resume(result.sessionId, { inputText: result.rewindRebuild.inputText });
+    }
+    if (code === 0) send({ kind: "exit", ok: true, ...(result.sessionId !== undefined ? { ledgerSessionId: result.sessionId } : {}) });
+    return code;
+  }
 }

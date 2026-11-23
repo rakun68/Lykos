@@ -1191,7 +1191,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
   }
 
   // T264: a session rebuilt by a rewind past a resume starts with the prompt it went back to.
-  if (opts.inputText !== undefined) putBack(opts.inputText);
+  if (opts.inputText !== undefined && opts.inputText !== "") putBack(opts.inputText);
 
   while (true) {
     const line = initialPrompt ?? (await nextLine());
