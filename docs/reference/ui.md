@@ -225,7 +225,7 @@ name (`return`, `escape`, `pageup`, `a`, `-`). An unknown action or a key that d
 skipped, and the TUI says so in a notice. Where two actions share a key, the first that applies
 runs: `Ctrl+C` copies a selection, else clears the prompt, else quits.
 
-`Ctrl+P` opens the palette: every action of the App, Session, Prompt and Input groups, with its keys
+`Ctrl+P` opens the palette: every action of the App, Session, Agent, System, Prompt and Input groups, with its keys
 and, where it is not a default, the layer that set it. Typing filters it by title, group and id
 (the title weighted twice); `Enter` runs the selected action. `/help` lists every key of every
 group and the layer that set it.
@@ -240,8 +240,46 @@ Where the keybinds differ from OpenCode on purpose:
 - The keys inside the images list (`Left`, `Right`), the aside dialog (`j`, `k`, `q`), the history
   search and the answer digits are fixed.
 
+**Lists and dialogs (#41).** OpenCode's model, variant, agent, theme and provider dialogs, and its
+status and debug dialogs. A list opens on the row in use (marked `●`), typing filters it, `Enter`
+chooses. The lists come from the session (`session.options`, [engine-server.md](engine-server.md)),
+asked for when it boots and each time a list opens; a choice goes to the session as its slash
+command, so it takes effect on the next request.
+
+| Key | Command | Action |
+| --- | --- | --- |
+| `Ctrl+X M` | `/models`, `/model` | The models: Favorites, Recent, then each provider; `Ctrl+F` favorites the row, `Ctrl+A` the providers, `Ctrl+U` usage. Sends `/model provider/id` |
+| `F2`, `Shift+F2` | | Next, previous recently used model |
+| `Ctrl+T` | `/effort` | Next thinking effort, wrapping; `/effort` lists them. Sends `/effort level` |
+| `Ctrl+X A`, `Shift+Tab` | `/agents`, `/specialist` | The primary specialists; `Shift+Tab` the next. Sends `/specialist name` |
+| | `/themes` | The themes, previewed under the cursor; `Esc` puts back the one open before |
+| | `/connect`, `/login` | The providers and whether Lykos reaches each; a browser sign-in sends `/login name`, an API key points to `lykos login name --api-key` |
+| `Ctrl+X S` | `/status` | Engine server, session, model, effort, specialist, theme, MCP servers |
+| | `/mcps` | MCP servers |
+| | `/debug` | Version, OS, terminal, session id, model; `c` copies |
+
+`model.cycle_favorite`, `variant.list`, `usage.show`, `theme.switch_mode` and the rest have no key
+by default; the palette runs them. With an argument, `/model`, `/effort`, `/specialist` and `/login`
+go to the session as before. Six themes: `sky` (the default), `rose-pine`, `rose-pine-moon`,
+`rose-pine-dawn`, `catppuccin-mocha`, `catppuccin-latte`; the mode switch goes to the other of a
+dark and light pair. The theme, the last 10 models (newest first) and the favorites are kept in
+`~/.lykos/tui/state.json` (or `$LYKOS_TUI_DIR`).
+
+Where the lists differ from OpenCode on purpose:
+
+- Thinking effort replaces variants, and its cycle wraps with no "default" step.
+- Primary specialists replace agents.
+- Before a session exists the lists are empty: they come from the session's own runtime.
+- The model list shows no usage limits; the usage dialog shows Lykos's own cost and cache figures.
+- No variant list follows a model choice.
+- Six palettes, no `ansi16` or `mono`, and no `theme.mode.lock`; `ui.theme` in config is not read.
+- A Lykos session connects to no MCP servers, so both dialogs say so.
+- An API key is never typed into the TUI.
+- The debug dialog has no date row.
+- `/usage` and `/thinking` stay the session's commands.
+
 Where it differs from OpenCode on purpose: the context use is always on screen rather than in a
-sidebar, the metadata row has no agent name (Lykos has no agents to switch), the footer shows the
+sidebar, the metadata row has no specialist name, the footer shows the
 workspace without its git branch (reading it would cost a process at startup), and
 `--trust-workspace` replaces a trust dialog until the dialogs land (#46). In the prompt:
 

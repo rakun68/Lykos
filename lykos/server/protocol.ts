@@ -5,6 +5,7 @@
  */
 
 import type { KeybindSetting } from "../config/keybinds.js";
+export type { ModelOption, ProviderOption, SessionOptions, SpecialistOption } from "../session/session-options.js";
 
 /** Bumped on any change a client of the previous version would misread. A client of another version is refused. */
 export const PROTOCOL_VERSION = 1;
@@ -73,6 +74,7 @@ export type Method =
   | "session.aside"
   /** `lykos-tui`'s key bindings for a workspace, each with the layer that set it (P5 #39). */
   | "config.keybinds"
+  | "session.options"
   | "subscribe";
 
 // --- Events ------------------------------------------------------------------------------------------------------

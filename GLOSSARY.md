@@ -592,3 +592,8 @@ _Avoid_: prefix key, chord
 **Command palette**:
 The `Ctrl+P` list of every action, filtered as typed, that runs the one chosen.
 _Avoid_: command menu, quick open
+
+**Theme pair**:
+A dark and a light palette of one family (`rose-pine` and `rose-pine-dawn`) that `lykos-tui`'s mode
+switch moves between.
+_Avoid_: light theme, dark mode (that is one half of the pair)

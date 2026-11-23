@@ -11,7 +11,7 @@ import { startFakeAnthropicServer, type FakeAnthropicServer } from "../credentia
 import { upsertCredential } from "../credentials/pool.js";
 import { engineAddress, readOrCreateKey } from "./address.js";
 import { connectEngine } from "./client.js";
-import type { Event, SessionSummary } from "./protocol.js";
+import type { Event, SessionOptions, SessionSummary } from "./protocol.js";
 import { EngineServer } from "./server.js";
 import { defaultLedgerPath } from "../ledger/ledger.js";
 import { openLedger } from "../ledger/use.js";
@@ -108,6 +108,11 @@ describe("a real session on the engine server", () => {
       const before = events.length;
       assert.deepEqual(await c.request("session.aside", { session: s.id, text: "What did you just say?" }), { answer: "an aside", model: `${PROVIDER}/m1` });
       assert.equal(events.length, before, "an aside adds no event");
+      // What the pickers list, read from the live session.
+      const options = await c.request<SessionOptions>("session.options", { session: s.id });
+      assert.equal(options.model, `${PROVIDER}/m1`);
+      assert.ok(options.models.some((m) => m.provider === PROVIDER && m.id === "m1"), "the session's model is listed");
+      assert.ok(options.specialists.some((p) => p.name === options.specialist), "the active specialist is listed");
 
       await c.request("session.prompt", { session: s.id, text: "Write note.txt." });
       const req = await until((e) => e.data.type === "request", "an approval request");

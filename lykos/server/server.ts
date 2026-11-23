@@ -21,7 +21,7 @@ import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
-import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type EventData, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type EventData, type SessionOptions, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
 import { LineReader, send, serverHandshake } from "./wire.js";
 
 export interface EngineServerOptions {
@@ -48,8 +48,8 @@ interface LiveSession {
   child: ChildProcess;
   events: Event[];
   exited: Promise<void>;
-  /** `session.aside` calls waiting on the child, by id. */
-  asides: Map<string, (msg: Extract<FromChild, { kind: "aside" }>) => void>;
+  /** `session.aside` and `session.options` calls waiting on the child, by id. */
+  asides: Map<string, (msg: Extract<FromChild, { kind: "aside" | "options" }>) => void>;
 }
 
 interface Client {
@@ -207,14 +207,18 @@ export class EngineServer {
         if (typeof params.text !== "string" || params.text.trim() === "") throw new Error("session.aside needs text");
         const s = this.session(params);
         if (s.summary.status === "starting" || s.summary.status === "closed") throw new Error(`the session is ${s.summary.status}`);
-        const id = `a${++this.asideSeq}`;
-        const reply = await new Promise<Extract<FromChild, { kind: "aside" }>>((resolve) => {
-          s.asides.set(id, resolve);
-          this.toChild(s, { kind: "aside", id, text: params.text as string });
-        });
-        s.asides.delete(id);
+        const text = params.text;
+        const reply = await this.ask(s, (id) => ({ kind: "aside", id, text }));
         if (reply.error !== undefined) throw new Error(reply.error);
+        if (reply.kind !== "aside") throw new Error("the session answered something else");
         return { answer: reply.answer ?? "", model: reply.model ?? s.summary.model } satisfies AsideResult;
+      }
+      case "session.options": {
+        const s = this.session(params);
+        if (s.summary.status === "starting" || s.summary.status === "closed") throw new Error(`the session is ${s.summary.status}`);
+        const reply = await this.ask(s, (id) => ({ kind: "options", id }));
+        if (reply.kind !== "options" || reply.options === undefined) throw new Error(reply.error ?? "no options");
+        return reply.options satisfies SessionOptions;
       }
       case "session.close": {
         const s = this.session(params);
@@ -296,6 +300,17 @@ export class EngineServer {
     return summary;
   }
 
+  /** Sends the child a call and waits for the reply with its id; a child that exits first settles it with an error. */
+  private async ask(s: LiveSession, msg: (id: string) => ToChild): Promise<Extract<FromChild, { kind: "aside" | "options" }>> {
+    const id = `a${++this.asideSeq}`;
+    const reply = await new Promise<Extract<FromChild, { kind: "aside" | "options" }>>((resolve) => {
+      s.asides.set(id, resolve);
+      this.toChild(s, msg(id));
+    });
+    s.asides.delete(id);
+    return reply;
+  }
+
   private toChild(s: LiveSession, msg: ToChild): void {
     if (s.child.connected) s.child.send(msg);
   }
@@ -317,6 +332,7 @@ export class EngineServer {
         this.setStatus(s, msg.status);
         return;
       case "aside":
+      case "options":
         s.asides.get(msg.id)?.(msg);
         return;
       case "exit":

@@ -33,11 +33,11 @@ const fn def(id: &'static str, keys: &'static str, title: &'static str, group: &
 }
 
 /// The groups, in the order the palette and the help list them.
-pub const GROUPS: [&str; 6] = ["App", "Session", "Prompt", "Input", "Autocomplete", "Dialog"];
+pub const GROUPS: [&str; 8] = ["App", "Session", "Agent", "System", "Prompt", "Input", "Autocomplete", "Dialog"];
 
 /// What a group's actions are: run from anywhere, and so listed in the palette, or only inside a list or dialog.
 pub fn in_palette(group: &str) -> bool {
-    matches!(group, "App" | "Session" | "Prompt" | "Input")
+    matches!(group, "App" | "Session" | "Agent" | "System" | "Prompt" | "Input")
 }
 
 pub const LEADER_DEFAULT: &str = "ctrl+x";
@@ -62,6 +62,24 @@ pub const DEFS: &[Def] = &[
     def("session.last", "ctrl+alt+g", "Navigate to last message", "Session"),
     def("session.queued_prompts", "<leader>q", "Manage queued prompts", "Session"),
     def("session.aside", "none", "Ask a side question", "Session"),
+    // OpenCode's model, variant (Lykos: effort) and agent (Lykos: specialist) actions.
+    def("model.list", "<leader>m", "List available models", "Agent"),
+    def("model.cycle_recent", "f2", "Next recently used model", "Agent"),
+    def("model.cycle_recent_reverse", "shift+f2", "Previous recently used model", "Agent"),
+    def("model.cycle_favorite", "none", "Next favorite model", "Agent"),
+    def("model.cycle_favorite_reverse", "none", "Previous favorite model", "Agent"),
+    def("variant.cycle", "ctrl+t", "Cycle thinking effort", "Agent"),
+    def("variant.list", "none", "List thinking effort levels", "Agent"),
+    def("agent.list", "<leader>a", "List specialists", "Agent"),
+    def("agent.cycle", "shift+tab", "Next specialist", "Agent"),
+    def("agent.cycle.reverse", "none", "Previous specialist", "Agent"),
+    def("usage.show", "none", "View usage", "Agent"),
+    def("mcp.list", "none", "List MCP servers", "Agent"),
+    def("provider.connect", "none", "Connect a provider", "Agent"),
+    def("theme.switch", "none", "List available themes", "System"),
+    def("theme.switch_mode", "none", "Switch between light and dark theme mode", "System"),
+    def("lykos.status", "<leader>s", "View status", "System"),
+    def("lykos.debug", "none", "View debug info", "System"),
     def("prompt.queue", "<leader>return", "Queue prompt", "Prompt"),
     def("prompt.editor", "<leader>e", "Open external editor", "Prompt"),
     def("prompt.images.view", "<leader>i", "View image attachments", "Prompt"),
@@ -125,6 +143,10 @@ pub const DEFS: &[Def] = &[
     def("queued_prompt.delete", "ctrl+d,delete", "Delete queued prompt", "Dialog"),
     def("stash.delete", "ctrl+d,delete", "Delete stash entry", "Dialog"),
     def("aside.copy", "c", "Copy the side answer", "Dialog"),
+    def("debug.copy", "c", "Copy the debug info", "Dialog"),
+    def("model.dialog.provider", "ctrl+a", "Open provider list from model dialog", "Dialog"),
+    def("model.dialog.favorite", "ctrl+f", "Toggle model favorite status", "Dialog"),
+    def("model.dialog.usage", "ctrl+u", "Open usage from model dialog", "Dialog"),
 ];
 
 pub fn index(id: &str) -> Option<usize> {

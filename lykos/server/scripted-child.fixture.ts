@@ -22,6 +22,27 @@ process.on("message", (msg: ToChild) => {
       if (msg.text === "fail") send({ kind: "aside", id: msg.id, error: "overloaded" });
       else send({ kind: "aside", id: msg.id, answer: `aside: ${msg.text}`, model: "faux/scripted" });
       break;
+    case "options":
+      send({
+        kind: "options",
+        id: msg.id,
+        options: {
+          model: "faux/scripted",
+          models: [
+            { provider: "faux", id: "scripted", name: "Scripted", contextWindow: 200000, reasoning: true },
+            { provider: "faux", id: "other", name: "Other", contextWindow: null, reasoning: false },
+          ],
+          effort: "medium",
+          efforts: ["off", "low", "medium", "high"],
+          specialist: "build",
+          specialists: [
+            { name: "build", description: "writes code" },
+            { name: "plan", description: "reads and plans" },
+          ],
+          providers: [{ name: "faux", auth: "api_key", reach: "reachable", reason: "scripted" }],
+        },
+      });
+      break;
     case "prompt": {
       if (holding && msg.text === "release") {
         holding = false;

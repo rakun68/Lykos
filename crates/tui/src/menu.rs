@@ -16,9 +16,17 @@ pub enum Local {
     StashList,
     StashPop,
     Help,
+    Models,
+    Effort,
+    Agents,
+    Themes,
+    Connect,
+    Status,
+    Mcps,
+    Debug,
 }
 
-pub const LOCAL: [(Local, &str, &str); 8] = [
+pub const LOCAL: [(Local, &str, &str); 15] = [
     (Local::Btw, "/btw", "Ask a side question; the answer stays out of the conversation"),
     (Local::Editor, "/editor", "Open the prompt in your editor"),
     (Local::Images, "/images", "View the images attached to the prompt"),
@@ -27,7 +35,26 @@ pub const LOCAL: [(Local, &str, &str); 8] = [
     (Local::StashList, "/stash list", "List stashed prompts"),
     (Local::StashPop, "/stash pop", "Pop the last stashed prompt"),
     (Local::Help, "/help", "Every key, and the config layer that set it"),
+    // OpenCode's slash names for its lists (`app.tsx`).
+    (Local::Models, "/models", "Switch model"),
+    (Local::Agents, "/agents", "Switch specialist"),
+    (Local::Themes, "/themes", "Switch theme"),
+    (Local::Connect, "/connect", "Connect a provider"),
+    (Local::Status, "/status", "View status"),
+    (Local::Mcps, "/mcps", "MCP servers"),
+    (Local::Debug, "/debug", "View debug info"),
 ];
+
+/// The session's own commands typed bare open their list; with an argument they go to the session.
+pub fn bare(name: &str) -> Option<Local> {
+    match name {
+        "/model" => Some(Local::Models),
+        "/effort" => Some(Local::Effort),
+        "/specialist" => Some(Local::Agents),
+        "/login" => Some(Local::Connect),
+        _ => None,
+    }
+}
 
 pub fn local(name: &str) -> Option<Local> {
     LOCAL.iter().find(|(_, n, _)| *n == name).map(|(l, _, _)| *l)

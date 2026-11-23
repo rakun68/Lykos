@@ -12,6 +12,7 @@ import {
   resolveSpecialistSwitch,
 } from "../session/specialist-switch.js";
 import { specialistStreamMessage } from "../session/specialist-stream.js";
+import { sessionOptions, type SessionOptions } from "../session/session-options.js";
 import { deleteSessionConversation } from "../session/mutations.js";
 import { transcriptDir } from "../session/transcript.js";
 import { allProjectSources, gatherSessions } from "../session/sources.js";
@@ -369,7 +370,17 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
     config,
     startedUtc: booted.startedAt,
   };
-  ui = input.createUi !== undefined ? input.createUi(uiOptions, session, (question) => askAside(session, state, question)) : createAgentUi(uiOptions);
+  const options = (): SessionOptions =>
+    sessionOptions({
+      cwd,
+      globalDir: defaultGlobalDir(),
+      session,
+      modelSpec,
+      modelRuntime,
+      specialist: specialistSwitcher.currentSpecialistName(),
+      providers: config.providers ?? {},
+    });
+  ui = input.createUi !== undefined ? input.createUi(uiOptions, session, (question) => askAside(session, state, question), options) : createAgentUi(uiOptions);
   const unsubUi = session.subscribe
     ? ui.attach({ subscribe: (fn) => session.subscribe!((ev) => fn(ev as import("../tui/s0.js").StreamEvent)) }, () => state)
     : undefined;

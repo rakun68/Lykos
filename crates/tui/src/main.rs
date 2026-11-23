@@ -7,6 +7,7 @@ mod history;
 mod keymap;
 mod menu;
 mod paste;
+mod prefs;
 mod stash;
 mod theme;
 mod view;
@@ -22,7 +23,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::Event as TermEvent;
-use lykos_client::{Client, Event, EventData, Options, SessionStatus, SessionSummary, Update};
+use lykos_client::{Client, Event, EventData, Options, SessionOptions, SessionStatus, SessionSummary, Update};
 use lykos_term::{Terminal, TerminalGuard};
 use serde_json::{json, Value};
 
@@ -44,6 +45,8 @@ enum Msg {
     Aside(String, Result<String, String>),
     /// `config.keybinds`' answer.
     Keybinds(Result<Value, String>),
+    /// `session.options`' answer.
+    Options(Result<SessionOptions, String>),
 }
 
 /// The input thread reads the terminal unless `pause` is set, and says so in `parked`: the external editor owns
@@ -108,6 +111,10 @@ fn run(args: Args) -> io::Result<()> {
     let mut app = App::new(args.cwd.clone());
     app.history = history::History::load(Some(PathBuf::from(&args.cwd).join(".lykos").join("history.json")));
     app.stash = stash::Stash::load(state_dir().map(|d| d.join("prompt-stash.jsonl")));
+    app.prefs = prefs::Prefs::load(state_dir().map(|d| d.join("state.json")));
+    if let Some(name) = app.prefs.theme.clone() {
+        theme::set(&name);
+    }
     app.input_cols = view::input_cols(&app, w);
     if std::env::var_os("BENCH_STREAM").is_some() {
         bench(&mut app, &mut term);
@@ -248,6 +255,10 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             app.on_keybinds(result);
             Vec::new()
         }
+        Msg::Options(result) => {
+            app.on_options(result);
+            Vec::new()
+        }
     }
 }
 
@@ -379,6 +390,9 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
             Action::Prompt { session, text } => client.request("session.prompt", json!({ "session": session, "text": text })).map(|_| Msg::Connected),
             Action::Interrupt { session } => client.request("session.interrupt", json!({ "session": session })).map(|_| Msg::Connected),
             Action::Answer { session, request_id, answer } => client.request("session.answer", json!({ "session": session, "requestId": request_id, "answer": answer })).map(|_| Msg::Connected),
+            Action::Options { session } => Ok(Msg::Options(
+                client.request("session.options", json!({ "session": session })).map_err(|e| e.to_string()).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())),
+            )),
             Action::Quit => return,
             // The main loop does these itself.
             Action::Aside { .. } | Action::ListFiles | Action::Copy(_) | Action::Editor(_) => continue,

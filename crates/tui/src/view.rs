@@ -4,11 +4,11 @@
 use lykos_client::{Item, Session, SessionStatus, ToolState};
 use lykos_term::{Attr, Buffer, Cell, Style};
 
-use crate::app::{App, Dialog, InputArea, Link};
+use crate::app::{App, Dialog, Info, InputArea, Link, List};
 use crate::editor::{Chip, Editor};
 use crate::keymap;
 use crate::menu::Menu;
-use crate::theme::{self, ACCENT, GOLD, LOVE, MUTED, OVERLAY, PINE, SURFACE};
+use crate::theme::{self, c};
 use crate::wrap::wrap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -35,6 +35,12 @@ impl Row {
 
 /// Draws the frame and returns where the cursor goes.
 pub fn draw(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let cursor = draw_screen(app, buf);
+    theme::paint_base(buf);
+    cursor
+}
+
+fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     let (w, h) = (buf.width, buf.height);
     if w < 10 || h < 6 {
         buf.text(0, 0, w, "lykos", theme::text());
@@ -70,12 +76,12 @@ fn home(app: &App, buf: &mut Buffer, pad: u16) -> Option<(u16, u16)> {
     let top = h.saturating_sub(block + 1) / 2;
     for (i, line) in logo.iter().enumerate() {
         let lw = line.chars().count() as u16;
-        buf.text((w.saturating_sub(lw)) / 2, top + i as u16, lw, line, Style::fg(ACCENT));
+        buf.text((w.saturating_sub(lw)) / 2, top + i as u16, lw, line, Style::fg(c().accent));
     }
     let y = top + logo.len() as u16 + 2;
     let cursor = prompt_box(app, buf, x, y, width, h);
     if let Some(n) = &app.notice {
-        buf.text(x + 1, y + prompt + 1, width.saturating_sub(1), n, Style::fg(LOVE));
+        buf.text(x + 1, y + prompt + 1, width.saturating_sub(1), n, Style::fg(c().love));
     }
     footer_line(app, buf, 0, h - 1, w, pad);
     cursor
@@ -90,7 +96,7 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
     // The chat in one large box (P5 decision 5): a border round the transcript, the title on its top edge.
     let box_h = prompt_y.saturating_sub(1);
     if box_h >= 3 {
-        buf.border(pad - 1, 0, inner_w + 2, box_h, Style::fg(OVERLAY));
+        buf.border(pad - 1, 0, inner_w + 2, box_h, Style::fg(c().overlay));
         let title = session.summary.title.as_deref().unwrap_or("New session");
         let title: String = format!(" {} ", first_line(title));
         buf.text(pad + 1, 0, inner_w.saturating_sub(4), &title, theme::subtle().bold());
@@ -117,7 +123,7 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         if scroll > 0 {
             let label = " Jump to latest ↓ (ctrl+alt+g) ";
             let lw = label.chars().count() as u16;
-            buf.text(pad + inner_w.saturating_sub(lw + 1), box_h - 1, lw, label, Style::fg(PINE));
+            buf.text(pad + inner_w.saturating_sub(lw + 1), box_h - 1, lw, label, Style::fg(c().pine));
         }
     }
     prompt_box(app, buf, pad, prompt_y, inner_w, h)
@@ -151,8 +157,8 @@ fn request_rows(app: &App) -> u16 {
 /// `component/prompt/index.tsx`: a left bar in the accent colour on a raised background, the input with a row of
 /// padding above, the metadata row, a half-block bottom edge, and the footer under it.
 fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h: u16) -> Option<(u16, u16)> {
-    let raised = Style::default().on(SURFACE);
-    let bar = Style::fg(if app.running() { GOLD } else { ACCENT }).on(SURFACE);
+    let raised = Style::default().on(c().surface);
+    let bar = Style::fg(if app.running() { c().gold } else { c().accent }).on(c().surface);
     let iw = input_width(width);
     let rows = app.editor.layout(iw);
     let (crow, ccol) = app.editor.locate(&rows, app.editor.cursor());
@@ -170,15 +176,15 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
     let mut ty = y + 1;
     if let Some(r) = app.current().and_then(|s| s.requests.first()) {
         let head = format!("{}: {}", r.title, first_line(&r.detail));
-        buf.text(tx, ty, width.saturating_sub(4), &head, Style::fg(GOLD).on(SURFACE).bold());
+        buf.text(tx, ty, width.saturating_sub(4), &head, Style::fg(c().gold).on(c().surface).bold());
         let opts: Vec<String> = r.options.iter().map(|o| format!("{} {}", o.value, o.label)).collect();
-        buf.text(tx, ty + 1, width.saturating_sub(4), &opts.join("   "), theme::subtle().on(SURFACE));
+        buf.text(tx, ty + 1, width.saturating_sub(4), &opts.join("   "), theme::subtle().on(c().surface));
         ty += req;
     }
     let mut cursor = None;
     if app.editor.is_empty() {
         let hint = if app.current().is_some() { "Ask anything…" } else { "Ask anything… \"Fix a TODO in the codebase\"" };
-        buf.text(tx, ty, width.saturating_sub(4), hint, Style::fg(MUTED).on(SURFACE));
+        buf.text(tx, ty, width.saturating_sub(4), hint, Style::fg(c().muted).on(c().surface));
         cursor = Some((tx, ty));
     }
     let selection = app.editor.selection();
@@ -198,9 +204,9 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
     metadata(app, buf, tx, meta_y, width.saturating_sub(4));
     // The bottom edge: `╹` under the bar, then `▀` in the box colour, so the box ends on a half cell.
     let edge_y = meta_y + 1;
-    buf.set(x, edge_y, Cell { ch: '╹', style: Style::fg(if app.running() { GOLD } else { ACCENT }) });
+    buf.set(x, edge_y, Cell { ch: '╹', style: Style::fg(if app.running() { c().gold } else { c().accent }) });
     for col in x + 1..x + width {
-        buf.set(col, edge_y, Cell { ch: '▀', style: Style::fg(SURFACE) });
+        buf.set(col, edge_y, Cell { ch: '▀', style: Style::fg(c().surface) });
     }
     if app.current().is_some() {
         footer_line(app, buf, x, edge_y + 1, width, 0);
@@ -218,12 +224,12 @@ fn input_row(editor: &Editor, buf: &mut Buffer, x: u16, y: u16, max: u16, row: c
     let mut one = [0u8; 4];
     for (i, ch) in editor.text()[row.start..row.end].char_indices() {
         let at = row.start + i;
-        let mut style = theme::text().on(SURFACE);
+        let mut style = theme::text().on(c().surface);
         if selection.is_some_and(|(s, e)| at >= s && at < e) {
-            style = style.on(OVERLAY);
+            style = style.on(c().overlay);
         }
         col = match editor.chip(ch) {
-            Some(chip) => buf.text(col, y, end.saturating_sub(col), &chip.label(), Style { fg: ACCENT, ..style }.bold()),
+            Some(chip) => buf.text(col, y, end.saturating_sub(col), &chip.label(), Style { fg: c().accent, ..style }.bold()),
             None => buf.text(col, y, end.saturating_sub(col), ch.encode_utf8(&mut one), style),
         };
     }
@@ -240,11 +246,11 @@ fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
     for (i, e) in m.entries.iter().enumerate() {
         let y = top + i as u16;
         let on = i == m.selected;
-        let bg = if on { ACCENT } else { OVERLAY };
+        let bg = if on { c().accent } else { c().overlay };
         buf.fill(x, y, width, 1, Style::default().on(bg));
-        buf.text(x + 1, y, label_w, &e.label, Style::fg(if on { SURFACE } else { theme::TEXT }).on(bg));
+        buf.text(x + 1, y, label_w, &e.label, Style::fg(if on { c().surface } else { c().text }).on(bg));
         if !e.detail.is_empty() {
-            buf.text(x + label_w + 3, y, width.saturating_sub(label_w + 4), first_line(&e.detail), Style::fg(if on { SURFACE } else { MUTED }).on(bg));
+            buf.text(x + label_w + 3, y, width.saturating_sub(label_w + 4), first_line(&e.detail), Style::fg(if on { c().surface } else { c().muted }).on(bg));
         }
     }
 }
@@ -310,10 +316,89 @@ fn dialog(app: &App, buf: &mut Buffer) {
             let keys = if images.len() > 1 { format!("← previous · next → · {close}") } else { close.clone() };
             (format!("Image {} of {}", index + 1, images.len()), vec![(path, theme::text())], None, keys)
         }
+        Dialog::List { list, query, selected } => {
+            let rows = app.list_rows(list, query);
+            let mut lines = Vec::new();
+            let mut at = None;
+            let mut group = "";
+            for (i, r) in rows.iter().enumerate() {
+                // `dialog-select.tsx` heads each category; a search shows none.
+                if !r.group.is_empty() && r.group != group {
+                    lines.push((r.group.clone(), theme::text().bold()));
+                }
+                group = &r.group;
+                if i == *selected {
+                    at = Some(lines.len());
+                }
+                let mark = if r.current { "● " } else { "  " };
+                let right = if r.favorite { format!("{} *", r.detail) } else { r.detail.clone() };
+                lines.push((columns(&format!("{mark}{}", r.title), &right, inner), theme::text()));
+            }
+            let (name, empty, extra) = match list {
+                List::Models => ("Select model", "No models: open a session first, or connect a provider", format!(" · {} favorite · {} providers", k("model.dialog.favorite"), k("model.dialog.provider"))),
+                List::Efforts => ("Select thinking effort", "This model has no effort levels, or no session is open", String::new()),
+                List::Agents => ("Select specialist", "No specialists: open a session first", String::new()),
+                List::Themes { .. } => ("Themes", "", String::new()),
+                List::Providers => ("Connect a provider", "No providers: open a session first", String::new()),
+            };
+            if lines.is_empty() {
+                lines.push((empty.to_string(), theme::muted()));
+            }
+            let title = if query.is_empty() { format!("{name}  type to search") } else { format!("{name}  {query}") };
+            (title, lines, at, format!("{} select{extra} · {close}", k("dialog.select.submit")))
+        }
+        Dialog::Info { info } => {
+            let row = |a: &str, b: String| (columns(a, &b, inner), theme::text());
+            let unknown = || "unknown".to_string();
+            let usage = app.current().and_then(|s| s.usage.clone()).unwrap_or_default();
+            let usd = |v: Option<f64>| v.map_or_else(unknown, |v| format!("${v:.2}"));
+            let no_mcp = vec![
+                ("No MCP servers".to_string(), theme::text()),
+                ("A Lykos session connects to none; Lykos is one itself (lykos mcp).".to_string(), theme::muted()),
+            ];
+            match info {
+                Info::Status => {
+                    let link = match &app.link {
+                        Link::Ready => "connected".to_string(),
+                        Link::Connecting => "connecting".to_string(),
+                        Link::Lost(m) | Link::Failed(m) => m.clone(),
+                    };
+                    let mut rows = vec![
+                        row("Engine server", link),
+                        row("Session", app.current().map_or_else(|| "none".into(), |s| format!("{:?}", s.summary.status).to_lowercase())),
+                        row("Model", app.model_now().unwrap_or_else(unknown)),
+                        row("Effort", app.effort_now().unwrap_or_else(|| "none".into())),
+                        row("Specialist", app.options.as_ref().map_or_else(unknown, |o| o.specialist.clone())),
+                        row("Theme", theme::c().name.to_string()),
+                    ];
+                    rows.extend(no_mcp);
+                    ("Status".into(), rows, None, close.clone())
+                }
+                Info::Mcp => ("MCP servers".into(), no_mcp, None, close.clone()),
+                Info::Usage => (
+                    "Usage".into(),
+                    vec![
+                        row("This session", usd(usage.run_usd)),
+                        row("Today", usd(usage.today_usd)),
+                        row("Calls", usage.calls.to_string()),
+                        row("Cache hit", usage.cache_hit_ratio.map_or_else(unknown, |r| format!("{}%", (r * 100.0).round()))),
+                        row("Context", context_label(app).unwrap_or_else(unknown)),
+                    ],
+                    None,
+                    close.clone(),
+                ),
+                Info::Debug => (
+                    "Debug  share this when reporting an issue".into(),
+                    app.debug_rows().into_iter().map(|(a, b)| row(a, b)).collect(),
+                    None,
+                    format!("{} copy · {close}", k("debug.copy")),
+                ),
+            }
+        }
         Dialog::Aside { question, answer, scroll } => {
             let (text, style) = match answer {
                 Ok(a) => (a.as_str(), theme::text()),
-                Err(e) => (e.as_str(), Style::fg(LOVE)),
+                Err(e) => (e.as_str(), Style::fg(c().love)),
             };
             let all = wrap(text, inner.max(1));
             let start = (*scroll).min(all.len().saturating_sub(room));
@@ -326,18 +411,18 @@ fn dialog(app: &App, buf: &mut Buffer) {
     let body = (lines.len().min(room) as u16).max(1);
     let dh = body + 4;
     let (x, y) = ((w - dw) / 2, h.saturating_sub(dh) / 2);
-    buf.fill(x, y, dw, dh, Style::default().on(SURFACE));
-    buf.text(x + 2, y + 1, dw.saturating_sub(4), &title, theme::text().on(SURFACE).bold());
+    buf.fill(x, y, dw, dh, Style::default().on(c().surface));
+    buf.text(x + 2, y + 1, dw.saturating_sub(4), &title, theme::text().on(c().surface).bold());
     for (i, (line, style)) in lines.iter().enumerate().skip(skip).take(body as usize) {
         let ly = y + 2 + (i - skip) as u16;
         if selected == Some(i) {
-            buf.fill(x + 1, ly, dw.saturating_sub(2), 1, Style::default().on(ACCENT));
-            buf.text(x + 2, ly, inner as u16, line, Style::fg(SURFACE).on(ACCENT));
+            buf.fill(x + 1, ly, dw.saturating_sub(2), 1, Style::default().on(c().accent));
+            buf.text(x + 2, ly, inner as u16, line, Style::fg(c().surface).on(c().accent));
         } else {
-            buf.text(x + 2, ly, inner as u16, line, style.on(SURFACE));
+            buf.text(x + 2, ly, inner as u16, line, style.on(c().surface));
         }
     }
-    buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), &keys, theme::muted().on(SURFACE));
+    buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), &keys, theme::muted().on(c().surface));
 }
 
 /// `left`, then `right` against the right edge of `width` columns; `left` is cut short to make room.
@@ -369,13 +454,13 @@ fn metadata(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16) {
     let usage = app.current().and_then(|s| s.usage.as_ref());
     let model = usage.and_then(|u| u.model.clone()).or_else(|| app.current().map(|s| s.summary.model.clone())).filter(|m| !m.is_empty());
     let Some(model) = model else {
-        buf.text(x, y, width, "lykos", theme::muted().on(SURFACE));
+        buf.text(x, y, width, "lykos", theme::muted().on(c().surface));
         return;
     };
-    let mut col = buf.text(x, y, width, &model, theme::text().on(SURFACE));
+    let mut col = buf.text(x, y, width, &model, theme::text().on(c().surface));
     if let Some(effort) = usage.and_then(|u| u.effort.as_deref()).filter(|e| !e.is_empty()) {
-        col = buf.text(col, y, (x + width).saturating_sub(col), " · ", theme::muted().on(SURFACE));
-        buf.text(col, y, (x + width).saturating_sub(col), effort, Style::fg(GOLD).on(SURFACE).bold());
+        col = buf.text(col, y, (x + width).saturating_sub(col), " · ", theme::muted().on(c().surface));
+        buf.text(col, y, (x + width).saturating_sub(col), effort, Style::fg(c().gold).on(c().surface).bold());
     }
 }
 
@@ -393,21 +478,21 @@ fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16
             buf.text(x + 1, y, left_w, &s, theme::muted());
         }
         Link::Failed(m) | Link::Lost(m) => {
-            buf.text(x + 1, y, left_w, m, Style::fg(LOVE));
+            buf.text(x + 1, y, left_w, m, Style::fg(c().love));
         }
         Link::Ready if app.running() => {
-            let mut col = buf.text(x + 1, y, left_w, &SPINNER[(app.tick % 10) as usize].to_string(), Style::fg(ACCENT));
-            col = buf.text(col + 1, y, left_w, "esc", if app.armed.is_some() { Style::fg(GOLD) } else { theme::text() });
+            let mut col = buf.text(x + 1, y, left_w, &SPINNER[(app.tick % 10) as usize].to_string(), Style::fg(c().accent));
+            col = buf.text(col + 1, y, left_w, "esc", if app.armed.is_some() { Style::fg(c().gold) } else { theme::text() });
             let rest = if app.armed.is_some() { " again to interrupt" } else { " interrupt" };
-            buf.text(col, y, left_w, rest, if app.armed.is_some() { Style::fg(GOLD) } else { theme::muted() });
+            buf.text(col, y, left_w, rest, if app.armed.is_some() { Style::fg(c().gold) } else { theme::muted() });
         }
         Link::Ready => {
             let (text, style) = if app.leader.is_some() {
-                ("ctrl+x  enter queue · e editor · i images · q queued".to_string(), Style::fg(GOLD))
+                ("ctrl+x  enter queue · e editor · i images · q queued".to_string(), Style::fg(c().gold))
             } else if app.search.is_some() {
-                ("history search · ctrl+r older · enter send · any key keeps it".to_string(), Style::fg(GOLD))
+                ("history search · ctrl+r older · enter send · any key keeps it".to_string(), Style::fg(c().gold))
             } else if let Some(n) = &app.notice {
-                (n.clone(), Style::fg(LOVE))
+                (n.clone(), Style::fg(c().love))
             } else {
                 (app.cwd.clone(), theme::muted())
             };
@@ -419,7 +504,7 @@ fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16
         let label = format!("{} /btw", SPINNER[(app.tick % 10) as usize]);
         let lw = label.chars().count() as u16;
         if lw + rw + 4 <= width {
-            buf.text(x + width - rw - lw - 3, y, lw, &label, Style::fg(ACCENT));
+            buf.text(x + width - rw - lw - 3, y, lw, &label, Style::fg(c().accent));
         }
     }
     if let Some(r) = right.filter(|_| rw + 2 <= width) {
@@ -454,12 +539,12 @@ fn group(n: u64) -> String {
 fn transcript(app: &App, session: &Session, width: u16) -> Vec<Row> {
     let w = width as usize;
     let mut rows = Vec::new();
-    let user_bg = Style::default().on(SURFACE);
+    let user_bg = Style::default().on(c().surface);
     for item in &session.items {
         match item {
             // A user message: a bar in the accent colour on a raised background, padded a row above and below.
             Item::User(text) | Item::Followup(text) => {
-                let bar = Style::fg(if matches!(item, Item::User(_)) { ACCENT } else { MUTED }).on(SURFACE);
+                let bar = Style::fg(if matches!(item, Item::User(_)) { c().accent } else { c().muted }).on(c().surface);
                 rows.push(Row { indent: 0, text: String::new(), style: theme::text(), bar: Some(bar), bg: Some(user_bg) });
                 for line in wrap(text, w.saturating_sub(3)) {
                     rows.push(Row { indent: 2, text: line, style: theme::text(), bar: Some(bar), bg: Some(user_bg) });
@@ -474,7 +559,7 @@ fn transcript(app: &App, session: &Session, width: u16) -> Vec<Row> {
                 rows.push(Row::blank());
             }
             Item::Thinking(text) => {
-                let style = Style { fg: MUTED, attr: Attr::ITALIC, ..Style::default() };
+                let style = Style { fg: c().muted, attr: Attr::ITALIC, ..Style::default() };
                 for line in wrap(&format!("Thinking: {}", text.trim()), w.saturating_sub(3)) {
                     rows.push(Row::plain(3, line, style));
                 }
@@ -482,9 +567,9 @@ fn transcript(app: &App, session: &Session, width: u16) -> Vec<Row> {
             }
             Item::Tool { name, summary, state, .. } => {
                 let (icon, style) = match state {
-                    ToolState::Running => (SPINNER[(app.tick % 10) as usize], Style::fg(ACCENT)),
+                    ToolState::Running => (SPINNER[(app.tick % 10) as usize], Style::fg(c().accent)),
                     ToolState::Ok => (tool_icon(name), theme::muted()),
-                    ToolState::Error => ('✗', Style::fg(LOVE)),
+                    ToolState::Error => ('✗', Style::fg(c().love)),
                 };
                 let label = format!("{icon} {name} {summary}");
                 for line in wrap(&label, w.saturating_sub(3)) {
@@ -568,6 +653,29 @@ mod tests {
     }
 
     #[test]
+    fn the_model_list_marks_the_model_in_use_and_a_light_theme_paints_the_background() {
+        let mut app = App::new("C:/work".into());
+        app.connected();
+        app.options = Some(
+            serde_json::from_value(serde_json::json!({
+                "model": "p/a", "effort": null, "efforts": [], "specialist": "build", "specialists": [], "providers": [],
+                "models": [{ "provider": "p", "id": "a", "name": "Alpha", "contextWindow": 200000, "reasoning": true }]
+            }))
+            .unwrap(),
+        );
+        app.dialog = Some(Dialog::List { list: List::Models, query: String::new(), selected: 0 });
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("Select model") && s.contains("● Alpha") && s.contains("p · 200K · Reasoning"), "{s}");
+        assert_eq!(buf.get(0, 29).style.bg, lykos_term::Color::Reset, "a dark theme leaves the terminal's background");
+        theme::set("rose-pine-dawn");
+        draw(&app, &mut buf);
+        assert_eq!(buf.get(0, 29).style.bg, c().base.unwrap(), "a light one paints it");
+        theme::set("sky");
+    }
+
+    #[test]
     fn the_palette_and_the_help_show_each_actions_keys_and_where_they_were_set() {
         let mut app = App::new("C:/work".into());
         app.connected();
@@ -582,7 +690,7 @@ mod tests {
         let s = screen(&buf);
         assert!(s.contains("Press ctrl+p to see all available actions"), "{s}");
         assert!(s.contains("Leader") && s.contains("ctrl+x · default"), "{s}");
-        app.dialog = Some(Dialog::Help { scroll: 40 });
+        app.dialog = Some(Dialog::Help { scroll: 60 });
         draw(&app, &mut buf);
         assert!(screen(&buf).contains("Undo in input"), "scrolled to the input actions");
     }

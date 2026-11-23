@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import { aclIsOwnerOnly, engineAddress, readOrCreateKey } from "./address.js";
 import { connectEngine, type EngineConnection } from "./client.js";
 import { EngineServer } from "./server.js";
-import { PROTOCOL_VERSION, type Event, type KeybindsResult, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type Event, type KeybindsResult, type SessionOptions, type SessionSummary } from "./protocol.js";
 import { WorkspaceTrustError } from "../gate/trust.js";
 
 const fixture = fileURLToPath(new URL("./scripted-child.fixture.ts", import.meta.url));
@@ -140,7 +140,11 @@ describe("engine server", () => {
       assert.deepEqual(await a.request("session.aside", { session: s.id, text: "why?" }), { answer: "aside: why?", model: "faux/scripted" });
       await assert.rejects(a.request("session.aside", { session: s.id, text: "fail" }), /overloaded/);
       await assert.rejects(a.request("session.aside", { session: s.id, text: " " }), /needs text/);
-      assert.deepEqual(seen, [], "an aside sends no event");
+      const options = await a.request<SessionOptions>("session.options", { session: s.id });
+      assert.equal(options.model, "faux/scripted");
+      assert.deepEqual(options.models.map((m) => m.id), ["scripted", "other"]);
+      assert.deepEqual([options.effort, options.specialist], ["medium", "build"]);
+      assert.deepEqual(seen, [], "an aside and the options send no event");
       assert.deepEqual((await a.request<SessionSummary[]>("sessions.list"))[0], before);
       a.close();
     } finally {

@@ -43,6 +43,46 @@ pub struct UsageData {
     pub calls: u64,
 }
 
+/// What `session.options` answers: the lists a client's pickers show for one live session.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOptions {
+    /// `provider/id`.
+    pub model: String,
+    pub models: Vec<ModelOption>,
+    /// None: the model has no effort control.
+    pub effort: Option<String>,
+    pub efforts: Vec<String>,
+    pub specialist: String,
+    pub specialists: Vec<SpecialistOption>,
+    pub providers: Vec<ProviderOption>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOption {
+    pub provider: String,
+    pub id: String,
+    pub name: String,
+    pub context_window: Option<f64>,
+    pub reasoning: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpecialistOption {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderOption {
+    pub name: String,
+    pub auth: String,
+    /// "reachable", "unreachable" or "unknown".
+    pub reach: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CommandInfo {
     /// As typed, with its slash.

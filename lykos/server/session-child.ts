@@ -15,6 +15,7 @@ import type { InteractiveHandle, LineSource } from "../session/interactive.js";
 import { TerminalAsk, type AskRequest } from "../tools/ask.js";
 import { slashCandidates } from "../tui/commands.js";
 import type { AsideAnswer } from "../session/aside.js";
+import type { SessionOptions } from "../session/session-options.js";
 import { createEventUi } from "./event-ui.js";
 import type { EventData, RequestData, SessionStatus } from "./protocol.js";
 
@@ -25,6 +26,7 @@ export type ToChild =
   | { kind: "interrupt" }
   | { kind: "answer"; requestId: string; answer: string }
   | { kind: "aside"; id: string; text: string }
+  | { kind: "options"; id: string }
   | { kind: "close" };
 
 /** What a session child sends the server. */
@@ -32,6 +34,7 @@ export type FromChild =
   | { kind: "event"; data: EventData }
   | { kind: "status"; status: SessionStatus; ledgerSessionId?: string; model?: string }
   | { kind: "aside"; id: string; answer?: string; model?: string; error?: string }
+  | { kind: "options"; id: string; options?: SessionOptions; error?: string }
   | { kind: "exit"; ok: boolean; message?: string; ledgerSessionId?: string };
 
 export interface ChildStartParams {
@@ -95,6 +98,7 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
   let requestSeq = 0;
   let current: string | undefined;
   let aside: ((question: string) => Promise<AsideAnswer>) | undefined;
+  let options: (() => SessionOptions) | undefined;
   const emit = (data: EventData): void => send({ kind: "event", data });
   const status = (s: SessionStatus): void => send({ kind: "status", status: s });
 
@@ -126,6 +130,16 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
         );
         break;
       }
+      case "options":
+        if (options === undefined) send({ kind: "options", id: msg.id, error: "the session has not started" });
+        else {
+          try {
+            send({ kind: "options", id: msg.id, options: options() });
+          } catch (err) {
+            send({ kind: "options", id: msg.id, error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        break;
       case "close":
         lines.close();
         for (const resolve of answers.values()) resolve(null);
@@ -195,8 +209,9 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
     lineSource: lines,
     approvalGate: gate,
     askHuman: ask,
-    createUi: (opts, session, askAside) => {
+    createUi: (opts, session, askAside, listOptions) => {
       aside = askAside;
+      options = listOptions;
       send({ kind: "status", status: "idle", ledgerSessionId: session.sessionId, model: opts.header.model });
       // The surface registered this session's skills and extension commands before it made the UI.
       emit({ type: "commands", commands: slashCandidates("/skill:").map((c) => ({ name: c.name, description: c.description, source: c.source })) });

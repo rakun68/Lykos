@@ -96,6 +96,7 @@ import { deriveSessionName } from "./preview.js";
 import { gitStatus, resolveProject } from "./identity.js";
 import { deleteSessionConversation } from "./mutations.js";
 import { ingestDelegateSnapshot, parseProviderModel, writeBootRow, type DelegateSnapshot, type IngestOpts } from "../ledger/ingest.js";
+import type { SessionOptions } from "./session-options.js";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createLykosModelRuntime, forwardRotationsToSink, RotationRelay, type Provider } from "./model-runtime.js";
 import {
@@ -1408,7 +1409,8 @@ export interface RunInteractiveStandaloneSessionInput {
   askHuman?: AskHuman;
   /** P5 #35: the engine server's session turns what the surface shows into protocol events. Default: `createAgentUi`. */
   /** P5 #38: `aside` answers a side question from this session's context, its call counted in the session's usage. */
-  createUi?: (opts: AgentUiOptions, session: InteractiveSession, aside: (question: string) => Promise<AsideAnswer>) => AgentUi;
+  /** P5 #41: `options` is what the client's pickers list for this session, read when called. */
+  createUi?: (opts: AgentUiOptions, session: InteractiveSession, aside: (question: string) => Promise<AsideAnswer>, options: () => SessionOptions) => AgentUi;
   /**
    * T162: native providers registered on this run's model runtime — tests
    * only, as for `runStandaloneTask`. The scripted-model session's faux

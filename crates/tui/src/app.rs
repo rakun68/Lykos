@@ -5,13 +5,15 @@ use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use lykos_client::{Event, EventData, Session, SessionStatus, Store};
+use lykos_client::{Event, EventData, Session, SessionOptions, SessionStatus, Store};
 
 use crate::editor::{Chip, Editor};
 use crate::history::History;
 use crate::keymap::{self, Keymap};
 use crate::menu::{self, Local, Menu, Pick, Trigger};
+use crate::prefs::Prefs;
 use crate::stash::Stash;
+use crate::theme;
 
 /// A request for the server, or for the terminal, made by `main`.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +32,8 @@ pub enum Action {
     Copy(String),
     /// Opens the prompt in the external editor; its text comes back as `App::edited_externally`.
     Editor(String),
+    /// Asks the session what the lists show (`session.options`); the answer comes back as `App::on_options`.
+    Options { session: String },
     Quit,
 }
 
@@ -63,6 +67,58 @@ pub enum Dialog {
     Palette { query: String, selected: usize },
     /// Every key, and the layer that set it.
     Help { scroll: usize },
+    /// OpenCode's select dialogs for models, variants, agents, themes and providers.
+    List { list: List, query: String, selected: usize },
+    /// OpenCode's status, usage, MCP and debug dialogs.
+    Info { info: Info },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum List {
+    /// `dialog-model.tsx`.
+    Models,
+    /// `dialog-variant.tsx`: Lykos's thinking effort.
+    Efforts,
+    /// `dialog-agent.tsx`: Lykos's primary specialists.
+    Agents,
+    /// `dialog-theme-list.tsx`: the theme open when the list opened comes back on Esc.
+    Themes { initial: &'static str },
+    /// `dialog-integration.tsx`: each provider and whether Lykos can reach it.
+    Providers,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Info {
+    Status,
+    Usage,
+    Mcp,
+    Debug,
+}
+
+/// One row of a list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    /// What choosing it sends or sets.
+    pub value: String,
+    pub title: String,
+    pub detail: String,
+    /// The heading it shows under; empty for none.
+    pub group: String,
+    /// In use now.
+    pub current: bool,
+    pub favorite: bool,
+}
+
+/// `model-options.tsx` `tokens`: 1M, 200K.
+pub fn tokens(v: f64) -> String {
+    if v >= 1_000_000.0 {
+        let m = (v / 100_000.0).round() / 10.0;
+        if m.fract() == 0.0 { format!("{m:.0}M") } else { format!("{m:.1}M") }
+    } else if v >= 1000.0 {
+        format!("{}K", (v / 1000.0).round())
+    } else {
+        format!("{v}")
+    }
 }
 
 /// The old TUI's ctrl+r (`lykos/tui/screen/raw-line-source.ts`): entries starting with what was typed, newest first.
@@ -89,6 +145,9 @@ pub struct App {
     pub session: Option<String>,
     pub editor: Editor,
     pub keymap: Keymap,
+    /// What the lists last showed for the session.
+    pub options: Option<SessionOptions>,
+    pub prefs: Prefs,
     pub history: History,
     pub stash: Stash,
     pub menu: Option<Menu>,
@@ -125,6 +184,8 @@ impl App {
             session: None,
             editor: Editor::default(),
             keymap: Keymap::default(),
+            options: None,
+            prefs: Prefs::default(),
             history: History::default(),
             stash: Stash::default(),
             menu: None,
@@ -208,8 +269,11 @@ impl App {
                 }
             }
             let mut out = self.flush();
-            if matches!(event.data, EventData::Commands { .. }) && self.menu.as_ref().is_some_and(|m| m.trigger == Trigger::Slash) {
-                out.extend(self.refresh_menu());
+            if matches!(event.data, EventData::Commands { .. }) {
+                if self.menu.as_ref().is_some_and(|m| m.trigger == Trigger::Slash) {
+                    out.extend(self.refresh_menu());
+                }
+                out.push(Action::Options { session: event.session.clone() });
             }
             return out;
         }
@@ -235,6 +299,288 @@ impl App {
     pub fn on_aside(&mut self, question: String, answer: Result<String, String>) {
         self.asides = self.asides.saturating_sub(1);
         self.dialog = Some(Dialog::Aside { question, answer, scroll: 0 });
+    }
+
+    /// `session.options`' answer: what the lists show.
+    pub fn on_options(&mut self, result: Result<SessionOptions, String>) {
+        match result {
+            Ok(o) => self.options = Some(o),
+            Err(e) => self.notice = Some(format!("the lists: {e}")),
+        }
+    }
+
+    /// The model in use: the status line's, else what the lists last said.
+    pub fn model_now(&self) -> Option<String> {
+        let usage = self.current().and_then(|s| s.usage.as_ref()).and_then(|u| u.model.clone());
+        usage.or_else(|| self.options.as_ref().map(|o| o.model.clone())).filter(|m| !m.is_empty())
+    }
+
+    pub fn effort_now(&self) -> Option<String> {
+        let usage = self.current().and_then(|s| s.usage.as_ref()).and_then(|u| u.effort.clone());
+        usage.or_else(|| self.options.as_ref().and_then(|o| o.effort.clone())).filter(|e| !e.is_empty())
+    }
+
+    /// A live session to send a command to, and a refresh of the lists for it.
+    fn live(&self) -> Option<String> {
+        self.session.clone().filter(|_| self.link == Link::Ready && matches!(self.status(), Some(s) if s != SessionStatus::Starting && s != SessionStatus::Closed))
+    }
+
+    /// Opens a list on the row in use, and asks the session for fresh lists.
+    fn open_list(&mut self, list: List) -> Vec<Action> {
+        let selected = self.list_rows(&list, "").iter().position(|r| r.current).unwrap_or(0);
+        let refresh = !matches!(list, List::Themes { .. });
+        self.dialog = Some(Dialog::List { list, query: String::new(), selected });
+        match self.live() {
+            Some(session) if refresh => vec![Action::Options { session }],
+            _ => Vec::new(),
+        }
+    }
+
+    /// A session command a list runs, sent as if typed: it takes effect on the next request.
+    fn command(&mut self, text: String) -> Vec<Action> {
+        match self.live() {
+            Some(session) => vec![Action::Prompt { session, text }],
+            None => {
+                self.notice = Some("Open a session first".into());
+                Vec::new()
+            }
+        }
+    }
+
+    /// The rows of a list for its query, in the order shown.
+    pub fn list_rows(&self, list: &List, query: &str) -> Vec<Row> {
+        let row = |value: String, title: String, detail: String, group: &str, current: bool, favorite: bool| Row { value, title, detail, group: group.to_string(), current, favorite };
+        let o = self.options.as_ref();
+        let rows: Vec<Row> = match list {
+            // `dialog-model.tsx`: Favorites, then Recent, then each provider's models; a search ranks them all,
+            // favorites first.
+            List::Models => {
+                let now = self.model_now();
+                let models = o.map(|o| o.models.as_slice()).unwrap_or_default();
+                let make = |m: &lykos_client::ModelOption, group: &str| {
+                    let key = format!("{}/{}", m.provider, m.id);
+                    let mut detail = m.provider.clone();
+                    if let Some(c) = m.context_window {
+                        detail.push_str(&format!(" · {}", tokens(c)));
+                    }
+                    if m.reasoning {
+                        detail.push_str(" · Reasoning");
+                    }
+                    let fav = self.prefs.favorite.contains(&key);
+                    row(key.clone(), m.name.clone(), detail, group, now.as_deref() == Some(key.as_str()), fav)
+                };
+                let find = |key: &str| models.iter().find(|m| format!("{}/{}", m.provider, m.id) == key);
+                if query.is_empty() {
+                    let mut out: Vec<Row> = self.prefs.favorite.iter().filter_map(|k| find(k)).map(|m| make(m, "Favorites")).collect();
+                    out.extend(self.prefs.recent.iter().filter(|k| !self.prefs.favorite.contains(k)).filter_map(|k| find(k)).map(|m| make(m, "Recent")));
+                    let shown: Vec<String> = out.iter().map(|r| r.value.clone()).collect();
+                    let mut rest: Vec<&lykos_client::ModelOption> = models.iter().filter(|m| !shown.contains(&format!("{}/{}", m.provider, m.id))).collect();
+                    rest.sort_by(|a, b| a.provider.cmp(&b.provider));
+                    out.extend(rest.into_iter().map(|m| make(m, &m.provider)));
+                    out
+                } else {
+                    let mut scored: Vec<(bool, u32, Row)> = models
+                        .iter()
+                        .filter_map(|m| {
+                            let s = [menu::score(query, &m.name), menu::score(query, &m.provider), menu::score(query, &m.id)];
+                            s.iter().any(Option::is_some).then(|| {
+                                let r = make(m, "");
+                                (r.favorite, s.iter().flatten().sum(), r)
+                            })
+                        })
+                        .collect();
+                    scored.sort_by_key(|(f, s, _)| (std::cmp::Reverse(*f), std::cmp::Reverse(*s)));
+                    return scored.into_iter().map(|(_, _, r)| r).collect();
+                }
+            }
+            List::Efforts => {
+                let now = self.effort_now();
+                o.map(|o| o.efforts.clone()).unwrap_or_default().into_iter().map(|e| row(e.clone(), e.clone(), String::new(), "", now.as_deref() == Some(e.as_str()), false)).collect()
+            }
+            List::Agents => o
+                .map(|o| o.specialists.iter().map(|s| row(s.name.clone(), s.name.clone(), s.description.clone(), "", s.name == o.specialist, false)).collect())
+                .unwrap_or_default(),
+            List::Themes { initial } => theme::PALETTES.iter().map(|p| row(p.name.into(), p.name.into(), if p.light() { "light".into() } else { "dark".into() }, "", p.name == *initial, false)).collect(),
+            List::Providers => o
+                .map(|o| o.providers.iter().map(|p| row(p.name.clone(), p.name.clone(), format!("{} · {}", p.reach, p.reason), "", false, false)).collect())
+                .unwrap_or_default(),
+        };
+        if query.is_empty() || matches!(list, List::Models) {
+            return rows;
+        }
+        let mut scored: Vec<(u32, Row)> = rows.into_iter().filter_map(|r| Some((menu::score(query, &r.title)? * 2 + menu::score(query, &r.detail).unwrap_or(0), r))).collect();
+        scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+        scored.into_iter().map(|(_, r)| r).collect()
+    }
+
+    fn list_key(&mut self, key: &KeyEvent, ids: &[&str], list: List, mut query: String, mut selected: usize, page: usize) -> Vec<Action> {
+        let has = |id: &str| ids.contains(&id);
+        let rows = self.list_rows(&list, &query);
+        let n = rows.len();
+        let chosen = rows.get(selected).cloned();
+        if has("dialog.close") {
+            if let List::Themes { initial } = list {
+                theme::set(initial);
+            }
+            self.dialog = None;
+            return Vec::new();
+        }
+        if has("dialog.select.submit") {
+            let Some(r) = chosen else { return Vec::new() };
+            self.dialog = None;
+            return match list {
+                List::Models => {
+                    self.prefs.used(&r.value);
+                    self.command(format!("/model {}", r.value))
+                }
+                List::Efforts => self.command(format!("/effort {}", r.value)),
+                List::Agents => self.switch_specialist(r.value),
+                List::Themes { .. } => {
+                    theme::set(&r.value);
+                    self.prefs.set_theme(&r.value);
+                    Vec::new()
+                }
+                List::Providers => self.connect(&r.value),
+            };
+        }
+        if let List::Models = list {
+            if has("model.dialog.favorite") {
+                if let Some(r) = chosen {
+                    self.prefs.toggle_favorite(&r.value);
+                }
+                return Vec::new();
+            }
+            if has("model.dialog.provider") {
+                return self.open_list(List::Providers);
+            }
+            if has("model.dialog.usage") {
+                self.dialog = Some(Dialog::Info { info: Info::Usage });
+                return Vec::new();
+            }
+        }
+        let before = (query.clone(), selected);
+        if has("dialog.select.prev") {
+            selected = if n == 0 { 0 } else { (selected + n - 1) % n };
+        } else if has("dialog.select.next") {
+            selected = if n == 0 { 0 } else { (selected + 1) % n };
+        } else if has("dialog.select.page_up") {
+            selected = selected.saturating_sub(page);
+        } else if has("dialog.select.page_down") {
+            selected = (selected + page).min(n.saturating_sub(1));
+        } else if key.code == KeyCode::Backspace {
+            query.pop();
+            selected = 0;
+        } else if let KeyCode::Char(c) = key.code {
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+                query.push(c);
+                selected = 0;
+            }
+        }
+        // `dialog-theme-list.tsx`: the theme under the cursor shows at once; with an empty query, the first again.
+        if let List::Themes { initial } = list {
+            if (query.clone(), selected) != before {
+                let rows = self.list_rows(&list, &query);
+                theme::set(rows.get(selected).map_or(initial, |r| r.value.as_str()));
+            }
+        }
+        self.dialog = Some(Dialog::List { list, query, selected });
+        Vec::new()
+    }
+
+    fn switch_specialist(&mut self, name: String) -> Vec<Action> {
+        let out = self.command(format!("/specialist {name}"));
+        if let (false, Some(o)) = (out.is_empty(), self.options.as_mut()) {
+            o.specialist = name;
+        }
+        out
+    }
+
+    /// `/login` signs in to an OAuth provider from here; an API key is typed in a terminal, where it is not shown.
+    fn connect(&mut self, name: &str) -> Vec<Action> {
+        let oauth = self.options.as_ref().and_then(|o| o.providers.iter().find(|p| p.name == name)).is_some_and(|p| p.auth.contains("oauth"));
+        if oauth {
+            return self.command(format!("/login {name}"));
+        }
+        self.notice = Some(format!("{name} takes an API key: run `lykos login {name} --api-key` in a terminal"));
+        Vec::new()
+    }
+
+    /// `local.tsx` `model.cycle` and `cycleFavorite`: the next model of the list after the one in use, wrapping.
+    fn cycle_model(&mut self, favorites: bool, direction: isize) -> Vec<Action> {
+        let known: Vec<String> = self.options.as_ref().map(|o| o.models.iter().map(|m| format!("{}/{}", m.provider, m.id)).collect()).unwrap_or_default();
+        let list: Vec<String> = if favorites { &self.prefs.favorite } else { &self.prefs.recent }.iter().filter(|m| known.contains(m)).cloned().collect();
+        if list.is_empty() {
+            if favorites {
+                self.notice = Some("Add a favorite model to use this shortcut".into());
+            }
+            return Vec::new();
+        }
+        let n = list.len() as isize;
+        let next = match self.model_now().and_then(|m| list.iter().position(|x| *x == m)) {
+            Some(i) => (i as isize + direction).rem_euclid(n),
+            None if direction > 0 => 0,
+            None => n - 1,
+        };
+        let model = list[next as usize].clone();
+        if favorites {
+            self.prefs.used(&model);
+        }
+        self.command(format!("/model {model}"))
+    }
+
+    /// `variant.cycle`: the next effort level, wrapping (Lykos has no "default" level to return to).
+    fn cycle_effort(&mut self) -> Vec<Action> {
+        let efforts = self.options.as_ref().map(|o| o.efforts.clone()).unwrap_or_default();
+        if efforts.is_empty() {
+            self.notice = Some(if self.options.is_some() { "this model has no effort levels" } else { "Open a session first" }.into());
+            return Vec::new();
+        }
+        let next = match self.effort_now().and_then(|e| efforts.iter().position(|x| *x == e)) {
+            Some(i) => (i + 1) % efforts.len(),
+            None => 0,
+        };
+        if let Some(o) = self.options.as_mut() {
+            o.effort = Some(efforts[next].clone());
+        }
+        self.command(format!("/effort {}", efforts[next]))
+    }
+
+    /// `agent.cycle`: the old TUI's Shift+Tab, through the primary specialists.
+    fn cycle_specialist(&mut self, direction: isize) -> Vec<Action> {
+        let Some(o) = self.options.as_ref() else {
+            self.notice = Some("Open a session first".into());
+            return Vec::new();
+        };
+        let names: Vec<String> = o.specialists.iter().map(|s| s.name.clone()).collect();
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let n = names.len() as isize;
+        let next = match names.iter().position(|x| *x == o.specialist) {
+            Some(i) => (i as isize + direction).rem_euclid(n),
+            None => 0,
+        };
+        self.switch_specialist(names[next as usize].clone())
+    }
+
+    /// `theme.switch_mode`: the light or dark palette paired with this one.
+    fn switch_mode(&mut self) {
+        let pair = theme::c().pair;
+        if theme::set(pair) {
+            self.prefs.set_theme(pair);
+        }
+    }
+
+    /// The debug dialog's rows (`dialog-debug.tsx`), as copied.
+    pub fn debug_rows(&self) -> Vec<(&'static str, String)> {
+        let terminal = ["TERM_PROGRAM", "WT_SESSION", "TERM"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.is_empty()).map(|s| if *v == "WT_SESSION" { "Windows Terminal".to_string() } else { s }));
+        vec![
+            ("Version", format!("lykos-tui {}", env!("CARGO_PKG_VERSION"))),
+            ("OS", format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)),
+            ("Terminal", terminal.unwrap_or_else(|| "unknown".into())),
+            ("Session ID", self.current().and_then(|s| s.summary.ledger_session_id.clone()).unwrap_or_else(|| "n/a".into())),
+            ("Model", self.model_now().unwrap_or_else(|| "n/a".into())),
+        ]
     }
 
     /// The external editor closed; `None` when it failed.
@@ -435,6 +781,23 @@ impl App {
                     e.replace(0, 0, "/btw ");
                 }
             }
+            "model.list" => return Some(self.open_list(List::Models)),
+            "model.cycle_recent" => return Some(self.cycle_model(false, 1)),
+            "model.cycle_recent_reverse" => return Some(self.cycle_model(false, -1)),
+            "model.cycle_favorite" => return Some(self.cycle_model(true, 1)),
+            "model.cycle_favorite_reverse" => return Some(self.cycle_model(true, -1)),
+            "variant.cycle" => return Some(self.cycle_effort()),
+            "variant.list" => return Some(self.open_list(List::Efforts)),
+            "agent.list" => return Some(self.open_list(List::Agents)),
+            "agent.cycle" => return Some(self.cycle_specialist(1)),
+            "agent.cycle.reverse" => return Some(self.cycle_specialist(-1)),
+            "provider.connect" => return Some(self.open_list(List::Providers)),
+            "theme.switch" => return Some(self.open_list(List::Themes { initial: theme::c().name })),
+            "theme.switch_mode" => self.switch_mode(),
+            "usage.show" => self.dialog = Some(Dialog::Info { info: Info::Usage }),
+            "mcp.list" => self.dialog = Some(Dialog::Info { info: Info::Mcp }),
+            "lykos.status" => self.dialog = Some(Dialog::Info { info: Info::Status }),
+            "lykos.debug" => self.dialog = Some(Dialog::Info { info: Info::Debug }),
             "prompt.queue" => return Some(self.submit_queued()),
             "prompt.editor" => return Some(self.run_local(Local::Editor)),
             "prompt.images.view" => return Some(self.run_local(Local::Images)),
@@ -508,6 +871,9 @@ impl App {
         if let Dialog::Palette { query, selected } = dialog {
             return self.palette_key(key, &ids, query, selected, now, page);
         }
+        if let Dialog::List { list, query, selected } = dialog {
+            return self.list_key(key, &ids, list, query, selected, page);
+        }
         if has("dialog.close") {
             self.dialog = None;
             return Vec::new();
@@ -515,7 +881,17 @@ impl App {
         let step = |sel: usize, n: usize, up: bool| if n == 0 { 0 } else if up { (sel + n - 1) % n } else { (sel + 1) % n };
         let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
-            Dialog::Palette { .. } => {}
+            Dialog::Palette { .. } | Dialog::List { .. } => {}
+            Dialog::Info { info } => {
+                if info == Info::Debug && has("debug.copy") {
+                    let text = self.debug_rows().iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
+                    self.notice = Some("Debug info copied to clipboard".into());
+                    return vec![Action::Copy(text)];
+                }
+                if has("dialog.select.submit") {
+                    self.dialog = None;
+                }
+            }
             Dialog::Help { scroll } => {
                 let scroll = if prev {
                     scroll.saturating_sub(1)
@@ -804,6 +1180,14 @@ impl App {
             Local::Editor => return vec![Action::Editor(self.editor.expanded())],
             Local::Btw => self.notice = Some("/btw needs a question".into()),
             Local::Help => self.dialog = Some(Dialog::Help { scroll: 0 }),
+            Local::Models => return self.open_list(List::Models),
+            Local::Effort => return self.open_list(List::Efforts),
+            Local::Agents => return self.open_list(List::Agents),
+            Local::Themes => return self.open_list(List::Themes { initial: theme::c().name }),
+            Local::Connect => return self.open_list(List::Providers),
+            Local::Status => self.dialog = Some(Dialog::Info { info: Info::Status }),
+            Local::Mcps => self.dialog = Some(Dialog::Info { info: Info::Mcp }),
+            Local::Debug => self.dialog = Some(Dialog::Info { info: Info::Debug }),
         }
         Vec::new()
     }
@@ -889,7 +1273,7 @@ impl App {
     fn submit(&mut self) -> Vec<Action> {
         let typed = self.editor.expanded();
         let trimmed = typed.trim();
-        if let Some(local) = menu::local(trimmed).filter(|l| *l != Local::Btw) {
+        if let Some(local) = menu::local(trimmed).filter(|l| *l != Local::Btw).or_else(|| menu::bare(trimmed)) {
             self.editor.reset();
             return self.run_local(local);
         }
@@ -1299,5 +1683,107 @@ mod tests {
         app.on_mouse(click(15), t + Duration::from_secs(1));
         app.on_mouse(click(15), t + Duration::from_millis(1100));
         assert_eq!(app.editor.copy().as_deref(), Some("bar"));
+    }
+
+    fn with_options() -> App {
+        let mut app = idle();
+        let out = app.on_event(&Event { event: "commands".into(), session: "s1".into(), seq: 2, data: EventData::Commands { commands: Vec::new() } });
+        assert!(out.contains(&Action::Options { session: "s1".into() }), "a booted session's lists are asked for");
+        let o: SessionOptions = serde_json::from_value(serde_json::json!({
+            "model": "p/a",
+            "models": [
+                { "provider": "p", "id": "a", "name": "Alpha", "contextWindow": 200000, "reasoning": true },
+                { "provider": "p", "id": "b", "name": "Beta", "contextWindow": null, "reasoning": false },
+                { "provider": "q", "id": "c", "name": "Gamma", "contextWindow": 1000000, "reasoning": false }
+            ],
+            "effort": "medium",
+            "efforts": ["off", "low", "medium", "high"],
+            "specialist": "build",
+            "specialists": [{ "name": "build", "description": "writes" }, { "name": "plan", "description": "reads" }],
+            "providers": [{ "name": "anthropic", "auth": "oauth_subscription", "reach": "reachable", "reason": "a stored credential" }, { "name": "openai", "auth": "api_key", "reach": "unreachable", "reason": "no key" }]
+        }))
+        .unwrap();
+        app.on_options(Ok(o));
+        app
+    }
+
+    fn sent(out: &[Action]) -> Vec<String> {
+        out.iter().filter_map(|a| if let Action::Prompt { text, .. } = a { Some(text.clone()) } else { None }).collect()
+    }
+
+    #[test]
+    fn the_model_list_groups_favorites_and_recent_searches_and_sends_the_choice() {
+        let mut app = with_options();
+        app.prefs.recent = vec!["q/c".into()];
+        app.prefs.favorite = vec!["p/b".into()];
+        press(&mut app, ctrl('x'));
+        let out = press(&mut app, key(KeyCode::Char('m')));
+        assert_eq!(out, [Action::Options { session: "s1".into() }], "opening it refreshes the lists");
+        let rows = app.list_rows(&List::Models, "");
+        assert_eq!(rows.iter().map(|r| (r.value.as_str(), r.group.as_str())).collect::<Vec<_>>(), [("p/b", "Favorites"), ("q/c", "Recent"), ("p/a", "p")]);
+        assert!(matches!(app.dialog, Some(Dialog::List { selected: 2, .. })), "on the model in use");
+        assert_eq!(rows[1].detail, "q · 1M");
+        typed(&mut app, "gam");
+        assert_eq!(app.list_rows(&List::Models, "gam")[0].value, "q/c");
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert_eq!(sent(&out), ["/model q/c"]);
+        assert_eq!(app.prefs.recent[0], "q/c");
+        assert!(app.dialog.is_none());
+        // ctrl+f in the list: the favorite goes.
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('m')));
+        press(&mut app, key(KeyCode::Home));
+        app.dialog = Some(Dialog::List { list: List::Models, query: String::new(), selected: 0 });
+        press(&mut app, ctrl('f'));
+        assert!(app.prefs.favorite.is_empty());
+    }
+
+    #[test]
+    fn ctrl_t_cycles_effort_shift_tab_the_specialist_and_f2_the_recent_models() {
+        let mut app = with_options();
+        assert_eq!(sent(&press(&mut app, ctrl('t'))), ["/effort high"]);
+        assert_eq!(sent(&press(&mut app, ctrl('t'))), ["/effort off"], "past the last, the first");
+        assert_eq!(sent(&press(&mut app, KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))), ["/specialist plan"]);
+        assert_eq!(sent(&press(&mut app, KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))), ["/specialist build"]);
+        assert!(press(&mut app, key(KeyCode::F(2))).is_empty(), "no recent models, nothing to cycle");
+        app.prefs.recent = vec!["p/a".into(), "q/c".into(), "gone/x".into()];
+        assert_eq!(sent(&press(&mut app, key(KeyCode::F(2)))), ["/model q/c"], "a model no longer listed is skipped");
+        app.run("model.cycle_favorite", Instant::now(), 10);
+        assert_eq!(app.notice.as_deref(), Some("Add a favorite model to use this shortcut"));
+    }
+
+    #[test]
+    fn bare_session_commands_open_their_list_and_with_an_argument_go_to_the_session() {
+        let mut app = with_options();
+        typed(&mut app, "/effort");
+        app.menu = None;
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.dialog, Some(Dialog::List { list: List::Efforts, selected: 2, .. })));
+        press(&mut app, key(KeyCode::Esc));
+        typed(&mut app, "/effort low");
+        app.menu = None;
+        assert_eq!(sent(&press(&mut app, key(KeyCode::Enter))), ["/effort low"]);
+        // A provider with a browser sign-in signs in from here; an API key is typed in a terminal.
+        assert_eq!(sent(&app.connect("anthropic")), ["/login anthropic"]);
+        assert!(app.connect("openai").is_empty());
+        assert!(app.notice.as_deref().unwrap().contains("lykos login openai --api-key"));
+    }
+
+    #[test]
+    fn the_theme_list_previews_restores_on_escape_and_mode_switches_to_the_pair() {
+        let mut app = idle();
+        theme::set("sky");
+        app.run("theme.switch", Instant::now(), 10);
+        press(&mut app, key(KeyCode::Up));
+        assert_ne!(theme::c().name, "sky", "the theme under the cursor shows");
+        press(&mut app, key(KeyCode::Esc));
+        assert_eq!(theme::c().name, "sky", "esc puts it back");
+        app.run("theme.switch", Instant::now(), 10);
+        typed(&mut app, "latte");
+        assert_eq!(theme::c().name, "catppuccin-latte");
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.prefs.theme.as_deref(), Some("catppuccin-latte"));
+        app.run("theme.switch_mode", Instant::now(), 10);
+        assert_eq!(theme::c().name, "catppuccin-mocha");
     }
 }
