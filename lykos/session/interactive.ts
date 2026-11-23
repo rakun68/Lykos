@@ -1148,7 +1148,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       chrome(`lykos: blocked — ${verdict.reason}`);
       return false;
     }
-    ui?.writeUser(text);
+    ui?.writeUser(text, rawText);
     // T53: recorded after the budget guard, because a blocked turn is not a
     // turn — nothing was sent, and a transcript that claimed otherwise would
     // replay a prompt the model never saw.

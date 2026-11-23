@@ -18,7 +18,9 @@ export async function runServe(cwd: string, args: string[]): Promise<number> {
     idleSeconds = loadConfig({ cwd }).resolved.tui.server_idle_seconds;
   }
   const { EngineServer } = await import("../server/server.js");
-  const server = new EngineServer({ idleSeconds });
+  // Tests only: a scripted session child in place of `lykos server-session`, as {command, args}.
+  const child = process.env.LYKOS_ENGINE_CHILD ? (JSON.parse(process.env.LYKOS_ENGINE_CHILD) as { command: string; args: string[] }) : undefined;
+  const server = new EngineServer({ idleSeconds, ...(child !== undefined ? { child } : {}) });
   try {
     await server.listen();
   } catch (err) {

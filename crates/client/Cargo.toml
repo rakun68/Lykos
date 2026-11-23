@@ -9,3 +9,7 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+# The handshake's HMAC-SHA256 and the pipe name's hash; nonces from the OS.
+sha2 = { version = "0.11", default-features = false }
+hmac = { version = "0.13", default-features = false }
+getrandom = "0.4"

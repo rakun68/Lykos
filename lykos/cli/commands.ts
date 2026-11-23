@@ -1007,10 +1007,9 @@ export const COMMANDS: readonly Command[] = [
     name: "serve",
     aliases: [],
     help: [
-      "lykos serve [--idle SECONDS]",
-      "            run the engine server the new TUI connects to, on a named pipe (Windows) or a Unix socket",
-      "            (Linux) open only to this user; exits after tui.server_idle_seconds with no client and no",
-      "            session running. A client starts it when none runs. See docs/reference/engine-server.md",
+      "  serve     the engine server the new TUI connects to [--idle SECONDS]: a named pipe (Windows) or Unix",
+      "            socket (Linux) open only to this user; exits after tui.server_idle_seconds with no client and",
+      "            nothing running. A client starts it when none runs. See docs/reference/engine-server.md",
     ],
     run: async (args, ctx) => {
       const { runServe } = await import("./serve.js");

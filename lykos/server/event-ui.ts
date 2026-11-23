@@ -58,9 +58,9 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
     get streamed() {
       return streamed;
     },
-    writeUser(text) {
+    writeUser(text, typed) {
       assistantOpen = false;
-      hooks.emit({ type: "message.user", text });
+      hooks.emit({ type: "message.user", text: typed ?? text });
     },
     endTurn() {
       if (assistantOpen) hooks.emit({ type: "message.end" });
@@ -77,7 +77,7 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
     renderApproval(req: ApprovalRequest) {
       return `${req.kind}: ${req.summary}`;
     },
-    attach(source, getState) {
+    attach(source) {
       return source.subscribe((ev: StreamEvent) => {
         switch (ev.type) {
           case "agent_start":
@@ -87,7 +87,6 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
             if (assistantOpen) hooks.emit({ type: "message.end" });
             assistantOpen = false;
             hooks.status("idle");
-            usage(getState(), session.sessionId);
             break;
           case "message_update": {
             const ame = ev.assistantMessageEvent;

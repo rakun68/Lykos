@@ -70,6 +70,9 @@ Printed at the end of every run:
 
 The ledger lives in `.lykos/ledger.db` as SQLite in WAL mode.
 
+A session under the engine server (P5 #35) writes the same rows as any interactive session: the
+server adds no table and no column.
+
 ### 2.1 Core Tables
 - `projects`: Registered repositories (`id`, `name`, `root_path`, `first_commit_sha`).
 - `tasks`: Human-level task goals (`id`, `project_id`, `state`, `created_utc`, `closed_utc`). `state` is `open`, `done`, `abandoned`, or `disputed` (T203).

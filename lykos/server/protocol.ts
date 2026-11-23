@@ -59,6 +59,8 @@ export type Response = { id: number; result: unknown } | { id: number; error: { 
 export type Method =
   | "server.info"
   | "server.shutdown"
+  /** Closes every other connection: how a client's reconnect is tested, and how a stuck client is let go. */
+  | "server.disconnect"
   | "sessions.list"
   | "session.start"
   | "session.prompt"

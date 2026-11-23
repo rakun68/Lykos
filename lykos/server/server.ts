@@ -25,6 +25,8 @@ import { LineReader, send, serverHandshake } from "./wire.js";
 export interface EngineServerOptions {
   address?: EngineAddress;
   idleSeconds: number;
+  /** How long to wait for the first client before the idle rule applies. Default 30 s; tests shorten it. */
+  firstClientMs?: number;
   /** How a session child is started; tests start a scripted one. */
   child?: ChildCommand;
   /** Extra environment for session children, over this process's. */
@@ -52,6 +54,8 @@ interface Client {
 }
 
 const CHILD_EXIT_GRACE_MS = 10_000;
+/** How long a server waits for its first client: the client that started it allows 20 s for it to listen. */
+const FIRST_CLIENT_MS = 30_000;
 
 export class EngineServer {
   readonly address: EngineAddress;
@@ -65,6 +69,7 @@ export class EngineServer {
   /** Resolves with the reason once the server has stopped. */
   readonly exited: Promise<string> = new Promise((resolve) => (this.resolveExited = resolve));
   private readonly startedAt = new Date().toISOString();
+  private everConnected = false;
   private readonly logStream: WriteStream | undefined;
   private readonly log: (line: string) => void;
 
@@ -74,7 +79,7 @@ export class EngineServer {
     this.key = readOrCreateKey(this.address);
     if (opts.log) this.log = opts.log;
     else {
-      this.logStream = createWriteStream(this.address.logPath, { flags: "a" });
+      this.logStream = createWriteStream(this.address.logPath, { flags: "a", mode: 0o600 });
       this.log = (line) => this.logStream?.write(`${new Date().toISOString()} ${line}\n`);
     }
   }
@@ -110,6 +115,7 @@ export class EngineServer {
     }
     const client: Client = { socket, name: hs.client, follows: null };
     this.clients.add(client);
+    this.everConnected = true;
     this.checkIdle();
     socket.on("close", () => {
       this.clients.delete(client);
@@ -148,6 +154,15 @@ export class EngineServer {
       case "server.shutdown":
         setImmediate(() => void this.stop("shutdown requested"));
         return { stopping: true };
+      case "server.disconnect": {
+        let closed = 0;
+        for (const c of this.clients) {
+          if (c === client) continue;
+          c.socket.destroy();
+          closed++;
+        }
+        return { closed };
+      }
       case "sessions.list":
         return [...this.sessions.values()].map((s) => s.summary);
       case "session.start":
@@ -321,6 +336,13 @@ export class EngineServer {
       return;
     }
     if (this.idleTimer) return;
+    // Before its first client the idle time is not the clock: the client that started this server has not connected
+    // yet, and with `0` it would find it gone. A server nobody connects to still exits.
+    if (!this.everConnected) {
+      const wait = Math.max(this.opts.firstClientMs ?? FIRST_CLIENT_MS, this.opts.idleSeconds * 1000);
+      this.idleTimer = setTimeout(() => void this.stop(`no client within ${wait / 1000}s of starting`), wait);
+      return;
+    }
     const ms = this.opts.idleSeconds * 1000;
     this.idleTimer = setTimeout(() => void this.stop(`idle for ${this.opts.idleSeconds}s`), ms);
   }
@@ -331,8 +353,13 @@ export class EngineServer {
     this.stopping = (async () => {
       if (this.idleTimer) clearTimeout(this.idleTimer);
       this.log(`stopping: ${reason}`);
-      await new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
-      for (const c of this.clients) c.socket.end();
+      // close() waits for every open connection, so the clients are told to go first; one that does not is dropped.
+      const closed = new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
+      for (const c of this.clients) {
+        c.socket.end();
+        setTimeout(() => c.socket.destroy(), 1000).unref();
+      }
+      await closed;
       const exits = [...this.sessions.values()].map((s) => {
         this.toChild(s, { kind: "close" });
         const timer = setTimeout(() => s.child.kill(), CHILD_EXIT_GRACE_MS);

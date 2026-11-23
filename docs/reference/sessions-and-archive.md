@@ -224,6 +224,12 @@ transcript; images travel to the session child in the request's `cli.images`.
 
 ## 3. Standalone Execution Shape
 
+**Server sessions (P5 #35).** A session the new TUI opens runs under the engine server, one
+`lykos server-session` child each ([engine-server.md](engine-server.md) §3). It is the same
+interactive session, with the same ledger row and archive; only its approvals, questions and
+output travel over the server's protocol. A server that exits closes its idle sessions, and each
+is resumable like any other.
+
 Lykos runs in-process on Node using Pi's `@earendil-works/pi-coding-agent` SDK directly via
 `createAgentSession()`.
 

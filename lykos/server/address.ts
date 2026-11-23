@@ -4,13 +4,14 @@
  * One server per user: the address and the key both live under the user's run directory, `~/.lykos/run`, or
  * `LYKOS_ENGINE_DIR` (tests, and a second server for one user). Windows listens on a named pipe whose name is a
  * hash of that directory; Linux on a Unix socket inside it. The directory is 0700 and the key file 0600 on Linux;
- * on Windows both sit in the user's profile, which other accounts cannot read. The key is what refuses another
+ * on Windows the key file is given an owner-only ACL when it is created. The key is what refuses another
  * account: a named pipe's default ACL lets other users open it for reading, and the handshake asks every client to
  * prove it read this file.
  */
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 
 export interface EngineAddress {
@@ -45,11 +46,20 @@ export function ensureEngineDir(dir: string): void {
 export function readOrCreateKey(address: EngineAddress): Buffer {
   ensureEngineDir(address.dir);
   if (!existsSync(address.keyPath)) {
+    // Written whole under a private name, then linked into place: a client never reads a half-written key, and
+    // of two servers started at once the second link fails and both use the first key.
+    const tmp = `${address.keyPath}.${process.pid}.tmp`;
+    writeFileSync(tmp, "", { mode: 0o600, flag: "wx" });
     try {
-      writeFileSync(address.keyPath, randomBytes(32).toString("hex"), { mode: 0o600, flag: "wx" });
+      // Windows ignores the mode: the file inherits its directory's ACL, which outside the profile (a
+      // LYKOS_ENGINE_DIR under C:\Workspace, say) can let every signed-in user read it. Owner-only before the key is in it.
+      if (process.platform === "win32") ownerOnly(tmp);
+      writeFileSync(tmp, randomBytes(32).toString("hex"));
+      linkSync(tmp, address.keyPath);
     } catch (err) {
-      // Two clients started at once: the other one wrote it first, and that key is the one.
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    } finally {
+      rmSync(tmp, { force: true });
     }
   }
   if (process.platform !== "win32" && (statSync(address.keyPath).mode & 0o077) !== 0) {
@@ -58,4 +68,9 @@ export function readOrCreateKey(address: EngineAddress): Buffer {
   const key = Buffer.from(readFileSync(address.keyPath, "utf8").trim(), "hex");
   if (key.length !== 32) throw new Error(`${address.keyPath} does not hold a 32-byte key`);
   return key;
+}
+
+/** Replaces a Windows file's ACL with one entry: full control for the current user. */
+function ownerOnly(path: string): void {
+  execFileSync("icacls", [path, "/inheritance:r", "/grant:r", `${userInfo().username}:F`], { stdio: "ignore", windowsHide: true });
 }

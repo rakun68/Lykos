@@ -48,7 +48,7 @@ import type { RawPathRules } from "../gate/path-rules.js";
 import { REVIEW_ENGINES } from "./types.js";
 import { CONTAINMENT_LEVELS } from "../containment/request.js";
 import type { ContainmentLevel } from "../containment/containment.js";
-import { defaultSearchEndpoint, defaultSearchKeyEnv } from "../tools/web-search.js";
+import { defaultSearchEndpoint, defaultSearchKeyEnv } from "../tools/web-search-providers.js";
 
 export interface LoadConfigOptions {
   /** Project working directory. Defaults to process.cwd(). */

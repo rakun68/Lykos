@@ -540,3 +540,15 @@ _Avoid_: failover, key cycling, fallback (unqualified)
 **Cooldown**:
 A span during which a credential is skipped, set when it hits a rate or usage limit.
 _Avoid_: block, ban, backoff
+
+### The engine server
+
+**Engine server**:
+The one `lykos serve` process per user that runs every interactive session and serves them to the
+TUI and the desktop app over a local pipe or socket.
+_Avoid_: daemon, backend, host, server (unqualified)
+
+**Server session**:
+An interactive session running under the engine server, in a `lykos server-session` child of its
+own.
+_Avoid_: remote session, attached session

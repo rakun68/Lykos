@@ -1,8 +1,9 @@
 // The engine server (P5 #35) against a scripted session child: the handshake, events in order to two clients,
 // resync after a drop, and when it exits.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -15,12 +16,13 @@ import { WorkspaceTrustError } from "../gate/trust.js";
 const fixture = fileURLToPath(new URL("./scripted-child.fixture.ts", import.meta.url));
 const child = { command: process.execPath, args: ["--import", import.meta.resolve("tsx"), fixture] };
 
-function setup(idleSeconds = 60, trusted = true): { server: EngineServer; key: Buffer; dir: string } {
+function setup(idleSeconds = 60, trusted = true, firstClientMs?: number): { server: EngineServer; key: Buffer; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), "lykos-engine-"));
   const address = engineAddress(dir);
   const server = new EngineServer({
     address,
     idleSeconds,
+    ...(firstClientMs !== undefined ? { firstClientMs } : {}),
     child,
     log: () => {},
     trust: async (cwd, flag) => {
@@ -144,6 +146,24 @@ describe("engine server", () => {
     assert.ok(Date.now() - t < 1000, `exited in ${Date.now() - t} ms`);
   });
 
+  it("with idle 0, waits for its first client, and exits when none comes", async () => {
+    const { server, key } = setup(0, true, 1500);
+    await server.listen();
+    let exited = false;
+    void server.exited.then(() => (exited = true));
+    await new Promise((r) => setTimeout(r, 700));
+    assert.equal(exited, false, "the client that started it has time to connect");
+    const a = await connectEngine(server.address, key);
+    a.close();
+    assert.equal(await server.exited, "idle for 0s");
+
+    const lone = setup(0, true, 500);
+    await lone.server.listen();
+    const t = Date.now();
+    assert.equal(await lone.server.exited, "no client within 0.5s of starting");
+    assert.ok(Date.now() - t >= 400, `exited after ${Date.now() - t} ms`);
+  });
+
   it("waits the idle time, and never exits while a session runs", async () => {
     const { server, key } = setup(1);
     await server.listen();
@@ -167,6 +187,17 @@ describe("engine server", () => {
     assert.ok(waited >= 900 && waited < 3000, `waited ${waited} ms for an idle time of 1 s`);
   });
 
+  it("stops on server.shutdown while a client stays connected", async () => {
+    const { server, key } = setup(60);
+    await server.listen();
+    const a = await connectEngine(server.address, key);
+    const t = Date.now();
+    await a.request("server.shutdown");
+    assert.equal(await server.exited, "shutdown requested");
+    assert.ok(Date.now() - t < 3000, `stopped in ${Date.now() - t} ms`);
+    await a.closed;
+  });
+
   it("refuses a second server on the same address", async () => {
     const { server, dir } = setup();
     await server.listen();
@@ -183,6 +214,19 @@ describe("engine server", () => {
     const address = engineAddress(dir);
     writeFileSync(address.keyPath, "00".repeat(32), { mode: 0o644 });
     assert.throws(() => readOrCreateKey(address), /readable by other users/);
+  });
+
+  it("gives a new key file an owner-only ACL on Windows", { skip: process.platform !== "win32" }, () => {
+    const address = engineAddress(mkdtempSync(join(tmpdir(), "lykos-engine-")));
+    readOrCreateKey(address);
+    // icacls prints the path, then one "<account>:<rights>" entry per line, then a summary line.
+    const entries = execFileSync("icacls", [address.keyPath], { encoding: "utf8" })
+      .replace(address.keyPath, "")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.includes(":("));
+    assert.deepEqual(entries.map((e) => e.split(":(")[0]!.split("\\").at(-1)), [userInfo().username], entries.join("; "));
+    assert.ok(!entries[0]!.includes("(I)"), "not inherited");
   });
 });
 

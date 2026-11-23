@@ -26,7 +26,7 @@ after(async () => {
   await model.close();
 });
 
-function world(): { workspace: string; env: NodeJS.ProcessEnv; dir: string } {
+function world(): { root: string; workspace: string; env: NodeJS.ProcessEnv; dir: string } {
   const root = mkdtempSync(join(tmpdir(), "lykos-server-session-"));
   const home = join(root, "home");
   const workspace = join(root, "workspace");
@@ -51,6 +51,7 @@ function world(): { workspace: string; env: NodeJS.ProcessEnv; dir: string } {
   }
   model.reset();
   return {
+    root,
     workspace,
     dir: join(root, "run"),
     env: { HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), LYKOS_CREDENTIALS_DB: dbPath },
@@ -112,6 +113,8 @@ describe("a real session on the engine server", () => {
       await c.request("session.close", { session: s.id });
       const closed = await until(status("closed"), "closed");
       c.close();
+      // `crates/client`'s store is tested against this stream: LYKOS_RECORD_EVENTS=<file> rewrites it.
+      if (process.env.LYKOS_RECORD_EVENTS) writeFileSync(process.env.LYKOS_RECORD_EVENTS, events.map((e) => `${JSON.stringify(e).split(JSON.stringify(w.root).slice(1, -1)).join("/fixture")}\n`).join(""));
       assert.ok(closed.data.type === "session.status");
       const ledgerId = closed.data.session.ledgerSessionId!;
       await new Promise((r) => setTimeout(r, 500));

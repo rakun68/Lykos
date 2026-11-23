@@ -13,6 +13,7 @@ It never writes its own state to `.pi/`.
 ```text
 ~/.lykos/
   config.yaml                  User global configuration overrides
+  run/                         The engine server: engine.key, engine.log, engine.sock (Linux)
   projects.json                Registry of known projects and roots
 
 .lykos/                        Project-local state (gitignored except tracked policies)
@@ -54,6 +55,8 @@ The `lykos` executable provides the following commands:
 | `stop` | `lykos stop <id>` (T243): asks the session's owner to stop it through the ledger, which the owner polls; waits up to 10 s. JSON with `next` |
 | `mcp` | Start Lykos as an MCP worker server over standard IO. Each tool call runs a delegated session (the one `lykos run` starts) in a `lykos session-child` process of its own, so a crash or a stray write cannot reach the server or its stdout. The four tools keep their names and `brief`; inputs gain `containment`, `session_id` and `write_in_place`, results gain `containment`, `runtime`, `branch`, `commits`, `write_in_place`, `note`, `skipped_extensions` and `denied`; progress streams as MCP notifications. [mcp.md](mcp.md) is the contract |
 | `session-child` | Internal: the process one MCP call runs in. It reads one JSON request line on stdin and subsequent steer lines, and writes JSON progress, question, and result lines on stdout. Not for typing; started by `lykos mcp` |
+| `serve` | `lykos serve [--idle SECONDS]` (P5 #35): the engine server the new TUI connects to, on a named pipe (Windows) or a Unix socket (Linux) open only to this user. Exits after `tui.server_idle_seconds` (`--idle` overrides) with no client and nothing running. A client starts it when none answers; a second one finds the first and exits 0. See [engine-server.md](engine-server.md) |
+| `server-session` | Internal: the process one engine server session runs in, started by `lykos serve` with an IPC channel |
 | `show <session-id>` | Print or inspect an archived session transcript, with the gate's command, verdict, exit code, the flaky tests its rerun found (and whether the session edited their file) and a bounded output excerpt, which credential served the session's calls per provider (`pool credential <label>`, or `no pool credential (<auth mode>)` for a key from outside Lykos's pool, from the ledger's `calls` rows; `--json` carries `credentials`; T186), the commits the session made through `commit` (short id, subject and file count, `files unmeasured` where the count could not be taken; `--json` carries `commits` with the id as recorded - the full id, or the abbreviated one git printed when the full one could not be read - the message and files changed or null; T179), and the turns that changed files with the checkpoint before each (a turn with none is flagged missing; a delegated session's removed worktree falls back to the repository holding the ledger, where the checkpoint ref lives); each post-edit run with the text the model saw on failure; the `edit` tool's calls, successes and failures with the post-edit failures per successful edit (`edit calls`), and its failures by reason (`edit fails`: `not_found`, `not_unique`, `overlap`, `unread`, `stale`, `other`, the non-zero ones; `unmeasured` where the transcript cannot say, T168); seal events from the session and its child sessions (`--json` carries `seal_events`); each `/rewind` and the undone branch it left, or the turns a summarize replaced and its note, their turns and prompts (`--json` carries `rewinds`; T263, T265); and the task list as the session left it |
 | `resume <session-id>` | Resume an existing session, continuing its conversation transcript: its active branch, without the turns a rewind undid (T264). `--fork` (T266) continues instead in a copy of it at its current point, a new session (`forked_from` the session and its last turn, the same task), and leaves the session as it is (`sessions-and-archive.md` §2.1.1) |
 | `sessions` | Interactive session picker / listing |
@@ -622,6 +625,12 @@ ui:
   completion_position: "above"
   tool_result_preview: false
   tool_wait_limit_seconds: 300
+
+# The engine server (P5 #35, engine-server.md §4): how long `lykos serve` stays up
+# with no client connected and no session starting, running or waiting. It waits at
+# least 30 s for its first client whatever this says.
+tui:
+  server_idle_seconds: 60
 ```
 
 ---
@@ -805,6 +814,9 @@ These environment variables participate in the standard config precedence hierar
 - `LYKOS_TRUST_SOURCE`: Set by `lykos mcp` for each `session-child` it starts: how the server established trust (`stored`, `flag` or `prompt`). A claim only: the child checks the user trust store itself, so it can pass the gate as `flag` and never upgrades to `stored` ([mcp.md](mcp.md#trust)).
 - `LYKOS_SESSION_PROGRESS_MS`: The heartbeat interval, in milliseconds, of an MCP call's progress notifications (default 15000).
 - `LYKOS_TRUST_WORKSPACE`: If `1`, a headless run passes the trust gate for this run without writing the store. It never authorises running a workspace's own binaries or loading its own extensions in a delegated session: only the user-level trust store does (see [lsp.md](lsp.md#trust-and-workspace-binaries-t171)). A project already in the store reports `stored` even with this set.
+- `LYKOS_ENGINE_DIR`: The engine server's run directory (default `~/.lykos/run`): its key, its log, and on Linux its socket. A second directory is a second server ([engine-server.md](engine-server.md) §5).
+- `LYKOS_SERVE_CMD`: The command the Rust client starts a server with, as a JSON array.
+- `LYKOS_ENGINE_CHILD`, `LYKOS_RECORD_EVENTS`: Tests only (engine-server.md §5).
 - `PI_CODING_AGENT_DIR`: Root for Pi packages and agent definitions.
 - `DEEPSEEK_API_KEY`: API credential for DeepSeek provider.
 - `ANTHROPIC_API_KEY`: API credential for Anthropic provider.

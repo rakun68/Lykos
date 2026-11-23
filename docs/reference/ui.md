@@ -17,6 +17,10 @@ Lykos provides a zero-dependency, pure Node terminal user interface operating ac
 3. **Live Watch Surface (`lykos watch`):** A multi-panel dashboard monitoring in-flight or
    historical sessions.
 
+P5 replaces the full-screen surface with a Rust client (`crates/tui`, ADR-0063) on the engine
+server (`lykos serve`, [engine-server.md](engine-server.md)). The client crate `crates/client`
+connects to it, starts it when none answers, and rebuilds each session from its event stream.
+
 ---
 
 ## 1. Themes & Color Resolution

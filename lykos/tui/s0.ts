@@ -328,7 +328,8 @@ export interface AgentUiOptions {
 export interface AgentUi {
   view: ConversationView;
   streamed: boolean;
-  writeUser(text: string): void;
+  /** `typed` is what the person typed, without the notices riding in front of it (P5 #35: the new TUI shows that). */
+  writeUser(text: string, typed?: string): void;
   /** Optional: called once a turn (started by writeUser, possibly extended by steers) has fully ended — success, error, or abort alike. The fullscreen surface uses this as the safety net that stops its animated "Working..." indicator even for a turn that produced no visible content at all; the append-only renderer has no such state to clear and does not implement it. */
   endTurn?(): void;
   /**
