@@ -28,6 +28,11 @@ impl History {
         History { path, entries: entries[skip..].to_vec(), index: 0, draft: None }
     }
 
+    /// Moving through the entries (not on the draft).
+    pub fn browsing(&self) -> bool {
+        self.index < 0
+    }
+
     pub fn reset(&mut self) {
         self.index = 0;
         self.draft = None;

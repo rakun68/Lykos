@@ -41,6 +41,10 @@ pub enum Action {
     Options { session: String },
     /// Any other request; its answer comes back as `App::on_reply` with `then` (P5 #42).
     Call { method: &'static str, params: Value, then: Then },
+    /// Opens a terminal in the pane (P5 #48); `main` starts its shell, at the pane's size.
+    NewTerminal,
+    /// `terminal.suspend`: the TUI stops until the shell brings it back (not on Windows).
+    Suspend,
     Quit,
 }
 
@@ -65,6 +69,10 @@ pub enum Then {
     WorktreesChanged,
     /// `vcs.diff`, for the diff viewer.
     Diff,
+    /// A call whose answer shows nothing; a failure is the notice.
+    Quiet,
+    /// `session.job.logs`, for the output view of this job (P5 #48).
+    JobLog(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,6 +80,8 @@ pub enum Nav {
     Parent,
     /// The first child; then the next (1) or previous (-1) of the session's siblings.
     Child(isize),
+    /// The session of the n-th `agent` call, by start order (the composer's Subagents tab, P5 #48).
+    ChildAt(usize),
 }
 
 /// What a one-line input dialog is for.
@@ -95,6 +105,8 @@ pub enum Link {
 pub const INTERRUPT_WINDOW: Duration = Duration::from_secs(5);
 /// OpenCode `context/keymap.tsx`: the leader (ctrl+x) waits 2 s for its second key.
 pub const LEADER_WINDOW: Duration = Duration::from_secs(2);
+/// OpenCode `routes/session/index.tsx` `BACKGROUND_TOOL_HINT_DELAY`.
+pub const BACKGROUND_HINT_DELAY: Duration = Duration::from_secs(3);
 /// Two clicks this close are a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
@@ -124,6 +136,9 @@ pub enum Dialog {
     Worktrees { selected: usize, confirm: Option<String> },
     /// A line typed: a session's new name, a worktree's name, a directory.
     Input { title: String, text: String, purpose: Purpose },
+    /// `dialog-shell-output.tsx`: a background job's output, its last 64 KiB, following the end while `scroll` is 0
+    /// (rows up from the end). `offset` is where the next read starts.
+    Output { job: String, command: String, text: String, offset: Option<u64>, scroll: usize, error: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -288,6 +303,15 @@ pub struct App {
     pub mini: bool,
     /// `-s`: the ledger session to resume once connected.
     pub resume: Option<String>,
+    /// What the session has running, in the prompt box's place (P5 #48).
+    pub composer: Option<crate::composer::Composer>,
+    /// The terminal pane's terminals.
+    pub terms: crate::terminal::Terms,
+    /// The output view's last read: when, and whether its answer is still to come.
+    pub poll: Option<(Instant, bool)>,
+    /// Since when a shell call has held the turn, and whether the ctrl+b hint shows (after 3 s).
+    fg_since: Option<Instant>,
+    pub bg_hint: bool,
 }
 
 impl App {
@@ -336,6 +360,11 @@ impl App {
             selection: None,
             mini: false,
             resume: None,
+            composer: None,
+            terms: crate::terminal::Terms::default(),
+            poll: None,
+            fg_since: None,
+            bg_hint: false,
         }
     }
 
@@ -359,6 +388,8 @@ impl App {
             "app.toggle.animations" => pick(p.animations, "Disable animations", "Enable animations"),
             "app.toggle.diffwrap" => pick(p.diff_wrap, "Disable diff wrapping", "Enable diff wrapping"),
             "session.sidebar.toggle" => pick(crate::sidebar::place(self, self.side.width.get()).is_some(), "Hide sidebar", "Show sidebar"),
+            "terminal.toggle" => pick(self.terminal_shown(), "Hide terminal pane", "Show terminal pane"),
+            "terminal.title.toggle" => pick(p.terminal_title, "Disable terminal title", "Enable terminal title"),
             _ => d.title.to_string(),
         }
     }
@@ -432,6 +463,7 @@ impl App {
             "session.verbosity.cycle" => p.verbosity = p.verbosity.next(),
             "app.toggle.animations" => p.animations = !p.animations,
             "app.toggle.diffwrap" => p.diff_wrap = !p.diff_wrap,
+            "terminal.title.toggle" => p.terminal_title = !p.terminal_title,
             _ => return None,
         }
         self.prefs.save();
@@ -537,18 +569,25 @@ impl App {
 
     /// Whether the screen changes with time alone: a spinner, or an armed key that will lapse.
     pub fn animating(&self) -> bool {
-        self.running() || self.armed.is_some() || self.leader.is_some() || self.asides > 0 || self.link == Link::Connecting
+        self.running() || self.armed.is_some() || self.leader.is_some() || self.asides > 0 || self.link == Link::Connecting || matches!(self.dialog, Some(Dialog::Output { .. }))
+            || self.current().is_some_and(|s| !s.foreground.is_empty())
     }
 
-    /// Time passed: the spinner moves and an armed interrupt or leader lapses.
-    pub fn on_tick(&mut self, now: Instant) {
+    /// Time passed: the spinner moves, an armed interrupt or leader lapses, the ctrl+b hint comes up and the output
+    /// view reads more.
+    pub fn on_tick(&mut self, now: Instant) -> Vec<Action> {
         self.tick = self.tick.wrapping_add(1);
+        // `BackgroundToolHint`: 3 s after a shell call began holding the turn.
+        let holding = self.current().is_some_and(|s| !s.foreground.is_empty());
+        self.fg_since = if holding { Some(self.fg_since.unwrap_or(now)) } else { None };
+        self.bg_hint = self.fg_since.is_some_and(|at| now.duration_since(at) >= BACKGROUND_HINT_DELAY);
         if self.armed.is_some_and(|at| now.duration_since(at) >= INTERRUPT_WINDOW) {
             self.armed = None;
         }
         if self.leader.is_some_and(|at| now.duration_since(at) >= LEADER_WINDOW) {
             self.leader = None;
         }
+        self.poll_output(now)
     }
 
     pub fn connected(&mut self) -> Vec<Action> {
@@ -600,7 +639,51 @@ impl App {
         }
     }
 
-    fn ledger_id(&self) -> Option<String> {
+    /// Whether the terminal pane shows (P5 #48).
+    pub fn terminal_shown(&self) -> bool {
+        crate::terminal::pane(self, self.side.width.get()).is_some()
+    }
+
+    /// `terminal.toggle`: hides the pane when it shows; else shows the last terminal, or opens one.
+    fn toggle_terminal(&mut self) -> Vec<Action> {
+        if self.terminal_shown() {
+            self.terms.visible = None;
+            self.terms.focused = false;
+            return Vec::new();
+        }
+        if self.terms.is_empty() {
+            return self.open_terminal();
+        }
+        self.select_terminal(self.terms.list.len() - 1)
+    }
+
+    /// `session.terminal`: a new terminal, shown and focused once its shell starts.
+    pub(crate) fn open_terminal(&mut self) -> Vec<Action> {
+        vec![Action::NewTerminal]
+    }
+
+    /// Shows the i-th terminal and gives it the keys. A sidebar opened by hand gives the right pane up.
+    pub(crate) fn select_terminal(&mut self, i: usize) -> Vec<Action> {
+        if i < self.terms.list.len() {
+            self.terms.visible = Some(i);
+            self.terms.focused = true;
+            self.side.open = false;
+            self.composer = None;
+        }
+        Vec::new()
+    }
+
+    /// The terminal title (`app.tsx`): `Lykos` on the home screen and for an untitled session, else
+    /// `Lykos | <title>`, cut to 37 characters and `…` past 40.
+    pub fn window_title(&self) -> String {
+        match self.current().and_then(|s| s.summary.title.clone()).filter(|t| !t.trim().is_empty()) {
+            None => "Lykos".into(),
+            Some(t) if t.chars().count() > 40 => format!("Lykos | {}…", t.chars().take(37).collect::<String>()),
+            Some(t) => format!("Lykos | {t}"),
+        }
+    }
+
+    pub(crate) fn ledger_id(&self) -> Option<String> {
         self.current().and_then(|s| s.summary.ledger_session_id.clone())
     }
 
@@ -906,7 +989,7 @@ impl App {
             .collect()
     }
 
-    fn history_call(&self, all: bool, then: Then) -> Action {
+    pub(crate) fn history_call(&self, all: bool, then: Then) -> Action {
         Action::Call { method: "sessions.history", params: json!({ "cwd": self.cwd, "all": all }), then }
     }
 
@@ -949,6 +1032,10 @@ impl App {
                     self.on_diff(Err(e));
                     return Vec::new();
                 }
+                if let Then::JobLog(id) = &then {
+                    self.on_job_log(id, Err(e));
+                    return Vec::new();
+                }
                 if matches!(then, Then::Started { .. }) {
                     self.starting = false;
                 }
@@ -984,6 +1071,8 @@ impl App {
             },
             Then::WorktreesChanged => return vec![self.worktrees_call()],
             Then::Diff => self.on_diff(Ok(v)),
+            Then::Quiet => {}
+            Then::JobLog(id) => self.on_job_log(&id, Ok(v)),
         }
         Vec::new()
     }
@@ -995,6 +1084,11 @@ impl App {
         let target = match nav {
             Nav::Parent => row(&me).and_then(|r| r.parent_session_id),
             Nav::Child(0) => past.rows.iter().find(|r| r.parent_session_id.as_deref() == Some(me.as_str())).map(|r| r.id.clone()),
+            Nav::ChildAt(n) => {
+                let mut children: Vec<&HistoryRow> = past.rows.iter().filter(|r| r.parent_session_id.as_deref() == Some(me.as_str())).collect();
+                children.sort_by(|a, b| a.started_utc.cmp(&b.started_utc));
+                children.get(n).map(|r| r.id.clone())
+            }
             Nav::Child(step) => {
                 let parent = row(&me).and_then(|r| r.parent_session_id);
                 let siblings: Vec<&HistoryRow> = past.rows.iter().filter(|r| parent.is_some() && r.parent_session_id == parent).collect();
@@ -1123,13 +1217,30 @@ impl App {
                 }
                 None => self.need_session(),
             },
-            "session.parent" | "session.child.first" | "session.child.next" | "session.child.previous" => {
+            // OpenCode's `down`: the composer, from the end of the prompt and outside a history browse; elsewhere the
+            // key moves in the prompt.
+            "session.child.first" => {
+                let at_end = self.editor.cursor() == self.editor.text().len();
+                if self.composer.is_none() && (!at_end || self.history.browsing() || self.current().is_none()) {
+                    return None;
+                }
+                self.toggle_composer(None)
+            }
+            // `session.background`: only while a shell call holds the turn; else ctrl+b moves left in the prompt.
+            "session.background" => {
+                let session = current.clone()?;
+                if self.current().is_none_or(|s| s.foreground.is_empty()) {
+                    return None;
+                }
+                vec![Action::Call { method: "session.background", params: json!({ "session": session }), then: Then::Quiet }]
+            }
+            "session.terminal" => vec![Action::NewTerminal],
+            "session.parent" | "session.child.next" | "session.child.previous" => {
                 if self.ledger_id().is_none() {
                     return Some(self.need_session());
                 }
                 let nav = match id {
                     "session.parent" => Nav::Parent,
-                    "session.child.first" => Nav::Child(0),
                     "session.child.next" => Nav::Child(1),
                     _ => Nav::Child(-1),
                 };
@@ -1450,6 +1561,12 @@ impl App {
         if self.dialog.is_some() {
             return Vec::new();
         }
+        if self.terms.focused && self.terminal_shown() {
+            if let Some(t) = self.terms.shown() {
+                t.paste(text);
+            }
+            return Vec::new();
+        }
         self.search = None;
         self.editor.paste(text);
         self.refresh_menu()
@@ -1461,6 +1578,11 @@ impl App {
             *scroll = if up { scroll.saturating_sub(rows) } else { scroll.saturating_add(rows) };
             return;
         }
+        // The output view counts from its end.
+        if let Some(Dialog::Output { scroll, .. }) = &mut self.dialog {
+            *scroll = if up { scroll.saturating_add(rows) } else { scroll.saturating_sub(rows) };
+            return;
+        }
         self.scroll = if up { self.scroll.saturating_add(rows) } else { self.scroll.saturating_sub(rows) };
         self.nav = None;
     }
@@ -1468,6 +1590,20 @@ impl App {
     /// The old TUI's mouse in the prompt box: a click puts the cursor, a drag selects, a double click selects a
     /// word and a triple click the whole prompt. The wheel scrolls the transcript.
     pub fn on_mouse(&mut self, m: MouseEvent, now: Instant) -> Vec<Action> {
+        // A click in the terminal pane gives it the keys; a click elsewhere gives them back.
+        if let (MouseEventKind::Down(_), None) = (m.kind, &self.dialog) {
+            if let Some((x, y, w, h)) = self.terms.area.get() {
+                let inside = m.column >= x && m.column < x + w && m.row >= y && m.row < y + h;
+                self.terms.focused = inside;
+                if inside {
+                    self.composer = None;
+                    return Vec::new();
+                }
+            }
+        }
+        if self.terms.area.get().is_some_and(|(x, y, w, h)| m.column >= x && m.column < x + w && m.row >= y && m.row < y + h) {
+            return Vec::new();
+        }
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if self.diff_mouse(&m) => return Vec::new(),
             _ if self.dialog.is_none() && self.sidebar_mouse(&m) => return Vec::new(),
@@ -1541,6 +1677,15 @@ impl App {
         if self.dialog.is_some() {
             return self.dialog_key(&key, now, page);
         }
+        // A focused terminal takes every key but the leader (`terminal-pane.tsx`).
+        if self.terms.focused && self.terminal_shown() {
+            if self.keymap.is_leader(&key) {
+                self.leader = Some(now);
+            } else if let Some(t) = self.terms.shown() {
+                t.key(&key);
+            }
+            return Vec::new();
+        }
         if self.search.is_some() {
             if let Some(out) = self.search_key(&key) {
                 return out;
@@ -1553,6 +1698,11 @@ impl App {
         }
         if let Some(answer) = self.request_key(&key) {
             return answer;
+        }
+        if self.composer.is_some() {
+            if let Some(out) = self.composer_key(&key) {
+                return out;
+            }
         }
         if self.diff.is_some() {
             if let Some(out) = self.diff_key(&key) {
@@ -1596,6 +1746,34 @@ impl App {
         let w = self.input_cols.max(1);
         let e = &mut self.editor;
         match id {
+            "terminal.toggle" => return Some(self.toggle_terminal()),
+            // `terminal.select`: the composer's Terminals tab.
+            "terminal.select" => return Some(self.toggle_composer(Some(crate::composer::Tab::Terminals))),
+            "terminal.close" => {
+                if !self.terminal_shown() {
+                    return None;
+                }
+                self.terms.visible = None;
+                self.terms.focused = false;
+                return Some(Vec::new());
+            }
+            // `pane.focus.left` is off while the pane covers the screen.
+            "pane.focus.left" => {
+                let (x, _) = crate::terminal::pane(self, self.side.width.get())?;
+                if x == 0 {
+                    return None;
+                }
+                self.terms.focused = false;
+                return Some(Vec::new());
+            }
+            "pane.focus.right" => {
+                crate::terminal::pane(self, self.side.width.get())?;
+                self.terms.focused = true;
+                self.composer = None;
+                return Some(Vec::new());
+            }
+            // `app.tsx`: off where the platform cannot suspend (`config/index.tsx` unbinds it on Windows).
+            "terminal.suspend" => return (!cfg!(windows)).then(|| vec![Action::Suspend]),
             // OpenCode `command-palette.tsx`.
             "command.palette.show" => {
                 self.dialog = Some(Dialog::Palette { query: String::new(), selected: 0 });
@@ -1756,6 +1934,21 @@ impl App {
         let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
             Dialog::Palette { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
+            Dialog::Output { .. } => {
+                if has("dialog.select.submit") {
+                    self.dialog = None;
+                } else if prev {
+                    self.on_scroll(true, 1);
+                } else if next {
+                    self.on_scroll(false, 1);
+                } else if has("dialog.select.page_up") {
+                    self.on_scroll(true, page);
+                } else if has("dialog.select.page_down") {
+                    self.on_scroll(false, page);
+                } else if has("dialog.select.end") {
+                    self.on_scroll(false, usize::MAX);
+                }
+            }
             Dialog::Info { info } => {
                 if info == Info::Debug && has("debug.copy") {
                     let text = self.debug_rows().iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
@@ -3015,5 +3208,107 @@ mod tests {
         assert_eq!(calls(&out), [("session.move", json!({ "session": "s1", "cwd": "/t/one" }))]);
         assert_eq!(app.on_reply(Then::Started { replaces: Some("s1".into()) }, Ok(json!({ "id": "s5" }))), vec![]);
         assert_eq!(app.tabs.open, ["s5"], "the moved session replaces its tab");
+    }
+
+    fn jobs(app: &mut App, seq: u64, running: &[&str], foreground: &[&str]) {
+        let jobs = running
+            .iter()
+            .map(|id| lykos_client::JobInfo { id: id.to_string(), command: format!("run {id}"), status: "running".into(), started_at: "2026-11-24T00:00:00Z".into(), exit_code: None })
+            .collect();
+        let foreground = foreground.iter().map(|id| lykos_client::ForegroundInfo { id: id.to_string(), command: "sleep".into() }).collect();
+        event(app, "s1", seq, EventData::Jobs { jobs, foreground });
+    }
+
+    fn working() -> App {
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.started("s1".into());
+        session_event(&mut app, "s1", 1, SessionStatus::Running, "L1", "first");
+        app
+    }
+
+    #[test]
+    fn down_opens_the_composer_on_the_busy_tab_and_a_shell_shows_its_output_and_is_killed() {
+        let mut app = working();
+        jobs(&mut app, 2, &["job-1"], &[]);
+        assert_eq!(crate::composer::live(&app).as_deref(), Some("1 shell"));
+        typed(&mut app, "ab");
+        press(&mut app, key(KeyCode::Left));
+        press(&mut app, key(KeyCode::Down));
+        assert!(app.composer.is_none(), "down away from the end of the prompt moves in it");
+        press(&mut app, key(KeyCode::Down));
+        let comp = app.composer.clone().expect("down at the end opens the composer");
+        assert_eq!(comp.tab, crate::composer::Tab::Shell);
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert_eq!(calls(&out), [("session.job.logs", json!({ "session": "s1", "jobId": "job-1" }))]);
+        assert!(matches!(&app.dialog, Some(Dialog::Output { job, .. }) if job == "job-1"));
+        app.on_reply(Then::JobLog("job-1".into()), Ok(json!({ "text": "one
+two
+", "nextOffset": 9, "size": 9 })));
+        assert!(matches!(&app.dialog, Some(Dialog::Output { text, offset: Some(9), .. }) if text == "one
+two
+"));
+        let later = Instant::now() + Duration::from_millis(600);
+        assert_eq!(calls(&app.on_tick(later)), [("session.job.logs", json!({ "session": "s1", "jobId": "job-1", "offset": 9 }))]);
+        assert!(app.on_tick(later + Duration::from_millis(600)).is_empty(), "one read at a time");
+        press(&mut app, key(KeyCode::Esc));
+        assert!(app.dialog.is_none());
+        let out = press(&mut app, ctrl('d'));
+        assert_eq!(calls(&out), [("session.job.stop", json!({ "session": "s1", "jobId": "job-1" }))]);
+        press(&mut app, key(KeyCode::Esc));
+        assert!(app.composer.is_none());
+        assert_eq!(app.editor.text(), "ab", "the prompt is untouched");
+    }
+
+    #[test]
+    fn ctrl_b_moves_a_shell_call_to_the_background_only_while_one_holds_the_turn() {
+        let mut app = working();
+        typed(&mut app, "ab");
+        assert!(calls(&press(&mut app, ctrl('b'))).is_empty());
+        assert_eq!(app.editor.cursor(), 1, "ctrl+b moves left without a shell call");
+        jobs(&mut app, 2, &[], &["fg-1"]);
+        let now = Instant::now();
+        app.on_tick(now);
+        assert!(!app.bg_hint);
+        app.on_tick(now + BACKGROUND_HINT_DELAY);
+        assert!(app.bg_hint, "the hint shows after 3 s");
+        assert_eq!(calls(&press(&mut app, ctrl('b'))), [("session.background", json!({ "session": "s1" }))]);
+        jobs(&mut app, 3, &["job-2"], &[]);
+        app.on_tick(now + BACKGROUND_HINT_DELAY * 2);
+        assert!(!app.bg_hint);
+    }
+
+    #[test]
+    fn the_terminal_title_names_the_session_and_cuts_a_long_one() {
+        let mut app = App::new("/w".into());
+        assert_eq!(app.window_title(), "Lykos");
+        app.connected();
+        app.started("s1".into());
+        session_event(&mut app, "s1", 1, SessionStatus::Idle, "L1", "fix the build");
+        assert_eq!(app.window_title(), "Lykos | fix the build");
+        session_event(&mut app, "s1", 2, SessionStatus::Idle, "L1", &"x".repeat(41));
+        assert_eq!(app.window_title(), format!("Lykos | {}…", "x".repeat(37)));
+        let on = app.prefs.terminal_title;
+        app.run("terminal.title.toggle", Instant::now(), 10);
+        assert_eq!(app.prefs.terminal_title, !on);
+    }
+
+    #[test]
+    fn the_terminal_keys_open_select_and_close_the_pane() {
+        let mut app = working();
+        app.side.width.set(120);
+        assert_eq!(app.run("terminal.toggle", Instant::now(), 10), Some(vec![Action::NewTerminal]), "no terminal yet: a new one");
+        assert_eq!(app.run("terminal.close", Instant::now(), 10), None, "nothing to close");
+        app.run("terminal.select", Instant::now(), 10);
+        assert_eq!(app.composer.as_ref().map(|c| c.tab), Some(crate::composer::Tab::Terminals));
+        let rows = crate::composer::entries(&app, crate::composer::Tab::Terminals);
+        assert_eq!(rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["+ New terminal"]);
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![Action::NewTerminal]);
+        assert!(app.composer.is_none());
+        if !cfg!(windows) {
+            assert_eq!(app.run("terminal.suspend", Instant::now(), 10), Some(vec![Action::Suspend]));
+        } else {
+            assert_eq!(app.run("terminal.suspend", Instant::now(), 10), None, "no suspend on Windows");
+        }
     }
 }

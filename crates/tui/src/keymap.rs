@@ -133,7 +133,16 @@ pub const DEFS: &[Def] = &[
     def("session.export", "<leader>x", "Export session transcript", "Session"),
     def("session.move", "none", "Manage workspaces", "Session"),
     def("session.cd", "none", "Change working directory", "Session"),
-    def("session.child.first", "none", "Go to first child session", "Session"),
+    // P5 #48: OpenCode binds `down` to the composer; here it opens from the end of the prompt only.
+    def("session.child.first", "down", "Toggle subagent picker", "Session"),
+    // Before `input.move.left`: ctrl+b moves a shell call to the background only while one holds the turn.
+    def("session.background", "ctrl+b", "Background blocking session tools", "Session"),
+    def("session.terminal", "none", "New terminal", "Session"),
+    def("terminal.toggle", "<leader>t", "Toggle terminal pane", "Session"),
+    def("terminal.select", "<leader>down", "Select terminal", "Session"),
+    def("terminal.close", "<leader>up", "Close terminal pane", "Session"),
+    def("pane.focus.left", "<leader>left", "Focus session pane", "Session"),
+    def("pane.focus.right", "<leader>right", "Focus right pane", "Session"),
     def("session.child.next", "none", "Go to next child session", "Session"),
     def("session.child.previous", "none", "Go to previous child session", "Session"),
     def("session.parent", "none", "Go to parent session", "Session"),
@@ -155,6 +164,9 @@ pub const DEFS: &[Def] = &[
     def("theme.switch_mode", "none", "Switch between light and dark theme mode", "System"),
     def("lykos.status", "<leader>s", "View status", "System"),
     def("lykos.debug", "none", "View debug info", "System"),
+    // `config/index.tsx` unbinds it where the platform cannot suspend; ctrl+z is then the prompt's undo.
+    def("terminal.suspend", if cfg!(windows) { "none" } else { "ctrl+z" }, "Suspend terminal", "System"),
+    def("terminal.title.toggle", "none", "Toggle terminal title", "System"),
     def("prompt.queue", "<leader>return", "Queue prompt", "Prompt"),
     def("prompt.editor", "<leader>e", "Open external editor", "Prompt"),
     def("prompt.images.view", "<leader>i", "View image attachments", "Prompt"),

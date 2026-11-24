@@ -2,6 +2,7 @@
 //! thread (starting one when none runs), and from then on waits on one channel for keys, server events and
 //! request replies. It sleeps while nothing on screen moves and draws only after a change.
 mod app;
+mod composer;
 mod diff;
 mod diffview;
 mod editor;
@@ -11,10 +12,12 @@ mod menu;
 mod mini;
 mod paste;
 mod prefs;
+mod pty;
 mod request;
 mod sidebar;
 mod stash;
 mod tabs;
+mod terminal;
 mod theme;
 mod transcript;
 mod view;
@@ -56,6 +59,8 @@ enum Msg {
     Options(Result<SessionOptions, String>),
     /// An `Action::Call`'s answer.
     Reply(Then, Result<Value, String>),
+    /// A terminal's output, or `None` once its shell exited (P5 #48).
+    Term(u64, Option<Vec<u8>>),
 }
 
 /// The input thread reads the terminal unless `pause` is set, and says so in `parked`: the external editor owns
@@ -179,8 +184,15 @@ fn run(args: Args) -> io::Result<()> {
     let (act_tx, act_rx) = mpsc::channel::<Action>();
     let opts = Options::from_env("lykos-tui")?;
     let side = (opts.clone(), tx.clone(), args.cwd.clone());
+    let term_tx = std::sync::Mutex::new(tx.clone());
     thread::Builder::new().name("lykos-requests".into()).spawn(move || requests(opts, args, act_rx, tx))?;
 
+    let sink: terminal::Sink = Arc::new(move |id, data| {
+        if let Ok(t) = term_tx.lock() {
+            let _ = t.send(Msg::Term(id, data));
+        }
+    });
+    let mut title = String::new();
     let mut last_tick = Instant::now();
     loop {
         let first = if app.animating() {
@@ -206,7 +218,7 @@ fn run(args: Args) -> io::Result<()> {
             actions.extend(handle(&mut app, msg, term.size().1 as usize));
         }
         if app.animating() && last_tick.elapsed() >= TICK {
-            app.on_tick(Instant::now());
+            actions.extend(app.on_tick(Instant::now()));
             last_tick = Instant::now();
         }
         for a in actions {
@@ -234,6 +246,23 @@ fn run(args: Args) -> io::Result<()> {
                     app.edited_externally(out, err);
                     term.invalidate();
                 }
+                Action::NewTerminal => {
+                    let (w, h) = term.screen();
+                    let (cols, rows) = terminal::size_for(w, h);
+                    let id = app.terms.next_id();
+                    match terminal::Term::spawn(id, &app.cwd, cols, rows, sink.clone()) {
+                        Ok(t) => {
+                            app.terms.add(t);
+                            app.side.open = false;
+                            app.composer = None;
+                        }
+                        Err(e) => app.notice = Some(format!("cannot open a terminal: {e}")),
+                    }
+                }
+                Action::Suspend => {
+                    suspend(&input);
+                    term.invalidate();
+                }
                 a => {
                     let _ = act_tx.send(a);
                 }
@@ -242,7 +271,17 @@ fn run(args: Args) -> io::Result<()> {
         if quit {
             break;
         }
+        fit_terminals(&mut app, term.screen());
+        // `terminal.title` (P5 #48): the session's title, or nothing once turned off.
+        let want = if app.prefs.terminal_title && !app.mini { app.window_title() } else { String::new() };
+        if want != title {
+            set_title(&mut term, &want);
+            title = want;
+        }
         frame(&mut term, &app, &mut mini)?;
+    }
+    if !title.is_empty() {
+        set_title(&mut term, "");
     }
     if mini.is_some() {
         frame(&mut term, &app, &mut mini)?;
@@ -328,8 +367,53 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             Vec::new()
         }
         Msg::Reply(then, result) => app.on_reply(then, result),
+        Msg::Term(id, Some(bytes)) => {
+            app.terms.output(id, &bytes);
+            Vec::new()
+        }
+        Msg::Term(id, None) => {
+            app.terms.exited(id);
+            Vec::new()
+        }
     }
 }
+
+/// The shown terminal follows the pane's size.
+fn fit_terminals(app: &mut App, (w, h): (u16, u16)) {
+    let Some((x, width)) = terminal::pane(app, w) else { return };
+    let (cols, rows) = terminal::content_size(x, width, h);
+    if let Some(t) = app.terms.shown() {
+        t.resize(cols, rows);
+    }
+}
+
+/// OSC 0, with control characters made spaces (`util/renderer.ts` `setTerminalTitle`).
+fn set_title(term: &mut Terminal<io::Stdout>, title: &str) {
+    let clean: String = title.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).collect();
+    let w = term.writer();
+    let _ = write!(w, "\x1b]0;{clean}\x07");
+    let _ = w.flush();
+}
+
+/// `terminal.suspend` (`app.tsx`): the terminal as it was, SIGTSTP to the process group, and the TUI again on SIGCONT.
+#[cfg(unix)]
+fn suspend(input: &Input) {
+    input.pause.store(true, Ordering::SeqCst);
+    let waited = Instant::now();
+    while !input.parked.load(Ordering::SeqCst) && waited.elapsed() < INPUT_POLL * 3 {
+        thread::sleep(Duration::from_millis(5));
+    }
+    lykos_term::suspend();
+    // SAFETY: `kill` with pid 0 signals this process group; SIGTSTP stops it until the shell sends SIGCONT.
+    unsafe {
+        libc::kill(0, libc::SIGTSTP);
+    }
+    let _ = lykos_term::resume();
+    input.pause.store(false, Ordering::SeqCst);
+}
+
+#[cfg(not(unix))]
+fn suspend(_: &Input) {}
 
 /// Where the TUI keeps what is the user's, not the workspace's: `LYKOS_TUI_DIR`, or `~/.lykos/tui`.
 fn state_dir() -> Option<PathBuf> {
@@ -471,7 +555,7 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
             }
             Action::Quit => return,
             // The main loop does these itself.
-            Action::Aside { .. } | Action::ListFiles | Action::Copy(_) | Action::Editor(_) => continue,
+            Action::Aside { .. } | Action::ListFiles | Action::Copy(_) | Action::Editor(_) | Action::NewTerminal | Action::Suspend => continue,
         };
         let msg = match reply {
             Ok(Msg::Connected) => continue,

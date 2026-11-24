@@ -126,6 +126,35 @@ pub struct DiffLine {
     pub text: String,
 }
 
+/// One background job (`lykos/server/protocol.ts` `JobInfo`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobInfo {
+    pub id: String,
+    pub command: String,
+    /// "running", "exited", "stopped", "capped" or "failed".
+    pub status: String,
+    pub started_at: String,
+    #[serde(default)]
+    pub exit_code: Option<i64>,
+}
+
+/// A shell call holding the turn, which `session.background` would move.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ForegroundInfo {
+    pub id: String,
+    pub command: String,
+}
+
+/// What `session.job.logs` answers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobLog {
+    pub text: String,
+    pub next_offset: u64,
+    pub size: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DiffData {
     pub path: String,
@@ -175,6 +204,9 @@ pub enum EventData {
     /// The session put text back in the prompt: an undone prompt (P5 #42).
     #[serde(rename = "prompt.set")]
     PromptSet { text: String },
+    /// The session's background jobs and running shell calls, whole, on every change (P5 #48).
+    #[serde(rename = "jobs")]
+    Jobs { jobs: Vec<JobInfo>, #[serde(default)] foreground: Vec<ForegroundInfo> },
     /// An event a newer server sends that this client does not know: kept in order, shown as nothing.
     #[serde(other)]
     Unknown,

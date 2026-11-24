@@ -34,8 +34,9 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     app.side.width.set(w);
     let docked = crate::diffview::dock_width(app, w).is_some();
     let sw = crate::diffview::session_width(app, w);
-    // A request waiting takes the keys, so a full-screen viewer steps aside for it.
-    let full = app.diff.is_some() && !docked && app.request().is_none();
+    // A request waiting takes the keys, so a full-screen viewer steps aside for it. A terminal pane on a narrow
+    // screen covers the session too (P5 #48).
+    let full = (app.diff.is_some() && !docked && app.request().is_none()) || sw == 0;
     let cursor = if full {
         None
     } else if sw < w {
@@ -60,15 +61,19 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
             Some(session) => session_screen(app, session, buf, pad),
         }
     };
-    if docked || full {
+    if app.diff.is_some() && (docked || full) {
         crate::diffview::draw(app, buf);
     } else {
         crate::sidebar::draw(app, buf);
     }
+    let pane = crate::terminal::draw(app, buf);
     crate::request::draw_expanded(app, buf);
     if app.dialog.is_some() {
         dialog(app, buf);
         return None;
+    }
+    if app.terms.focused && app.terminal_shown() {
+        return pane;
     }
     cursor
 }
@@ -128,6 +133,15 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         }
         for q in &app.queue {
             tail.rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
+        }
+        // `BackgroundToolHint` (P5 #48): a shell call has held the turn for 3 s.
+        // It goes with the call: a tick may not come once nothing runs.
+        if app.bg_hint && !session.foreground.is_empty() {
+            let key = app.keymap.first("session.background");
+            if !key.is_empty() {
+                tail.rows.push(Row::plain(3, String::new(), theme::muted()));
+                tail.rows.push(Row::plain(3, format!("Press {key} to move running work to the background"), theme::muted()));
+            }
         }
         if !tail.rows.is_empty() {
             lay.push(tail);
@@ -296,6 +310,10 @@ fn prompt_height(app: &App, width: u16, screen_h: u16) -> u16 {
     if app.request().is_some() {
         return crate::request::height(app, width, screen_h);
     }
+    // The composer takes the prompt box's place, above the footer (P5 #48).
+    if app.composer.is_some() {
+        return crate::composer::height(app) + u16::from(app.current().is_some());
+    }
     let max = max_input_rows(screen_h);
     let rows = app.editor.layout(input_width(width)).len().max(1) as u16;
     rows.min(max) + 5
@@ -316,6 +334,14 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
     if app.request().is_some() {
         app.input_area.set(None);
         return crate::request::draw(app, buf, x, y, width, screen_h);
+    }
+    if app.composer.is_some() {
+        app.input_area.set(None);
+        crate::composer::draw(app, buf, x, y, width);
+        if app.current().is_some() {
+            footer_line(app, buf, x, y + crate::composer::height(app), width, 0);
+        }
+        return None;
     }
     let raised = Style::default().on(c().surface);
     let bar = Style::fg(if app.running() { c().gold } else { c().accent }).on(c().surface);
@@ -408,7 +434,7 @@ fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
 fn dialog(app: &App, buf: &mut Buffer) {
     let Some(d) = &app.dialog else { return };
     let (w, h) = (buf.width, buf.height);
-    let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. } | Dialog::Help { .. }) { 100 } else { 72 });
+    let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. } | Dialog::Help { .. } | Dialog::Output { .. }) { 100 } else { 72 });
     let inner = dw.saturating_sub(4) as usize;
     let room = h.saturating_sub(6) as usize;
     let k = |id: &str| app.keymap.first(id);
@@ -576,6 +602,20 @@ fn dialog(app: &App, buf: &mut Buffer) {
             let shown = all.into_iter().skip(start).take(room).map(|l| (l, style)).collect();
             (format!("/btw {}", first_line(question)), shown, None, format!("{} copy · ↑↓ scroll · {close}", k("aside.copy")))
         }
+        // `dialog-shell-output.tsx`: the command as the title, the output's end, `Loading…` until the first read.
+        Dialog::Output { command, text, offset, scroll, error, .. } => {
+            let mut all: Vec<(String, Style)> = match (error, offset) {
+                (Some(e), _) => vec![(e.clone(), Style::fg(c().love))],
+                (None, None) => vec![("Loading…".into(), theme::muted())],
+                (None, Some(_)) if text.is_empty() => vec![("No output".into(), theme::muted())],
+                (None, Some(_)) => text.trim_end_matches('\n').split('\n').flat_map(|l| wrap(l, inner.max(1))).map(|l| (l, theme::text())).collect(),
+            };
+            let end = all.len().saturating_sub(room);
+            let start = end.saturating_sub(*scroll);
+            all.truncate(start + room);
+            let shown = all.split_off(start);
+            (format!("$ {}", first_line(command)), shown, None, format!("↑↓ scroll · {close}"))
+        }
     };
     // A list longer than the dialog scrolls with its selection.
     let skip = scrolled.map_or_else(|| selected.map_or(0, |s| (s + 1).saturating_sub(room)), |s| s.min(lines.len().saturating_sub(room)));
@@ -661,7 +701,15 @@ fn metadata(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16) {
 pub(crate) fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16) {
     let x = x + pad;
     let width = width.saturating_sub(2 * pad);
-    let right = context_label(app);
+    // `footer.tsx`'s live counts (P5 #48), ahead of the context's use.
+    let live = crate::composer::live(app).map(|l| match app.keymap.first("session.child.first") {
+        k if k.is_empty() => l,
+        k => format!("{k} {l}"),
+    });
+    let right = match (live, context_label(app)) {
+        (Some(l), Some(c)) => Some(format!("{l} · {c}")),
+        (l, c) => l.or(c),
+    };
     let rw = right.as_ref().map_or(0, |r| r.chars().count() as u16);
     let left_w = width.saturating_sub(rw + 2);
     match &app.link {
@@ -863,7 +911,7 @@ mod tests {
         let s = screen(&buf);
         assert!(s.contains("Press ctrl+p to see all available actions"), "{s}");
         assert!(s.contains("Leader") && s.contains("ctrl+x · default"), "{s}");
-        app.dialog = Some(Dialog::Help { scroll: 106 });
+        app.dialog = Some(Dialog::Help { scroll: 115 });
         draw(&app, &mut buf);
         assert!(screen(&buf).contains("Undo in input"), "scrolled to the input actions");
     }

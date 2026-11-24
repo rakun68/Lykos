@@ -444,6 +444,54 @@ Where #46 differs from OpenCode on purpose:
   card and no branch after the directory; its title is cut to one row; Modified Files is a Lykos
   section; the Todo fold is not saved.
 
+**Background work, the composer and the terminal pane (#48).** OpenCode's `component/prompt/composer/`,
+`component/dialog-shell-output.tsx`, `component/terminal-pane.tsx`, `context/session-terminals.tsx`
+and the `terminal.*` actions of `app.tsx` at `4332e24`.
+
+- **Background:** a shell call that holds the turn for 3 s adds `Press ctrl+b to move running work to
+  the background` under the transcript. `Ctrl+B` (`session.background`) calls the engine server's
+  `session.background`: the call becomes a job, its output goes to the job's log, and the turn goes
+  on. `Ctrl+B` does nothing while no shell call holds the turn.
+- **Composer:** the footer shows what runs, `down 1 script · 2 subagents · 1 shell`. `Down` at the
+  end of the prompt (`session.child.first`) opens the composer in the prompt box's place, on the
+  first busy tab. `←` `→` change tab, `↑` `↓` move (`↑` on the first row closes it), `Esc` closes.
+
+| Tab | Rows | `Enter` | `Ctrl+D` |
+| --- | --- | --- | --- |
+| Shell | the session's background jobs | its output, read every half second, `↑` `↓` scroll | stops the job's process tree |
+| Subagents | the turn's `agent` calls | opens that child session | interrupts the turn |
+| Scripts | the turn's `eval` calls | | interrupts the turn |
+| Terminals | each terminal, then `+ New terminal` | shows it | |
+
+- **Terminal pane:** a shell on a pseudo-terminal (ConPTY on Windows, `openpty` elsewhere), drawn
+  from a vt100 screen with 1,000 lines kept. The right half of the screen from 108 columns, the whole
+  screen below that. The sidebar steps aside while it shows; the diff viewer covers it.
+
+| Key | Action |
+| --- | --- |
+| `<leader>t` | Show or hide the terminal pane; opens a terminal when there is none |
+| `<leader>down` | The composer's Terminals tab |
+| `<leader>up` | Close the shown terminal |
+| `<leader>right`, `<leader>left` | Focus the terminal, the session |
+| `Ctrl+Z` | Suspend `lykos-tui` to the shell (not on Windows) |
+
+  A focused terminal takes every key but the leader; a click focuses it, a click outside the pane
+  gives the keys back. Its title is what the shell sets, else the shell's name.
+- **Terminal title:** the window's title is `Lykos`, or `Lykos | <session title>` (past 40 characters, 37 and `…`), and is
+  cleared on exit. `Disable terminal title` in the palette turns it off (`terminalTitle` in
+  `state.json`).
+
+Where #48 differs from OpenCode on purpose:
+
+- Terminals belong to `lykos-tui`, one list for every session, and end with it. OpenCode keeps them
+  on its server, per session.
+- Subagents are the turn's `agent` calls, so `Ctrl+D` interrupts the turn and `Enter` opens the
+  k-th child session by start time. Scripts are `eval` calls.
+- `Down` opens the composer only at the end of the prompt, not while history is browsed.
+- The shell is PowerShell on Windows, `$SHELL` (else `/bin/sh`) elsewhere.
+- The pseudo-terminal is Lykos's own, on ConPTY and `openpty` alone. portable-pty loaded WS2_32,
+  advapi32, RPCRT4, sechost and bcrypt at every start, about 0.75 MB of memory.
+
 Where it differs from OpenCode on purpose: the context use is always on screen as well as in the
 sidebar, the metadata row has no specialist name, the footer shows the
 workspace without its git branch (reading it would cost a process at startup), and

@@ -411,7 +411,10 @@ pub fn dock_width(app: &App, w: u16) -> Option<u16> {
 pub fn session_width(app: &App, w: u16) -> u16 {
     match dock_width(app, w) {
         Some(d) => w - d,
-        None => w - crate::sidebar::beside(app, w),
+        None => match crate::terminal::pane(app, w) {
+            Some((x, _)) => x,
+            None => w - crate::sidebar::beside(app, w),
+        },
     }
 }
 

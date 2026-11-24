@@ -84,6 +84,10 @@ pub fn place(app: &App, w: u16) -> Option<Place> {
     }
     app.current()?;
     let wide = w > WIDE;
+    // The terminal pane has the right pane unless the sidebar was opened by hand (P5 #48).
+    if !app.side.open && crate::terminal::pane(app, w).is_some() {
+        return None;
+    }
     if app.side.open {
         return Some(if wide { Place::Beside } else { Place::Over });
     }

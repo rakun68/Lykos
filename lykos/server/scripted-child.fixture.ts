@@ -19,6 +19,10 @@ let holding = false;
 let asked: string | undefined;
 let ledgerSessionId = "ledger-1";
 
+// The server gone (a test that failed, or killed it): stop the jobs and go, as `lykos serve` does.
+process.once("disconnect", () => {
+  void (jobs?.stopAll() ?? Promise.resolve()).then(() => process.exit(0));
+});
 process.on("message", (msg: ToChild) => {
   switch (msg.kind) {
     case "start":

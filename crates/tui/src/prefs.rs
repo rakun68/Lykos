@@ -28,6 +28,8 @@ pub struct Prefs {
     pub animations: bool,
     /// `session.sidebar`: "auto" shows the sidebar on a wide screen, "hide" only when toggled open.
     pub sidebar: bool,
+    /// `terminal.title`: the terminal's title names the session (P5 #48).
+    pub terminal_title: bool,
 }
 
 impl Default for Prefs {
@@ -45,6 +47,7 @@ impl Default for Prefs {
             diff_wrap: true,
             animations: true,
             sidebar: true,
+            terminal_title: true,
         }
     }
 }
@@ -72,6 +75,7 @@ impl Prefs {
             diff_wrap: v["diffWrap"].as_str().map_or(d.diff_wrap, |s| s != "none"),
             animations: v["animations"].as_bool().unwrap_or(d.animations),
             sidebar: v["sidebar"].as_str().map_or(d.sidebar, |s| s != "hide"),
+            terminal_title: v["terminalTitle"].as_bool().unwrap_or(d.terminal_title),
         }
     }
 
@@ -125,6 +129,7 @@ impl Prefs {
             "diffWrap": if self.diff_wrap { "word" } else { "none" },
             "animations": self.animations,
             "sidebar": if self.sidebar { "auto" } else { "hide" },
+            "terminalTitle": self.terminal_title,
         });
         let _ = std::fs::write(path, format!("{v}\n"));
     }

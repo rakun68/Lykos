@@ -607,6 +607,21 @@ The 42 columns on the right of a `lykos-tui` session: title, context, todos, mod
 working directory. Shown by itself on a wide screen; `<leader>b` toggles it.
 _Avoid_: info panel, side pane
 
+**Background job**:
+A shell command the engine server runs apart from the turn, its output kept in a log: started as a
+background command, or a shell call moved off the turn with `Ctrl+B`.
+_Avoid_: task, background process
+
+**Composer**:
+The list that takes `lykos-tui`'s prompt box's place on `Down`: the session's background jobs,
+subagents, scripts and terminals, each with what it does on `Enter` and `Ctrl+D`.
+_Avoid_: job list, task panel
+
+**Terminal pane**:
+A shell `lykos-tui` runs on a pseudo-terminal and draws on the right half of the screen, or the
+whole screen when narrow. `<leader>t` toggles it.
+_Avoid_: embedded terminal, console
+
 **Queued prompt**:
 A prompt held by `lykos-tui` until its session is idle, then sent; queued with `Ctrl+X Enter`.
 _Avoid_: pending message

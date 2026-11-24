@@ -1,12 +1,14 @@
 // Drives the built TUI in a real pty against the real TypeScript engine server and its scripted session child
 // (P5 #37, #38): a prompt starts a session and its reply streams in; Esc twice interrupts; `/` and `@` complete;
 // a queued prompt waits for the turn; /btw answers aside; stash and history recall; sessions and tabs (#42);
-// an approval and a question are answered and /diff shows the workspace's change (#46); ctrl+c quits.
+// an approval and a question are answered and /diff shows the workspace's change (#46); the composer lists a
+// background job, shows its output and kills it, ctrl+b moves a running shell call to the background, and the
+// terminal pane runs a shell (#48); ctrl+c quits.
 //
 //   cargo build --release -p lykos-tui && node scripts/tui/tui-test.mjs [binary]
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -135,6 +137,40 @@ try {
   await submit("release");
   await step("the queued prompt goes once the turn ends", () => !s.screen().includes("queued: later") && s.screen().split("later").length - 1 >= 2);
   await step("idle again", () => !s.screen().includes("esc interrupt"));
+  // #48: the composer's Shell tab on a background job.
+  await submit("job");
+  await step("a background job shows in the footer's live counts", () => s.screen().includes("down 1 shell"));
+  await key("down");
+  await step("down on an empty prompt opens the composer on the Shell tab", () => s.screen().includes("output enter") && s.screen().includes("kill ctrl+d"));
+  await key("enter");
+  await step("enter shows the job's output", () => s.screen().includes("tick 1"), 15000);
+  await key("esc");
+  await step("esc closes the output, the composer stays", () => !s.screen().includes("tick 1") && s.screen().includes("kill ctrl+d"));
+  await key("ctrl+d");
+  await step("ctrl+d kills the job", () => s.screen().includes("No shell commands") && !s.screen().includes("1 shell"));
+  await key("esc");
+  await step("esc closes the composer", () => s.screen().includes("Ask anything"));
+  await submit("shell");
+  await step("a shell call holding the turn offers ctrl+b after 3 s", () => s.screen().includes("Press ctrl+b to move running work to the background"), 15000);
+  await key("ctrl+b");
+  await step("ctrl+b moves it to the background", () => s.screen().includes("1 shell") && !s.screen().includes("Press ctrl+b"));
+  await key("down");
+  await step("the moved call is a job in the composer", () => s.screen().includes("kill ctrl+d"));
+  await key("ctrl+d", "esc");
+  await step("and is killed", () => !s.screen().includes("1 shell") && s.screen().includes("Ask anything"));
+  // The terminal pane: at 100 columns it covers the session.
+  await key("ctrl+x", "t");
+  await step("leader t opens a terminal", () => /powershell|sh|bash|zsh/.test(s.screen().split("\n")[0]), 20000);
+  await type("echo pane-$(1+1)ok");
+  await key("enter");
+  await step("the shell runs in the pane", () => s.screen().includes("pane-2ok") || s.screen().split("pane-").length - 1 >= 2, 20000);
+  await key("ctrl+x", "up");
+  await step("leader up closes the pane", () => s.screen().includes("Ask anything"));
+  await key("ctrl+x", "t");
+  await step("leader t shows the same terminal again", () => s.screen().includes("pane-"));
+  await type("exit");
+  await key("enter");
+  await step("the shell's exit closes the pane", () => s.screen().includes("Ask anything") && !s.screen().includes("pane-"), 20000);
   await submit("/btw why?");
   await step("/btw answers in a dialog", () => s.screen().includes("aside: why?"));
   s.press("esc");
@@ -182,8 +218,15 @@ try {
   assert.equal(s.exit.exitCode ?? s.exit, 0);
 } finally {
   await s.close();
-  await new Promise((r) => setTimeout(r, 3000));
-  rmSync(work, { recursive: true, force: true });
+  // The engine server runs in the workspace until its idle time passes after the TUI quits: wait for its last line.
+  const log = join(engine, "engine.log");
+  for (let waited = 0; waited < 20000; waited += 250) {
+    if (existsSync(log) && / stopped\s*$/.test(readFileSync(log, "utf8"))) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  await new Promise((r) => setTimeout(r, 500));
+  // A process the run started can hold the workspace a moment after it exits (Windows).
+  rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   rmSync(state, { recursive: true, force: true });
   rmSync(engine, { recursive: true, force: true });
 }
