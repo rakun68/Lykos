@@ -35,6 +35,7 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
         None => home(app, buf, pad),
         Some(session) => session_screen(app, session, buf, pad),
     };
+    crate::request::draw_expanded(app, buf);
     if app.dialog.is_some() {
         dialog(app, buf);
         return None;
@@ -261,9 +262,12 @@ fn first_line(s: &str) -> &str {
 /// The prompt box's height: input rows, a row of padding above and below, the metadata row, the bottom edge
 /// and the footer.
 fn prompt_height(app: &App, width: u16, screen_h: u16) -> u16 {
+    if app.request().is_some() {
+        return crate::request::height(app, width, screen_h);
+    }
     let max = max_input_rows(screen_h);
     let rows = app.editor.layout(input_width(width)).len().max(1) as u16;
-    rows.min(max) + 5 + request_rows(app)
+    rows.min(max) + 5
 }
 
 /// The input grows to a third of the screen, then scrolls.
@@ -275,13 +279,13 @@ fn input_width(width: u16) -> usize {
     width.saturating_sub(5).max(1) as usize
 }
 
-fn request_rows(app: &App) -> u16 {
-    app.current().and_then(|s| s.requests.first()).map_or(0, |_| 3)
-}
-
 /// `component/prompt/index.tsx`: a left bar in the accent colour on a raised background, the input with a row of
 /// padding above, the metadata row, a half-block bottom edge, and the footer under it.
 fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h: u16) -> Option<(u16, u16)> {
+    if app.request().is_some() {
+        app.input_area.set(None);
+        return crate::request::draw(app, buf, x, y, width, screen_h);
+    }
     let raised = Style::default().on(c().surface);
     let bar = Style::fg(if app.running() { c().gold } else { c().accent }).on(c().surface);
     let iw = input_width(width);
@@ -291,21 +295,13 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
     let shown = rows.len().min(max);
     // Keep the cursor's row in view when the input is taller than the box.
     let first = (crow + 1).saturating_sub(shown);
-    let req = request_rows(app);
-    let body = 1 + req + shown as u16 + 1;
+    let body = 1 + shown as u16 + 1;
     buf.fill(x, y, width, body, raised);
     for row in 0..body {
         buf.set(x, y + row, Cell { ch: '┃', style: bar });
     }
     let tx = x + 3;
-    let mut ty = y + 1;
-    if let Some(r) = app.current().and_then(|s| s.requests.first()) {
-        let head = format!("{}: {}", r.title, first_line(&r.detail));
-        buf.text(tx, ty, width.saturating_sub(4), &head, Style::fg(c().gold).on(c().surface).bold());
-        let opts: Vec<String> = r.options.iter().map(|o| format!("{} {}", o.value, o.label)).collect();
-        buf.text(tx, ty + 1, width.saturating_sub(4), &opts.join("   "), theme::subtle().on(c().surface));
-        ty += req;
-    }
+    let ty = y + 1;
     let mut cursor = None;
     if app.editor.is_empty() {
         let hint = if app.current().is_some() { "Ask anything…" } else { "Ask anything… \"Fix a TODO in the codebase\"" };
@@ -335,9 +331,6 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
     }
     if app.current().is_some() {
         footer_line(app, buf, x, edge_y + 1, width, 0);
-    }
-    if app.current().and_then(|s| s.requests.first()).is_some() {
-        return None;
     }
     cursor
 }
@@ -634,7 +627,7 @@ fn metadata(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16) {
 
 /// The row under the prompt box: the spinner and `esc interrupt` while running, else the directory; on the right,
 /// the context window's use.
-fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16) {
+pub(crate) fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16) {
     let x = x + pad;
     let width = width.saturating_sub(2 * pad);
     let right = context_label(app);
@@ -749,6 +742,56 @@ mod tests {
             app.on_event(&Event { event: "x".into(), session: "s1".into(), seq: i as u64 + 1, data });
         }
         app
+    }
+
+    fn with_request(app: &mut App, kind: &str, title: &str, detail: &str, patch: Option<&str>, options: &[(&str, &str, Option<&str>)]) {
+        let options = options.iter().map(|(v, l, n)| lykos_client::RequestOption { value: (*v).into(), label: (*l).into(), note: n.map(Into::into) }).collect();
+        let request = lykos_client::RequestData { request_id: "r1".into(), kind: kind.into(), title: title.into(), detail: detail.into(), body: None, patch: patch.map(Into::into), options, assumption: Some("go on".into()) };
+        app.on_event(&Event { event: "x".into(), session: "s1".into(), seq: 6, data: EventData::Request { request } });
+    }
+
+    #[test]
+    fn an_edit_approval_shows_its_diff_options_and_hints() {
+        let mut app = app_with_session();
+        let patch = "--- C:/work/a.rs
++++ C:/work/a.rs
+@@ -1,2 +1,2 @@
+ fn a() {}
+-old
++new
+";
+        with_request(&mut app, "approval", "edit: C:/work/a.rs", "C:/work/a.rs", Some(patch), &[("y", "Allow once", None), ("a", "Always allow edit this session", Some("This will allow every edit for the rest of this session.")), ("n", "Deny", None)]);
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("△ Permission required"), "{s}");
+        assert!(s.contains("← Edit a.rs"), "the path relative to the workspace: {s}");
+        assert!(s.contains("-old") || s.contains("- old") || s.contains("old"), "{s}");
+        assert!(s.contains("new"), "{s}");
+        assert!(s.contains(" Allow once ") && s.contains(" Deny "), "{s}");
+        assert!(s.contains("ctrl+f fullscreen") && s.contains("enter confirm"), "{s}");
+        app.on_key(crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Right), std::time::Instant::now(), 10);
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        assert!(screen(&buf).contains("This will allow every edit for the rest of this session."), "a picked decision's note replaces the diff");
+        app.on_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('f'), crossterm::event::KeyModifiers::CONTROL), std::time::Instant::now(), 10);
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert_eq!(s.lines().next().map(|l| l.contains("┃")), Some(true), "full screen starts on the top row: {s}");
+        assert!(s.contains("ctrl+f minimize"), "{s}");
+    }
+
+    #[test]
+    fn a_question_lists_its_options_the_custom_row_and_the_assumption() {
+        let mut app = app_with_session();
+        with_request(&mut app, "question", "Which one?", "", None, &[("1", "Red", None), ("2", "Blue", None)]);
+        let mut buf = Buffer::new(80, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        for want in ["Which one?", "1. Red", "2. Blue", "3. Type your own answer", "If nobody answers: go on", "↑↓ select", "enter submit", "esc dismiss"] {
+            assert!(s.contains(want), "{want}: {s}");
+        }
     }
 
     #[test]

@@ -7,7 +7,9 @@
  * three seams swapped: lines come from the server, approvals and questions are asked over the server, and what the
  * surface would print becomes protocol events (`event-ui.ts`).
  */
-import { TerminalApprovalGate } from "../gate/approval.js";
+import { readFileSync } from "node:fs";
+import { createTwoFilesPatch } from "diff";
+import { folderOfPath, TerminalApprovalGate, type ApprovalRequest } from "../gate/approval.js";
 import { resolveProject } from "../session/identity.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { resolveApprovalGate } from "../session/session.js";
@@ -84,7 +86,7 @@ class QueuedLines implements LineSource {
 }
 
 /** The approval decisions `TerminalApprovalGate` reads, per request shape; the gate's own prompt lists the same. */
-function approvalOptions(req: { kind: string; pathAsk?: { protected?: boolean } }): RequestData["options"] {
+function approvalOptions(req: { kind: string; detail: string; pathAsk?: { protected?: boolean } }): RequestData["options"] {
   if ((req.kind === "bash" && req.pathAsk !== undefined) || req.pathAsk?.protected) {
     return [
       { value: "y", label: req.pathAsk?.protected ? "Allow for this session" : "Allow once" },
@@ -93,10 +95,30 @@ function approvalOptions(req: { kind: string; pathAsk?: { protected?: boolean } 
   }
   return [
     { value: "y", label: "Allow once" },
-    { value: "a", label: `Always allow ${req.kind} this session` },
-    { value: "f", label: "Allow this folder" },
+    { value: "a", label: `Always allow ${req.kind} this session`, note: `This will allow every ${req.kind} for the rest of this session.` },
+    { value: "f", label: "Allow this folder", note: `This will allow every ${req.kind} in ${folderOfPath(req.detail)} for this project.` },
     { value: "n", label: "Deny" },
   ];
+}
+
+/**
+ * P5 #46: what an approval shows besides its title (OpenCode `routes/session/permission.tsx` `EditBody`): a write or
+ * an edit as a diff of the file on disk against what it would hold, anything else with its body.
+ */
+function approvalBody(req: ApprovalRequest): Pick<RequestData, "body" | "patch"> {
+  const rule = req.pathAsk !== undefined ? `rule: ${req.pathAsk.rule}` : undefined;
+  if ((req.kind === "write" || req.kind === "edit") && req.body !== undefined) {
+    let before = "";
+    try {
+      before = readFileSync(req.detail, "utf8");
+    } catch {
+      // A new file: everything in it is added.
+    }
+    const patch = createTwoFilesPatch(req.detail, req.detail, before, req.body, undefined, undefined, { context: 3 });
+    return { patch, ...(rule !== undefined ? { body: rule } : {}) };
+  }
+  const body = [req.body, rule].filter((s) => s !== undefined).join("\n");
+  return body.length > 0 ? { body } : {};
 }
 
 export async function runSessionChild(send: (msg: FromChild) => void, receive: (fn: (msg: ToChild) => void) => void): Promise<number> {
@@ -198,7 +220,7 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
           kind: "approval",
           title: `${req.kind}: ${req.summary}`,
           detail: req.detail,
-          ...(req.pathAsk !== undefined ? { body: `rule: ${req.pathAsk.rule}` } : {}),
+          ...approvalBody(req),
           options: approvalOptions(req),
         }),
       { projectId: resolveProject(params.cwd).id, cwd: params.cwd },

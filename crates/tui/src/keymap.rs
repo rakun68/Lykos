@@ -52,6 +52,7 @@ pub const DEFS: &[Def] = &[
     def("prompt.clear", "ctrl+c", "Clear input field", "Prompt"),
     def("app.exit", "ctrl+c,ctrl+d", "Exit the application", "App"),
     def("session.interrupt", "escape", "Interrupt current session", "Session"),
+    def("permission.prompt.fullscreen", "ctrl+f", "Toggle the permission prompt full screen", "Permission"),
     def("session.page.up", "pageup,ctrl+alt+b", "Scroll messages up by one page", "Session"),
     def("session.page.down", "pagedown,ctrl+alt+f", "Scroll messages down by one page", "Session"),
     def("session.line.up", "ctrl+alt+y", "Scroll messages up by one line", "Session"),

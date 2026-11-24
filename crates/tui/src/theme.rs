@@ -100,6 +100,17 @@ pub fn paint_base(buf: &mut Buffer) {
     }
 }
 
+/// `a` moved toward `b` by `t` (0 to 1); a colour that is not RGB gives `b`.
+pub fn mix(a: Color, b: Color, t: f32) -> Color {
+    match (a, b) {
+        (Color::Rgb(r0, g0, b0), Color::Rgb(r1, g1, b1)) => {
+            let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+            Color::Rgb(m(r0, r1), m(g0, g1), m(b0, b1))
+        }
+        _ => b,
+    }
+}
+
 pub fn text() -> Style {
     Style::fg(c().text)
 }

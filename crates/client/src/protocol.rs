@@ -96,6 +96,9 @@ pub struct CommandInfo {
 pub struct RequestOption {
     pub value: String,
     pub label: String,
+    /// What the decision keeps allowing, shown while it is picked.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,6 +111,9 @@ pub struct RequestData {
     pub detail: String,
     #[serde(default)]
     pub body: Option<String>,
+    /// P5 #46: a write's or an edit's change as a unified diff.
+    #[serde(default)]
+    pub patch: Option<String>,
     pub options: Vec<RequestOption>,
     #[serde(default)]
     pub assumption: Option<String>,

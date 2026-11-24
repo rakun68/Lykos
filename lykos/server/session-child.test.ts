@@ -119,6 +119,9 @@ describe("a real session on the engine server", () => {
       assert.ok(req.data.type === "request");
       assert.equal(req.data.request.kind, "approval");
       assert.ok(req.data.request.options.some((o) => o.value === "y"));
+      // P5 #46: a write shows its change as a diff, and the standing decisions say what they keep allowing.
+      assert.match(req.data.request.patch ?? "", /^@@ -0,0 \+1(,1)? @@\n\+hi$/m, "a new file's lines are all added");
+      assert.match(req.data.request.options.find((o) => o.value === "a")?.note ?? "", /every write for the rest of this session/);
       await c.request("session.answer", { session: s.id, requestId: req.data.request.requestId, answer: "y" });
       await until((e) => e.data.type === "request.resolved", "request.resolved");
       await until((e) => e.data.type === "tool.end" && e.data.ok, "the write finishing");

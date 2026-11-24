@@ -2,6 +2,7 @@
 //! thread (starting one when none runs), and from then on waits on one channel for keys, server events and
 //! request replies. It sleeps while nothing on screen moves and draws only after a change.
 mod app;
+mod diff;
 mod editor;
 mod history;
 mod keymap;
@@ -9,6 +10,7 @@ mod menu;
 mod mini;
 mod paste;
 mod prefs;
+mod request;
 mod stash;
 mod tabs;
 mod theme;

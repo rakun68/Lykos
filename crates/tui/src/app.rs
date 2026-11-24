@@ -268,6 +268,9 @@ pub struct App {
     pub jumped: Cell<Option<usize>>,
     /// The transcript's kept blocks (P5 #44), the layout the last frame drew, and where.
     pub layout_cache: RefCell<Cache>,
+    /// The approval or question prompt (P5 #46), and the diff an approval shows.
+    pub req: crate::request::Ui,
+    pub req_diff: RefCell<crate::request::Laid>,
     pub laid: RefCell<Option<Rc<Layout>>>,
     pub frame: Cell<Option<Frame>>,
     /// Groups a click opened or closed, per session.
@@ -316,6 +319,8 @@ impl App {
             jump: Cell::new(None),
             jumped: Cell::new(None),
             layout_cache: RefCell::new(Cache::default()),
+            req: crate::request::Ui::default(),
+            req_diff: RefCell::new(None),
             laid: RefCell::new(None),
             frame: Cell::new(None),
             opened: BTreeMap::new(),
@@ -1520,7 +1525,7 @@ impl App {
         }
         let m = key.modifiers;
         let (ctrl, alt, sup) = (m.contains(KeyModifiers::CONTROL), m.contains(KeyModifiers::ALT), m.contains(KeyModifiers::SUPER));
-        if let Some(answer) = self.answer_key(&key, ctrl || alt) {
+        if let Some(answer) = self.request_key(&key) {
             return answer;
         }
         if self.menu.is_some() {
@@ -2060,27 +2065,6 @@ impl App {
         }
     }
 
-    /// While the session waits on a request: an option's key (its value, when one character) picks it with the
-    /// prompt empty, and Enter sends what is typed, or the first option when nothing is. The dialogs are #46.
-    fn answer_key(&mut self, key: &KeyEvent, modified: bool) -> Option<Vec<Action>> {
-        let id = self.session.clone()?;
-        let request = self.current()?.requests.first()?.clone();
-        let answer = match key.code {
-            KeyCode::Char(ch) if !modified && self.editor.is_empty() => request.options.iter().find(|o| o.value.chars().eq(std::iter::once(ch)))?.value.clone(),
-            KeyCode::Enter if !modified => {
-                let typed = self.editor.expanded().trim().to_string();
-                if typed.is_empty() {
-                    request.options.first()?.value.clone()
-                } else {
-                    typed
-                }
-            }
-            _ => return None,
-        };
-        self.editor.reset();
-        Some(vec![Action::Answer { session: id, request_id: request.request_id, answer }])
-    }
-
     fn escape(&mut self, now: Instant) -> Vec<Action> {
         let Some(id) = self.session.clone() else { return Vec::new() };
         if !matches!(self.status(), Some(SessionStatus::Running | SessionStatus::Waiting)) {
@@ -2348,26 +2332,82 @@ mod tests {
         assert_eq!(app.started("s2".into()), vec![]);
     }
 
+    fn request(app: &mut App, seq: u64, kind: &str, title: &str, options: &[(&str, &str)]) {
+        let options = options.iter().map(|(v, l)| lykos_client::RequestOption { value: (*v).into(), label: (*l).into(), note: None }).collect();
+        let request = lykos_client::RequestData { request_id: format!("r{seq}"), kind: kind.into(), title: title.into(), detail: "ls".into(), body: None, patch: None, options, assumption: None };
+        app.on_event(&Event { event: "request".into(), session: "s1".into(), seq, data: EventData::Request { request } });
+    }
+
+    fn answer(id: &str, a: &str) -> Vec<Action> {
+        vec![Action::Answer { session: "s1".into(), request_id: id.into(), answer: a.into() }]
+    }
+
     #[test]
-    fn an_option_key_or_enter_answers_a_waiting_request() {
+    fn a_question_answers_by_number_by_row_or_by_typing() {
         let mut app = idle();
         status(&mut app, 2, SessionStatus::Waiting);
-        let request = lykos_client::RequestData {
-            request_id: "r1".into(),
-            kind: "question".into(),
-            title: "which?".into(),
-            detail: String::new(),
-            body: None,
-            options: vec![lykos_client::RequestOption { value: "1".into(), label: "a".into() }, lykos_client::RequestOption { value: "2".into(), label: "b".into() }],
-            assumption: None,
-        };
-        app.on_event(&Event { event: "request".into(), session: "s1".into(), seq: 3, data: EventData::Request { request } });
-        let answer = |a: &str| vec![Action::Answer { session: "s1".into(), request_id: "r1".into(), answer: a.into() }];
-        assert_eq!(press(&mut app, key(KeyCode::Char('2'))), answer("2"));
-        assert_eq!(press(&mut app, key(KeyCode::Enter)), answer("1"), "enter with nothing typed: the first option");
-        typed(&mut app, "x");
-        assert_eq!(app.editor.text(), "x", "a key that is no option types");
-        assert_eq!(press(&mut app, key(KeyCode::Enter)), answer("x"));
+        typed(&mut app, "draft");
+        request(&mut app, 3, "question", "which?", &[("1", "a"), ("2", "b")]);
+        assert_eq!(press(&mut app, key(KeyCode::Char('2'))), answer("r3", "2"));
+        assert_eq!(press(&mut app, key(KeyCode::Char('x'))), vec![], "a letter on an option row does nothing");
+        press(&mut app, key(KeyCode::Down));
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), answer("r3", "2"), "enter picks the row moved to");
+        press(&mut app, key(KeyCode::Up));
+        assert_eq!(app.req.selected, 2, "up from the first row wraps to \"Type your own answer\"");
+        typed(&mut app, "mine");
+        assert!(app.req.editing);
+        assert_eq!(app.editor.text(), "mine", "the draft prompt steps aside while the answer is typed");
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), answer("r3", "mine"));
+        assert_eq!(app.editor.text(), "draft", "and comes back once it is sent");
+        press(&mut app, key(KeyCode::Char('3')));
+        assert!(app.req.editing, "the custom row's number starts typing");
+        press(&mut app, key(KeyCode::Esc));
+        assert!(!app.req.editing);
+        assert_eq!(app.editor.text(), "draft");
+        assert_eq!(press(&mut app, key(KeyCode::Esc)), answer("r3", ""), "dismissed: the question's assumption");
+    }
+
+    #[test]
+    fn a_free_text_question_takes_what_is_typed() {
+        let mut app = idle();
+        status(&mut app, 2, SessionStatus::Waiting);
+        request(&mut app, 3, "question", "why?", &[]);
+        typed(&mut app, "because");
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), answer("r3", "because"));
+        assert_eq!(press(&mut app, key(KeyCode::Esc)), answer("r3", ""));
+    }
+
+    #[test]
+    fn an_approval_moves_confirms_rejects_and_goes_full_screen() {
+        let mut app = idle();
+        status(&mut app, 2, SessionStatus::Waiting);
+        request(&mut app, 3, "approval", "bash: run ls", &[("y", "Allow once"), ("a", "Always"), ("f", "Folder"), ("n", "Deny")]);
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), answer("r3", "y"));
+        press(&mut app, key(KeyCode::Right));
+        press(&mut app, key(KeyCode::Char('l')));
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), answer("r3", "f"));
+        press(&mut app, key(KeyCode::Left));
+        assert_eq!(app.req.selected, 3, "left from the first option wraps");
+        assert_eq!(press(&mut app, key(KeyCode::Char('a'))), answer("r3", "a"), "the gate's letters answer directly");
+        assert_eq!(press(&mut app, key(KeyCode::Char('z'))), vec![], "any other letter does nothing");
+        assert_eq!(app.editor.text(), "");
+        press(&mut app, ctrl('f'));
+        assert!(app.req.expanded);
+        assert_eq!(press(&mut app, key(KeyCode::Esc)), vec![], "esc leaves full screen first");
+        assert!(!app.req.expanded);
+        assert_eq!(press(&mut app, key(KeyCode::Esc)), answer("r3", "n"));
+    }
+
+    #[test]
+    fn the_prompt_starts_over_for_the_next_request() {
+        let mut app = idle();
+        status(&mut app, 2, SessionStatus::Waiting);
+        request(&mut app, 3, "approval", "bash: run ls", &[("y", "Allow once"), ("n", "Deny")]);
+        press(&mut app, key(KeyCode::Right));
+        assert_eq!(app.request_ui().selected, 1);
+        app.store.sessions.get_mut("s1").unwrap().requests.clear();
+        request(&mut app, 4, "approval", "bash: run pwd", &[("y", "Allow once"), ("n", "Deny")]);
+        assert_eq!(app.request_ui().selected, 0);
     }
 
     #[test]

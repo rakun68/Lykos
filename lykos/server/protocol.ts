@@ -124,8 +124,13 @@ export interface RequestData {
   title: string;
   detail: string;
   body?: string;
-  /** For an approval: decisions; for a question: labels. Empty for a free-text question. */
-  options: { value: string; label: string }[];
+  /** P5 #46: a write's or an edit's change, as a unified diff of the file on disk against the content proposed. */
+  patch?: string;
+  /**
+   * For an approval: decisions; for a question: labels. Empty for a free-text question. `note` says what a decision
+   * keeps allowing, for a client to show while it is picked (OpenCode's `permissionAlwaysLines`).
+   */
+  options: { value: string; label: string; note?: string }[];
   /** A question's stated assumption, used when nobody answers. */
   assumption?: string;
 }

@@ -86,7 +86,7 @@ try {
   s.press("esc");
   await step("the second esc interrupts", () => s.screen().includes("interrupted"));
   await submit("ask");
-  await step("a question shows with its options", () => s.screen().includes("which?") && s.screen().includes("1 a"));
+  await step("a question shows with its options", () => s.screen().includes("which?") && s.screen().includes("1. a") && s.screen().includes("Type your own answer"));
   s.write("1");
   await step("an option's key answers it", () => !s.screen().includes("which?") && !s.screen().includes("esc interrupt"));
   await type("/sk");
