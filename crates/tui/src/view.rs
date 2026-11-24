@@ -517,7 +517,6 @@ fn dialog(app: &App, buf: &mut Buffer) {
             let row = |a: &str, b: String| (columns(a, &b, inner), theme::text());
             let unknown = || "unknown".to_string();
             let usage = app.current().and_then(|s| s.usage.clone()).unwrap_or_default();
-            let usd = |v: Option<f64>| v.map_or_else(unknown, |v| format!("${v:.2}"));
             let no_mcp = vec![
                 ("No MCP servers".to_string(), theme::text()),
                 ("A Lykos session connects to none; Lykos is one itself (lykos mcp).".to_string(), theme::muted()),
@@ -541,18 +540,39 @@ fn dialog(app: &App, buf: &mut Buffer) {
                     ("Status".into(), rows, None, close.clone())
                 }
                 Info::Mcp => ("MCP servers".into(), no_mcp, None, close.clone()),
-                Info::Usage => (
-                    "Usage".into(),
-                    vec![
+                Info::Usage => {
+                    let t = &usage.tokens;
+                    let mut rows = vec![
                         row("This session", usd(usage.run_usd)),
                         row("Today", usd(usage.today_usd)),
                         row("Calls", usage.calls.to_string()),
                         row("Cache hit", usage.cache_hit_ratio.map_or_else(unknown, |r| format!("{}%", (r * 100.0).round()))),
+                        // P5 #53: the old footer's counters, each as the ledger counted it.
+                        row("Fresh input", tokens(t.fresh)),
+                        row("Cache read", tokens(t.cache_read)),
+                        row("Cache write", tokens(t.cache_write)),
+                        row("Output", tokens(t.output)),
                         row("Context", context_label(app).unwrap_or_else(unknown)),
-                    ],
-                    None,
-                    close.clone(),
-                ),
+                        row("Cache", usage.cache.as_ref().map_or_else(unknown, |c| format!("{} {} · {}", percent(c.pct), c.status, c.model))),
+                        row(
+                            "Outcome",
+                            usage.outcome.as_ref().map_or_else(
+                                || "not recorded".into(),
+                                |o| match (&o.source, o.verified) {
+                                    (Some(src), true) => format!("{} · verified by {src}", o.value),
+                                    (Some(src), false) => format!("{} · unverified ({src})", o.value),
+                                    (None, _) => format!("{} · unverified", o.value),
+                                },
+                            ),
+                        ),
+                    ];
+                    for a in &usage.alerts {
+                        let style = Style::fg(if a.severity == "danger" { c().love } else { c().gold });
+                        rows.push((format!("⚠ {} · {}", a.id, a.message), style));
+                        rows.push((format!("  {}", a.remedy), theme::muted()));
+                    }
+                    ("Usage".into(), rows, None, close.clone())
+                }
                 Info::Debug => (
                     "Debug  share this when reporting an issue".into(),
                     app.debug_rows().into_iter().map(|(a, b)| row(a, b)).collect(),
@@ -713,11 +733,13 @@ pub(crate) fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u1
         k if k.is_empty() => l,
         k => format!("{k} {l}"),
     });
-    let right = match (live, context_label(app)) {
+    // The old footer's triad and context in two thirds of the row at most; the directory keeps the rest.
+    let room = (width as usize * 2 / 3).saturating_sub(live.as_ref().map_or(0, |l| l.width() + 3));
+    let right = match (live, usage_line(app, room)) {
         (Some(l), Some(c)) => Some(format!("{l} · {c}")),
         (l, c) => l.or(c),
     };
-    let rw = right.as_ref().map_or(0, |r| r.chars().count() as u16);
+    let rw = right.as_ref().map_or(0, |r| r.width() as u16);
     let left_w = width.saturating_sub(rw + 2);
     match &app.link {
         Link::Connecting => {
@@ -768,6 +790,70 @@ fn context_label(app: &App) -> Option<String> {
         s.push_str(&format!(" · {}% used", p.round() as u64));
     }
     Some(s)
+}
+
+/// `renderers/line.ts` `renderTriadLine` (P5 #53): fresh input, cache hit, cache write, output; the context; the
+/// cache gauge; the run's cost; the top alert. Each number is the server's, only formatted. Segments drop whole,
+/// widest layout first, until one fits `room`.
+pub(crate) fn usage_line(app: &App, room: usize) -> Option<String> {
+    let u = app.current()?.usage.as_ref()?;
+    let t = &u.tokens;
+    let hit = format!("⚡{}", percent(u.cache_hit_ratio));
+    let triad = format!("↑{} {hit} ✎ {} ↓{}", tokens(t.fresh), tokens(t.cache_write), tokens(t.output));
+    let ctx = context_label(app);
+    let ctx_short = u.context_percent.map(|p| format!("{}% ctx", p.round() as u64));
+    let cache = u.cache.as_ref().map(|c| format!("cache {} {}", percent(c.pct), c.status));
+    let cost = Some(usd(u.run_usd));
+    let badge = alert_badge(&u.alerts);
+    let join = |parts: &[&Option<String>]| parts.iter().filter_map(|p| p.as_deref()).collect::<Vec<_>>().join(" · ");
+    let (triad, hit) = (Some(triad), Some(hit));
+    [
+        join(&[&triad, &ctx, &cache, &cost, &badge]),
+        join(&[&triad, &ctx, &cost, &badge]),
+        join(&[&triad, &ctx_short, &cost, &badge]),
+        join(&[&hit, &ctx_short, &cost, &badge]),
+        join(&[&cost, &badge]),
+    ]
+    .into_iter()
+    .find(|l| l.width() <= room)
+}
+
+/// `format.ts` `fmtPct`: a fraction as a whole percent, `?%` when unknown.
+fn percent(fraction: Option<f64>) -> String {
+    fraction.map_or_else(|| "?%".into(), |f| format!("{}%", (f * 100.0).round() as i64))
+}
+
+/// `format.ts` `fmtTokens`: `1.2k`, `3.40M`.
+pub(crate) fn tokens(n: f64) -> String {
+    match n.abs() {
+        a if a >= 1_000_000.0 => format!("{:.2}M", n / 1_000_000.0),
+        a if a >= 1_000.0 => format!("{:.1}k", n / 1_000.0),
+        _ => format!("{}", n.round() as i64),
+    }
+}
+
+/// `format.ts` `fmtUsd`: four places below a cent, three above; `$?` when unpriced, never `$0.00`.
+pub(crate) fn usd(v: Option<f64>) -> String {
+    match v {
+        None => "$?".into(),
+        Some(v) if v.is_nan() => "$?".into(),
+        Some(v) if v.abs() < 0.01 => format!("${v:.4}"),
+        Some(v) => format!("${v:.3}"),
+    }
+}
+
+/// `line.ts` `alertBadge`: the most severe alert's id, and how many more.
+fn alert_badge(alerts: &[lykos_client::Alert]) -> Option<String> {
+    let rank = |s: &str| match s {
+        "danger" => 2,
+        "warn" => 1,
+        _ => 0,
+    };
+    let top = alerts.iter().max_by_key(|a| rank(&a.severity))?;
+    Some(match alerts.len() - 1 {
+        0 => format!("⚠ {}", top.id),
+        rest => format!("⚠ {} +{rest}", top.id),
+    })
 }
 
 pub(crate) fn group(n: u64) -> String {
@@ -834,6 +920,50 @@ mod tests {
         let options = options.iter().map(|(v, l, n)| lykos_client::RequestOption { value: (*v).into(), label: (*l).into(), note: n.map(Into::into) }).collect();
         let request = lykos_client::RequestData { request_id: "r1".into(), kind: kind.into(), title: title.into(), detail: detail.into(), body: None, patch: patch.map(Into::into), options, assumption: Some("go on".into()) };
         app.on_event(&Event { event: "x".into(), session: "s1".into(), seq: 6, data: EventData::Request { request } });
+    }
+
+    #[test]
+    fn the_footer_shows_the_old_triad_and_drops_whole_segments_to_fit() {
+        let mut app = app_with_session();
+        let usage = UsageData {
+            context_tokens: Some(12345.0),
+            context_percent: Some(6.2),
+            run_usd: Some(0.0384),
+            cache_hit_ratio: Some(0.74),
+            tokens: lykos_client::TokenCounters { fresh: 1200.0, cache_read: 3400.0, cache_write: 500.0, output: 230.0, reasoning: 0.0 },
+            cache: Some(lykos_client::CacheGauge { model: "m".into(), pct: Some(0.74), status: "fresh".into() }),
+            alerts: vec![
+                lykos_client::Alert { id: "budget.run".into(), severity: "warn".into(), message: "near the cap".into(), remedy: "raise it".into() },
+                lykos_client::Alert { id: "context.full".into(), severity: "danger".into(), message: "m".into(), remedy: "r".into() },
+            ],
+            outcome: Some(lykos_client::Outcome { value: "success".into(), source: Some("verification_command".into()), verified: true }),
+            ..Default::default()
+        };
+        app.on_event(&Event { event: "x".into(), session: "s1".into(), seq: 6, data: EventData::Usage { usage } });
+        assert_eq!(
+            usage_line(&app, 200).as_deref(),
+            Some("↑1.2k ⚡74% ✎ 500 ↓230 · 12,345 tokens · 6% used · cache 74% fresh · $0.038 · ⚠ context.full +1")
+        );
+        assert_eq!(usage_line(&app, 50).as_deref(), Some("⚡74% · 6% ctx · $0.038 · ⚠ context.full +1"));
+        assert_eq!(usage_line(&app, 30).as_deref(), Some("$0.038 · ⚠ context.full +1"));
+        assert_eq!(usage_line(&app, 5), None);
+        app.dialog = Some(Dialog::Info { info: Info::Usage });
+        let mut buf = Buffer::new(100, 40);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("Cache write") && s.contains("500"), "{s}");
+        assert!(s.contains("success · verified by verification_command"), "{s}");
+        assert!(s.contains("⚠ budget.run · near the cap"), "{s}");
+    }
+
+    #[test]
+    fn the_old_slash_commands_are_palette_actions_that_send_them() {
+        let mut app = app_with_session();
+        for (id, text) in [("lykos.mode", "/mode"), ("lykos.permissions", "/permissions"), ("lykos.output_style", "/output-style"), ("lykos.credential", "/credential")] {
+            assert!(app.palette("").iter().any(|d| d.id == id), "{id} is in the palette");
+            let actions = app.run(id, std::time::Instant::now(), 10);
+            assert!(matches!(actions.as_deref(), Some([crate::app::Action::Prompt { text: t, .. }]) if t == text), "{id}: {actions:?}");
+        }
     }
 
     #[test]
@@ -918,7 +1048,7 @@ mod tests {
         let s = screen(&buf);
         assert!(s.contains("Press ctrl+p to see all available actions"), "{s}");
         assert!(s.contains("Leader") && s.contains("ctrl+x · default"), "{s}");
-        app.dialog = Some(Dialog::Help { scroll: 115 });
+        app.dialog = Some(Dialog::Help { scroll: 119 });
         draw(&app, &mut buf);
         assert!(screen(&buf).contains("Undo in input"), "scrolled to the input actions");
     }

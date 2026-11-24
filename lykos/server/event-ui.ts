@@ -56,6 +56,10 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
       todayUsd: vm.cost.todayUsd,
       cacheHitRatio: vm.tokens.hitRatio,
       calls: vm.tokens.calls,
+      tokens: vm.tokens.counters,
+      cache: vm.cache?.[0] ?? null,
+      alerts: vm.alerts,
+      outcome: vm.outcome,
     };
     hooks.emit({ type: "usage", usage: data });
     return vm;

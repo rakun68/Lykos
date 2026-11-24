@@ -1743,7 +1743,7 @@ impl App {
 
     /// Runs an action (`keymap::DEFS`) where it applies; `None` where it does not, so the key's next action is tried.
     /// The comments name OpenCode's actions where Lykos's differ.
-    fn run(&mut self, id: &str, now: Instant, page: usize) -> Option<Vec<Action>> {
+    pub(crate) fn run(&mut self, id: &str, now: Instant, page: usize) -> Option<Vec<Action>> {
         if let Some(out) = self.run_view(id) {
             return Some(out);
         }
@@ -1848,6 +1848,10 @@ impl App {
             "agent.cycle" => return Some(self.cycle_specialist(1)),
             "agent.cycle.reverse" => return Some(self.cycle_specialist(-1)),
             "provider.connect" => return Some(self.open_list(List::Providers)),
+            "lykos.mode" => return Some(self.command("/mode".into())),
+            "lykos.permissions" => return Some(self.command("/permissions".into())),
+            "lykos.output_style" => return Some(self.command("/output-style".into())),
+            "lykos.credential" => return Some(self.command("/credential".into())),
             "theme.switch" => return Some(self.open_list(List::Themes { initial: theme::c().name })),
             "theme.switch_mode" => self.switch_mode(),
             "usage.show" => self.dialog = Some(Dialog::Info { info: Info::Usage }),

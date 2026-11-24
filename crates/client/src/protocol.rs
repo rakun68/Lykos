@@ -41,6 +41,52 @@ pub struct UsageData {
     pub today_usd: Option<f64>,
     pub cache_hit_ratio: Option<f64>,
     pub calls: u64,
+    /// P5 #53: the old footer's counters.
+    #[serde(default)]
+    pub tokens: TokenCounters,
+    /// P5 #53: the cache reading of the model in use.
+    #[serde(default)]
+    pub cache: Option<CacheGauge>,
+    #[serde(default)]
+    pub alerts: Vec<Alert>,
+    #[serde(default)]
+    pub outcome: Option<Outcome>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenCounters {
+    pub fresh: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+    pub output: f64,
+    pub reasoning: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheGauge {
+    pub model: String,
+    pub pct: Option<f64>,
+    /// `fresh`, `stale` or `unknown`.
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Alert {
+    pub id: String,
+    /// `info`, `warn` or `danger`.
+    pub severity: String,
+    pub message: String,
+    pub remedy: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Outcome {
+    pub value: String,
+    pub source: Option<String>,
+    /// Only from a verification command or a human.
+    pub verified: bool,
 }
 
 /// What `session.options` answers: the lists a client's pickers show for one live session.

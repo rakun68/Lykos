@@ -627,6 +627,12 @@ An MCP or `lykos run` session shown in `lykos-tui` while its owner keeps running
 server reads its owner row and transcript, a prompt steers it and an interrupt stops it.
 _Avoid_: attached session, adopted session
 
+**Triad**:
+The footer's token counts for a session: fresh input, cache hit, cache write and output, followed by
+the context, the cache gauge, the cost and the top alert. The old TUI and `lykos-tui` show the same
+numbers, read from the ledger by the engine server; the interface formats them and derives none.
+_Avoid_: token bar, stats line
+
 **Queued prompt**:
 A prompt held by `lykos-tui` until its session is idle, then sent; queued with `Ctrl+X Enter`.
 _Avoid_: pending message

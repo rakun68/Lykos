@@ -91,7 +91,9 @@ try {
   await step("a tool call shows with its icon at high verbosity", () => s.screen().includes("→ read README.md"));
   await verbosity("High");
   await step("back to low", () => s.screen().includes("+ 1 read"));
-  await step("model, effort and context use update", () => s.screen().includes("faux/scripted · high") && s.screen().includes("12,345 tokens · 6% used"));
+  await step("model, effort and context use update", () => s.screen().includes("faux/scripted · high") && s.screen().includes("6% ctx"));
+  // P5 #53: the old footer's triad, cost and top alert, as the server sent them.
+  await step("the footer shows the tokens, cost and alert", () => s.screen().includes("↑1.2k ⚡74% ✎ 500 ↓230") && s.screen().includes("$? · ⚠ budget.run"));
   await submit("hold");
   await step("a running turn offers esc interrupt", () => s.screen().includes("esc interrupt"));
   s.press("esc");

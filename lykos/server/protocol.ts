@@ -5,6 +5,8 @@
  */
 
 import type { KeybindSetting } from "../config/keybinds.js";
+import type { CacheGaugeEntry } from "../tui/cache-gauge.js";
+import type { Alert, OutcomeView, TokenCounters } from "../tui/types.js";
 export type { ModelOption, ProviderOption, SessionOptions, SpecialistOption } from "../session/session-options.js";
 
 /** Bumped on any change a client of the previous version would misread. A client of another version is refused. */
@@ -137,6 +139,14 @@ export interface UsageData {
   todayUsd: number | null;
   cacheHitRatio: number | null;
   calls: number;
+  /** P5 #53: the old footer's counters: fresh input, cache read, cache write, output, reasoning. */
+  tokens: TokenCounters;
+  /** P5 #53: the provider-backed cache reading of the model in use, or null before one. */
+  cache: CacheGaugeEntry | null;
+  /** P5 #53: the HUD's warnings, as the old footer's badge and alert panel list them. */
+  alerts: Alert[];
+  /** P5 #53: the session's recorded outcome; `verified` only from a verification command or a human. */
+  outcome: OutcomeView | null;
 }
 
 export interface RequestData {

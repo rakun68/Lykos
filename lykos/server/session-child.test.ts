@@ -100,7 +100,12 @@ describe("a real session on the engine server", () => {
       const turn = await until((e) => e.data.type === "turn.end", "turn.end");
       const reply = events.filter((e) => e.seq < turn.seq && e.data.type === "message.delta").map((e) => (e.data as { text: string }).text).join("");
       assert.match(reply, /pong/);
-      await until((e) => e.data.type === "usage", "usage");
+      const usage = await until((e) => e.data.type === "usage", "usage");
+      // P5 #53: the old footer's numbers ride the usage event, as the ledger's HUD read them.
+      assert.ok(usage.data.type === "usage");
+      assert.equal(typeof usage.data.usage.tokens.fresh, "number");
+      assert.equal(typeof usage.data.usage.tokens.cacheWrite, "number");
+      assert.ok(Array.isArray(usage.data.usage.alerts));
       const commands = await until((e) => e.data.type === "commands", "the commands event");
       assert.ok(commands.data.type === "commands" && commands.data.commands.some((c) => c.name === "/help" && c.source === "builtin"));
 
@@ -129,6 +134,11 @@ describe("a real session on the engine server", () => {
 
       await c.request("session.close", { session: s.id });
       const closed = await until(status("closed"), "closed");
+      // P5 #53: the gate's verdict at the session's end is a system line the client shows.
+      assert.ok(
+        events.some((e) => e.seq < closed.seq && e.data.type === "system" && e.data.text.startsWith("lykos gate:")),
+        `the gate's line: ${JSON.stringify(events.filter((e) => e.data.type === "system").map((e) => e.data))}`,
+      );
       c.close();
       // `crates/client`'s store is tested against this stream: LYKOS_RECORD_EVENTS=<file> rewrites it.
       if (process.env.LYKOS_RECORD_EVENTS) writeFileSync(process.env.LYKOS_RECORD_EVENTS, events.map((e) => `${JSON.stringify(e).split(JSON.stringify(w.root).slice(1, -1)).join("/fixture")}\n`).join(""));

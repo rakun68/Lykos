@@ -160,6 +160,12 @@ pub const DEFS: &[Def] = &[
     def("usage.show", "none", "View usage", "Agent"),
     def("mcp.list", "none", "List MCP servers", "Agent"),
     def("provider.connect", "none", "Connect a provider", "Agent"),
+    // P5 #53: the old TUI's slash commands with no OpenCode action; each sends the command, and the session's
+    // answer shows as its system lines. `/login` is `provider.connect`, `/specialist` is `agent.list`.
+    def("lykos.mode", "none", "Show interaction mode", "Agent"),
+    def("lykos.permissions", "none", "Show permissions", "Agent"),
+    def("lykos.output_style", "none", "List output styles", "Agent"),
+    def("lykos.credential", "none", "List credentials", "Agent"),
     def("theme.switch", "none", "List available themes", "System"),
     def("theme.switch_mode", "none", "Switch between light and dark theme mode", "System"),
     def("lykos.status", "<leader>s", "View status", "System"),

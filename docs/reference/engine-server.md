@@ -96,6 +96,14 @@ does not know as `Unknown`.
 `starting`, `idle`, `running`, `waiting` (a request is open) or `closed`. `title` is the first
 prompt. `origin` is who started it: `tui`, or for a watched session its owner, `mcp` or `run`.
 
+`UsageData` (the `usage` event): `{model, effort, contextTokens, contextWindow, contextPercent, runUsd,
+todayUsd, cacheHitRatio, calls, tokens, cache, alerts, outcome}`, read from Pi and the ledger as the old
+TUI's HUD reads them (`deriveHud`). `tokens` is `{fresh, cacheRead, cacheWrite, output, reasoning}`;
+`cache` is the model in use's provider-backed reading, `{model, cachedTokens, writtenTokens, ageSeconds,
+pct, status}` or null; `alerts` is `[{id, severity, message, remedy}]`; `outcome` is `{value, source,
+verified}` or null, `verified` only for a verification command or a human. A client formats them and
+derives nothing from them (P5 #53, scanned by `lykos/server/tui-scan.test.ts`).
+
 ---
 
 ## 3. Sessions

@@ -128,7 +128,11 @@ process.on("message", (msg: ToChild) => {
         // A tool call and the usage after it, as a real turn sends them (the TUI's end-to-end test, #37).
         send({ kind: "event", data: { type: "tool.start", toolId: "t1", name: "read", summary: "README.md", args: { path: "README.md" } } });
         send({ kind: "event", data: { type: "tool.end", toolId: "t1", name: "read", ok: true, preview: "# Lykos" } });
-        const usage = { model: "faux/scripted", effort: "high", contextTokens: 12345, contextWindow: 200000, contextPercent: 6.2, runUsd: null, todayUsd: null, cacheHitRatio: null, calls: 1 };
+        const usage = { model: "faux/scripted", effort: "high", contextTokens: 12345, contextWindow: 200000, contextPercent: 6.2, runUsd: null, todayUsd: null, cacheHitRatio: 0.74, calls: 1,
+          tokens: { fresh: 1200, cacheRead: 3400, cacheWrite: 500, output: 230, reasoning: 0 },
+          cache: { model: "faux/scripted", cachedTokens: 3400, writtenTokens: 500, ageSeconds: 4, pct: 0.74, status: "fresh" as const },
+          alerts: [{ id: "budget.run", severity: "warn" as const, message: "run spend at 80% of its cap", remedy: "raise budget.run_usd" }],
+          outcome: null };
         send({ kind: "event", data: { type: "usage", usage } });
         send({ kind: "event", data: { type: "message.delta", text: "read the readme" } });
         send({ kind: "event", data: { type: "message.end" } });

@@ -446,6 +446,19 @@ Where #46 differs from OpenCode on purpose:
   card and no branch after the directory; its title is cut to one row; Modified Files is a Lykos
   section; the Todo fold is not saved.
 
+**The old TUI's numbers and commands (#53).** The footer's right side is the old footer's triad
+(`renderers/line.ts`): `↑1.2k ⚡74% ✎ 500 ↓230 · 12,345 tokens · 6% used · cache 74% fresh · $0.038 ·
+⚠ context.full +1`, fresh input, cache hit, cache write and output, then the context, the cache gauge,
+the run's cost and the most severe alert with how many more. It takes two thirds of the row at most
+and drops whole segments, widest first, down to the cost and the alert. The usage dialog
+(`usage.show`) lists every counter, the cache reading, the recorded outcome (`verified by
+verification_command`, or `unverified`) and each alert with its remedy. Every number is the engine
+server's (`UsageData`, [engine-server.md](engine-server.md)), formatted as the old TUI formats it; the
+TUI opens no ledger and derives no number. The gate's verdict, the seal's checks and the outcome
+question at a session's end are the session's system lines, as in the old TUI. `/mode`,
+`/permissions`, `/output-style` and `/credential` are palette actions (Agent) that send the command;
+`/login` is `Connect a provider` and `/specialist` is `List specialists`.
+
 **MCP and `lykos run` sessions (#51).** The session list shows the project's delegated sessions
 that run now, with their owner and state (`MCP running`, `lykos run waiting`). `Enter` on one
 watches it (`session.watch`, [engine-server.md](engine-server.md)): its owner keeps running it, the
