@@ -312,7 +312,64 @@ pub struct App {
     /// Since when a shell call has held the turn, and whether the ctrl+b hint shows (after 3 s).
     fg_since: Option<Instant>,
     pub bg_hint: bool,
+    /// What a new session starts with (`config.keybinds`' `defaults`), shown before one runs (#58 item 10).
+    pub defaults: Option<Defaults>,
+    /// Short messages over the top left corner, each until its time is up (#58 item 5).
+    pub toasts: Vec<Toast>,
+    /// When ctrl+c (`app.exit`) was last pressed: a second press within `EXIT_WINDOW` quits.
+    pub exit_armed: Option<Instant>,
 }
+
+/// One palette row: an action (`id`), or a slash command (`slash`, with `id` empty).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaletteRow {
+    pub id: &'static str,
+    pub title: String,
+    pub group: &'static str,
+    /// The keys that run it, or the command as typed.
+    pub keys: String,
+    /// The config layer that set its keys.
+    pub source: String,
+    pub slash: Option<menu::Entry>,
+    /// What a search matches beyond the title.
+    search: String,
+}
+
+/// The slash commands' group in the palette, and the groups' order.
+pub const SLASH_GROUP: &str = "Commands";
+pub const PALETTE_GROUPS: [&str; 7] = ["App", "Session", SLASH_GROUP, "Agent", "System", "Prompt", "Input"];
+
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or("")
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Defaults {
+    pub model: String,
+    pub effort: String,
+    pub specialist: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ToastKind {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toast {
+    pub kind: ToastKind,
+    pub text: String,
+    pub until: Instant,
+}
+
+/// How long a toast shows, and how many show at once (the oldest goes first).
+pub const TOAST_TIME: Duration = Duration::from_millis(2500);
+const TOASTS_SHOWN: usize = 3;
+/// `app.exit` asks twice: the second press within this quits.
+pub const EXIT_WINDOW: Duration = Duration::from_secs(2);
 
 impl App {
     pub fn new(cwd: String) -> App {
@@ -365,6 +422,9 @@ impl App {
             poll: None,
             fg_since: None,
             bg_hint: false,
+            defaults: None,
+            toasts: Vec::new(),
+            exit_armed: None,
         }
     }
 
@@ -444,15 +504,15 @@ impl App {
                 let last = self.current().and_then(|s| s.items.iter().rev().find_map(|it| if let Item::Assistant(t) = it { Some(t.trim().to_string()) } else { None }));
                 return Some(match last {
                     None => {
-                        self.notice = Some("No assistant messages found".into());
+                        self.toast(ToastKind::Warning, "No assistant messages found".into());
                         Vec::new()
                     }
                     Some(t) if t.is_empty() => {
-                        self.notice = Some("No text content found in last assistant message".into());
+                        self.toast(ToastKind::Warning, "No text content found in last assistant message".into());
                         Vec::new()
                     }
                     Some(t) => {
-                        self.notice = Some("Message copied to clipboard!".into());
+                        self.toast(ToastKind::Success, "Message copied to clipboard!".into());
                         vec![Action::Copy(t)]
                     }
                 });
@@ -491,13 +551,24 @@ impl App {
         out.join("\n")
     }
 
+    /// A short message over the top left corner for `TOAST_TIME` (#58 item 5): what every passing message uses. The
+    /// same text twice in a row restarts its time rather than stacking.
+    pub fn toast(&mut self, kind: ToastKind, text: String) {
+        let until = Instant::now() + TOAST_TIME;
+        self.toasts.retain(|t| t.text != text);
+        self.toasts.push(Toast { kind, text, until });
+        if self.toasts.len() > TOASTS_SHOWN {
+            self.toasts.remove(0);
+        }
+    }
+
     /// `Selection.copy`: the text to the clipboard; the selection stays.
     fn copy_selection(&mut self) -> Vec<Action> {
         let text = self.selected_text();
         if text.is_empty() {
             return Vec::new();
         }
-        self.notice = Some("Copied to clipboard".into());
+        self.toast(ToastKind::Success, "Copied to clipboard".into());
         vec![Action::Copy(text)]
     }
 
@@ -569,7 +640,7 @@ impl App {
 
     /// Whether the screen changes with time alone: a spinner, or an armed key that will lapse.
     pub fn animating(&self) -> bool {
-        self.running() || self.armed.is_some() || self.leader.is_some() || self.asides > 0 || self.link == Link::Connecting || matches!(self.dialog, Some(Dialog::Output { .. }))
+        self.running() || self.armed.is_some() || self.leader.is_some() || self.exit_armed.is_some() || !self.toasts.is_empty() || self.asides > 0 || self.link == Link::Connecting || matches!(self.dialog, Some(Dialog::Output { .. }))
             || self.current().is_some_and(|s| !s.foreground.is_empty())
     }
 
@@ -584,6 +655,10 @@ impl App {
         if self.armed.is_some_and(|at| now.duration_since(at) >= INTERRUPT_WINDOW) {
             self.armed = None;
         }
+        if self.exit_armed.is_some_and(|at| now.duration_since(at) >= EXIT_WINDOW) {
+            self.exit_armed = None;
+        }
+        self.toasts.retain(|t| t.until > now);
         if self.leader.is_some_and(|at| now.duration_since(at) >= LEADER_WINDOW) {
             self.leader = None;
         }
@@ -738,9 +813,19 @@ impl App {
     }
 
     /// The config layers' key bindings (`config.keybinds`). What cannot be read is shown, and the rest applies.
-    pub fn on_keybinds(&mut self, result: Result<serde_json::Value, String>) {
+    pub fn on_config(&mut self, result: Result<serde_json::Value, String>) {
         let problems = match result {
-            Ok(v) => self.keymap.apply(&v["keybinds"]),
+            Ok(v) => {
+                let mut p = self.keymap.apply(&v["keybinds"]);
+                p.extend(theme::set_colors(&v["colors"]));
+                let d = &v["defaults"];
+                let field = |k: &str| d[k].as_str().map(str::to_string);
+                self.defaults = match (field("model"), field("effort"), field("specialist")) {
+                    (Some(model), Some(effort), Some(specialist)) => Some(Defaults { model, effort, specialist }),
+                    _ => None,
+                };
+                p
+            }
             Err(e) => vec![format!("key bindings: {e}")],
         };
         if !problems.is_empty() {
@@ -764,12 +849,29 @@ impl App {
     /// The model in use: the status line's, else what the lists last said.
     pub fn model_now(&self) -> Option<String> {
         let usage = self.current().and_then(|s| s.usage.as_ref()).and_then(|u| u.model.clone());
-        usage.or_else(|| self.options.as_ref().map(|o| o.model.clone())).filter(|m| !m.is_empty())
+        usage
+            .or_else(|| self.options.as_ref().map(|o| o.model.clone()))
+            .filter(|m| !m.is_empty())
+            .or_else(|| self.defaults.as_ref().map(|d| d.model.clone()).filter(|m| !m.is_empty()))
     }
 
     pub fn effort_now(&self) -> Option<String> {
         let usage = self.current().and_then(|s| s.usage.as_ref()).and_then(|u| u.effort.clone());
-        usage.or_else(|| self.options.as_ref().and_then(|o| o.effort.clone())).filter(|e| !e.is_empty())
+        let live = usage.or_else(|| self.options.as_ref().and_then(|o| o.effort.clone())).filter(|e| !e.is_empty());
+        // #58 item 10: before a session answers, the effort a new one would start with.
+        if live.is_some() || self.options.is_some() {
+            return live;
+        }
+        self.defaults.as_ref().map(|d| d.effort.clone()).filter(|e| !e.is_empty())
+    }
+
+    /// The specialist in use, else the one a new session starts as.
+    pub fn specialist_now(&self) -> Option<String> {
+        self.options
+            .as_ref()
+            .map(|o| o.specialist.clone())
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.defaults.as_ref().map(|d| d.specialist.clone()).filter(|s| !s.is_empty()))
     }
 
     /// A live session to send a command to, and a refresh of the lists for it.
@@ -793,7 +895,7 @@ impl App {
         match self.live() {
             Some(session) => vec![Action::Prompt { session, text }],
             None => {
-                self.notice = Some("Open a session first".into());
+                self.toast(ToastKind::Warning, "Open a session first".into());
                 Vec::new()
             }
         }
@@ -1071,9 +1173,9 @@ impl App {
                 }
                 return self.started(v["id"].as_str().unwrap_or_default().to_string());
             }
-            Then::Notice(text) => self.notice = Some(text.into()),
+            Then::Notice(text) => self.toast(ToastKind::Info, text.into()),
             Then::Refresh { all } => return vec![self.history_call(all, Then::History)],
-            Then::Exported => self.notice = Some(format!("Exported to {}", v["path"].as_str().unwrap_or_default())),
+            Then::Exported => self.toast(ToastKind::Success, format!("Exported to {}", v["path"].as_str().unwrap_or_default())),
             Then::Worktrees => match serde_json::from_value(v) {
                 Ok(w) => self.worktrees = Some(w),
                 Err(e) => self.notice = Some(format!("the worktrees: {e}")),
@@ -1110,7 +1212,7 @@ impl App {
                 self.open_session(&id, cwd)
             }
             None => {
-                self.notice = Some(if nav == Nav::Parent { "This session has no parent" } else { "No child sessions" }.into());
+                self.toast(ToastKind::Info, if nav == Nav::Parent { "This session has no parent" } else { "No child sessions" }.into());
                 Vec::new()
             }
         }
@@ -1177,7 +1279,7 @@ impl App {
             }
             "session.timeline" => {
                 if self.timeline_rows("").is_empty() {
-                    self.notice = Some("No messages yet".into());
+                    self.toast(ToastKind::Info, "No messages yet".into());
                 } else {
                     self.dialog = Some(Dialog::Timeline { query: String::new(), selected: 0 });
                 }
@@ -1199,12 +1301,12 @@ impl App {
                 if self.current().is_none() {
                     return Some(self.need_session());
                 }
-                self.notice = Some("Copied to clipboard".into());
+                self.toast(ToastKind::Success, "Copied to clipboard".into());
                 vec![Action::Copy(self.transcript_text())]
             }
             "session.copy.id" => match self.ledger_id() {
                 Some(id) => {
-                    self.notice = Some("Session ID copied to clipboard!".into());
+                    self.toast(ToastKind::Success, "Session ID copied to clipboard!".into());
                     vec![Action::Copy(id)]
                 }
                 None => self.need_session(),
@@ -1265,7 +1367,7 @@ impl App {
     }
 
     fn need_session(&mut self) -> Vec<Action> {
-        self.notice = Some("Open a session first".into());
+        self.toast(ToastKind::Warning, "Open a session first".into());
         Vec::new()
     }
 
@@ -1368,11 +1470,11 @@ impl App {
         if has("dialog.move_session.delete") {
             let Some(r) = chosen else { return Vec::new() };
             if r.detail.contains("main checkout") {
-                self.notice = Some("The project's own checkout is not removed from here".into());
+                self.toast(ToastKind::Warning, "The project's own checkout is not removed from here".into());
                 return Vec::new();
             }
             if confirm.as_deref() != Some(r.value.as_str()) {
-                self.notice = Some(format!("Press {} again to remove {}; its branch and commits stay", self.keymap.first("dialog.move_session.delete"), r.value));
+                self.toast(ToastKind::Warning, format!("Press {} again to remove {}; its branch and commits stay", self.keymap.first("dialog.move_session.delete"), r.value));
                 self.dialog = Some(Dialog::Worktrees { selected, confirm: Some(r.value) });
                 return Vec::new();
             }
@@ -1448,7 +1550,7 @@ impl App {
         if oauth {
             return self.command(format!("/login {name}"));
         }
-        self.notice = Some(format!("{name} takes an API key: run `lykos login {name} --api-key` in a terminal"));
+        self.toast(ToastKind::Info, format!("{name} takes an API key: run `lykos login {name} --api-key` in a terminal"));
         Vec::new()
     }
 
@@ -1458,7 +1560,7 @@ impl App {
         let list: Vec<String> = if favorites { &self.prefs.favorite } else { &self.prefs.recent }.iter().filter(|m| known.contains(m)).cloned().collect();
         if list.is_empty() {
             if favorites {
-                self.notice = Some("Add a favorite model to use this shortcut".into());
+                self.toast(ToastKind::Info, "Add a favorite model to use this shortcut".into());
             }
             return Vec::new();
         }
@@ -1479,7 +1581,7 @@ impl App {
     fn cycle_effort(&mut self) -> Vec<Action> {
         let efforts = self.options.as_ref().map(|o| o.efforts.clone()).unwrap_or_default();
         if efforts.is_empty() {
-            self.notice = Some(if self.options.is_some() { "this model has no effort levels" } else { "Open a session first" }.into());
+            self.toast(ToastKind::Warning, if self.options.is_some() { "this model has no effort levels" } else { "Open a session first" }.into());
             return Vec::new();
         }
         let next = match self.effort_now().and_then(|e| efforts.iter().position(|x| *x == e)) {
@@ -1495,7 +1597,7 @@ impl App {
     /// `agent.cycle`: the old TUI's Shift+Tab, through the primary specialists.
     fn cycle_specialist(&mut self, direction: isize) -> Vec<Action> {
         let Some(o) = self.options.as_ref() else {
-            self.notice = Some("Open a session first".into());
+            self.toast(ToastKind::Warning, "Open a session first".into());
             return Vec::new();
         };
         let names: Vec<String> = o.specialists.iter().map(|s| s.name.clone()).collect();
@@ -1539,7 +1641,7 @@ impl App {
             }
         }
         if let Some(e) = error {
-            self.notice = Some(e);
+            self.toast(ToastKind::Error, e);
         }
     }
 
@@ -1812,12 +1914,14 @@ impl App {
                 let text = e.copy()?;
                 let at = e.cursor();
                 e.click(at, false);
+                self.toast(ToastKind::Success, "Copied to clipboard".into());
                 return Some(vec![Action::Copy(text)]);
             }
             "prompt.cut" => {
                 e.selection()?;
                 let text = e.cut()?;
                 let mut out = vec![Action::Copy(text)];
+                self.toast(ToastKind::Success, "Copied to clipboard".into());
                 out.extend(self.refresh_menu());
                 return Some(out);
             }
@@ -1829,7 +1933,19 @@ impl App {
                 e.set("");
                 self.history.reset();
             }
-            "app.exit" => return e.is_empty().then(|| vec![Action::Quit]),
+            // #58 item 5: the first press only asks; a second within `EXIT_WINDOW` quits.
+            "app.exit" => {
+                if !e.is_empty() {
+                    return None;
+                }
+                if self.exit_armed.is_some_and(|at| now.duration_since(at) < EXIT_WINDOW) {
+                    return Some(vec![Action::Quit]);
+                }
+                self.exit_armed = Some(now);
+                let key = self.keymap.first("app.exit");
+                self.toast(ToastKind::Warning, format!("Press {key} again to exit"));
+                return Some(Vec::new());
+            }
             "session.interrupt" => return Some(self.escape(now)),
             "session.page.up" => self.on_scroll(true, page),
             "session.page.down" => self.on_scroll(false, page),
@@ -1980,7 +2096,7 @@ impl App {
             Dialog::Info { info } => {
                 if info == Info::Debug && has("debug.copy") {
                     let text = self.debug_rows().iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
-                    self.notice = Some("Debug info copied to clipboard".into());
+                    self.toast(ToastKind::Success, "Debug info copied to clipboard".into());
                     return vec![Action::Copy(text)];
                 }
                 if has("dialog.select.submit") {
@@ -2062,7 +2178,7 @@ impl App {
                 if has("aside.copy") {
                     // btw.tsx: `c` copies the answer.
                     if let Ok(text) = answer {
-                        self.notice = Some("copied the answer".into());
+                        self.toast(ToastKind::Success, "copied the answer".into());
                         return vec![Action::Copy(text)];
                     }
                 } else if has("dialog.select.submit") {
@@ -2083,22 +2199,42 @@ impl App {
 
     /// The palette's rows for its query: every action that runs from anywhere, ranked as OpenCode's
     /// `dialog-select.tsx` does (the title counts twice the group and the name).
-    pub fn palette(&self, query: &str) -> Vec<&'static keymap::Def> {
+    /// The palette's rows (#58 item 11): every action run from anywhere, and every slash command, grouped in
+    /// `PALETTE_GROUPS` order; a search ranks them all.
+    pub fn palette(&self, query: &str) -> Vec<PaletteRow> {
         // `command-palette.tsx` leaves the palette's own action out.
-        let defs = keymap::DEFS.iter().filter(|d| keymap::in_palette(d.group) && d.id != "command.palette.show");
+        let actions = keymap::DEFS.iter().filter(|d| keymap::in_palette(d.group) && d.id != "command.palette.show").map(|d| PaletteRow {
+            id: d.id,
+            title: self.title(d),
+            group: d.group,
+            keys: self.keymap.keys(d.id),
+            source: self.keymap.source(d.id).to_string(),
+            slash: None,
+            search: format!("{} {}", d.group, d.id),
+        });
+        let commands = menu::all_commands(self.current().map_or(&[][..], |s| &s.commands)).into_iter().map(|e| PaletteRow {
+            id: "",
+            title: first_line(&e.detail).to_string(),
+            group: SLASH_GROUP,
+            keys: e.label.clone(),
+            source: "default".into(),
+            search: e.label.clone(),
+            slash: Some(e),
+        });
+        let rows = actions.chain(commands);
         if query.is_empty() {
-            let mut all: Vec<&keymap::Def> = defs.collect();
-            all.sort_by_key(|d| keymap::GROUPS.iter().position(|g| *g == d.group));
+            let mut all: Vec<PaletteRow> = rows.collect();
+            all.sort_by_key(|r| PALETTE_GROUPS.iter().position(|g| *g == r.group));
             return all;
         }
-        let mut scored: Vec<(u32, &keymap::Def)> = defs
-            .filter_map(|d| {
-                let parts = [menu::score(query, d.title).map(|s| s * 2), menu::score(query, d.group), menu::score(query, d.id)];
-                parts.iter().any(Option::is_some).then(|| (parts.iter().flatten().sum(), d))
+        let mut scored: Vec<(u32, PaletteRow)> = rows
+            .filter_map(|r| {
+                let parts = [menu::score(query, &r.title).map(|s| s * 2), menu::score(query, r.slash.as_ref().map_or(r.group, |e| e.label.trim_start_matches('/'))).map(|s| s * 2), menu::score(query, &r.search)];
+                parts.iter().any(Option::is_some).then(|| (parts.iter().flatten().sum(), r))
             })
             .collect();
         scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
-        scored.into_iter().map(|(_, d)| d).collect()
+        scored.into_iter().map(|(_, r)| r).collect()
     }
 
     fn palette_key(&mut self, key: &KeyEvent, ids: &[&str], mut query: String, selected: usize, now: Instant, page: usize) -> Vec<Action> {
@@ -2109,13 +2245,21 @@ impl App {
             self.dialog = None;
             return Vec::new();
         } else if has("dialog.select.submit") {
-            let Some(id) = self.palette(&query).get(selected).map(|d| d.id) else { return Vec::new() };
+            let Some(row) = self.palette(&query).into_iter().nth(selected) else { return Vec::new() };
             self.dialog = None;
+            if let Some(e) = row.slash {
+                return self.run_command(e);
+            }
+            let id = row.id;
             // From the palette an action runs whatever the prompt holds.
             return match id {
                 "app.exit" => vec![Action::Quit],
                 _ => self.run(id, now, page).unwrap_or_default(),
             };
+        } else if has("dialog.select.home") {
+            selected = 0;
+        } else if has("dialog.select.end") {
+            selected = n.saturating_sub(1);
         } else if has("dialog.select.prev") {
             selected = if n == 0 { 0 } else { (selected + n - 1) % n };
         } else if has("dialog.select.next") {
@@ -2192,21 +2336,25 @@ impl App {
                 self.dismissed = Some(m.at);
                 self.menu = None;
             }
-            // `.select` runs a command of the prompt's own; `.complete` only inserts.
-            "prompt.autocomplete.select" => return Some(self.pick(true)),
-            _ => return Some(self.pick(false)),
+            // Both run a command that takes no argument (#58 item 15) and insert anything else.
+            _ => return Some(self.pick()),
         }
         Some(Vec::new())
     }
 
-    fn pick(&mut self, run: bool) -> Vec<Action> {
+    fn pick(&mut self) -> Vec<Action> {
         let Some(m) = self.menu.take() else { return Vec::new() };
         let Some(entry) = m.entries.get(m.selected).cloned() else { return Vec::new() };
         let cursor = self.editor.cursor();
         match entry.pick {
-            Pick::Local(local) if run && local != Local::Btw => {
+            Pick::Local(local) if entry.bare => {
                 self.editor.replace(m.at, cursor, "");
                 return self.run_local(local);
+            }
+            // The command alone is the prompt: it goes as typed.
+            Pick::Command(_) if entry.bare => {
+                self.editor.replace(m.at, self.editor.text().len(), &entry.label);
+                return self.submit();
             }
             Pick::Local(_) | Pick::Command(_) => self.editor.replace(m.at, cursor, &format!("{} ", entry.label)),
             // OpenCode `autocomplete.tsx` `insertPart`: `@path` and a space; an image becomes an attachment.
@@ -2220,6 +2368,28 @@ impl App {
             }
         }
         self.refresh_menu()
+    }
+
+    /// A command picked from the palette: one that runs bare runs; one that takes an argument goes into the prompt,
+    /// ready for it.
+    fn run_command(&mut self, e: menu::Entry) -> Vec<Action> {
+        match e.pick {
+            Pick::Local(local) if e.bare => self.run_local(local),
+            Pick::Command(_) if e.bare => {
+                let typed = self.editor.text().to_string();
+                self.editor.set(&e.label);
+                let out = self.submit();
+                // What was being typed stays for after.
+                if !typed.is_empty() && self.editor.is_empty() {
+                    self.editor.set(&typed);
+                }
+                out
+            }
+            _ => {
+                self.editor.set(&format!("{} ", e.label));
+                self.refresh_menu()
+            }
+        }
     }
 
     /// Opens, moves or shuts the completion menu for where the cursor is now.
@@ -2255,7 +2425,7 @@ impl App {
             Local::Stash => {
                 let text = self.editor.expanded().trim().to_string();
                 if text.is_empty() {
-                    self.notice = Some("nothing to stash".into());
+                    self.toast(ToastKind::Info, "nothing to stash".into());
                 } else {
                     self.stash.push(&text);
                     self.editor.reset();
@@ -2264,16 +2434,16 @@ impl App {
             }
             Local::StashPop => match self.stash.pop() {
                 Some(e) => self.editor.set(&e.text),
-                None => self.notice = Some("no stashed prompts".into()),
+                None => self.toast(ToastKind::Info, "no stashed prompts".into()),
             },
-            Local::StashList if self.stash.entries.is_empty() => self.notice = Some("no stashed prompts".into()),
+            Local::StashList if self.stash.entries.is_empty() => self.toast(ToastKind::Info, "no stashed prompts".into()),
             Local::StashList => self.dialog = Some(Dialog::Stash { selected: 0 }),
-            Local::Queue if self.queue.is_empty() => self.notice = Some("no queued prompts".into()),
+            Local::Queue if self.queue.is_empty() => self.toast(ToastKind::Info, "no queued prompts".into()),
             Local::Queue => self.dialog = Some(Dialog::Queue { selected: 0 }),
-            Local::Images if self.editor.images().is_empty() => self.notice = Some("no images attached".into()),
+            Local::Images if self.editor.images().is_empty() => self.toast(ToastKind::Info, "no images attached".into()),
             Local::Images => self.dialog = Some(Dialog::Images { index: 0 }),
             Local::Editor => return vec![Action::Editor(self.editor.expanded())],
-            Local::Btw => self.notice = Some("/btw needs a question".into()),
+            Local::Btw => self.toast(ToastKind::Info, "/btw needs a question".into()),
             Local::Help => self.dialog = Some(Dialog::Help { scroll: 0 }),
             Local::Models => return self.open_list(List::Models),
             Local::Effort => return self.open_list(List::Efforts),
@@ -2382,7 +2552,7 @@ impl App {
             return self.run_local(Local::Btw);
         }
         let Some(session) = self.session.clone().filter(|_| matches!(self.status(), Some(s) if s != SessionStatus::Starting && s != SessionStatus::Closed)) else {
-            self.notice = Some("Open a session first".into());
+            self.toast(ToastKind::Warning, "Open a session first".into());
             return Vec::new();
         };
         self.history.append(&format!("/btw {question}"));
@@ -2449,6 +2619,11 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// The newest toast's text.
+    fn said(app: &App) -> Option<&str> {
+        app.toasts.last().map(|t| t.text.as_str())
     }
 
     fn ctrl(ch: char) -> KeyEvent {
@@ -2526,9 +2701,30 @@ mod tests {
         typed(&mut app, "abc");
         press(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(press(&mut app, ctrl('c')), vec![Action::Copy("c".into())]);
+        assert_eq!(app.toasts.last().map(|t| (t.kind, t.text.as_str())), Some((ToastKind::Success, "Copied to clipboard")));
         assert_eq!(press(&mut app, ctrl('c')), vec![]);
         assert_eq!(app.editor.text(), "");
+        assert_eq!(press(&mut app, ctrl('c')), vec![], "the first press on an empty prompt only asks");
+        assert_eq!(app.toasts.last().map(|t| t.text.as_str()), Some("Press ctrl+c again to exit"));
         assert_eq!(press(&mut app, ctrl('c')), vec![Action::Quit]);
+        // Past the window the question is asked again.
+        let mut app = App::new("/w".into());
+        let t0 = Instant::now();
+        assert!(app.on_key(ctrl('c'), t0, 10).is_empty());
+        app.on_tick(t0 + EXIT_WINDOW);
+        assert!(app.on_key(ctrl('c'), t0 + EXIT_WINDOW, 10).is_empty());
+        app.on_tick(t0 + TOAST_TIME + EXIT_WINDOW);
+        assert!(app.toasts.is_empty(), "a toast goes when its time is up");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ctrl_a_selects_the_whole_input_on_windows() {
+        let mut app = App::new("/w".into());
+        typed(&mut app, "one two");
+        press(&mut app, ctrl('a'));
+        press(&mut app, key(KeyCode::Backspace));
+        assert_eq!(app.editor.text(), "");
     }
 
     #[test]
@@ -2540,9 +2736,10 @@ mod tests {
         assert_eq!(app.editor.text(), "a漢");
         press(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
         assert_eq!(app.editor.text(), "a\n漢");
-        press(&mut app, ctrl('a'));
+        // On Windows ctrl+a selects all (#58 item 7), so home is the line's start there.
+        press(&mut app, if cfg!(windows) { key(KeyCode::Home) } else { ctrl('a') });
         press(&mut app, ctrl('k'));
-        assert_eq!(app.editor.text(), "a\n", "ctrl+a is the line's start, ctrl+k deletes to its end");
+        assert_eq!(app.editor.text(), "a\n", "the line's start, then ctrl+k deletes to its end");
         // The old TUI's ctrl+z undoes on Windows; elsewhere it suspends, as OpenCode's does.
         press(&mut app, if cfg!(windows) { ctrl('z') } else { ctrl('-') });
         assert_eq!(app.editor.text(), "a\n漢", "undo");
@@ -2716,7 +2913,15 @@ mod tests {
         press(&mut app, ctrl('p'));
         assert_eq!(app.dialog, Some(Dialog::Palette { query: String::new(), selected: 0 }));
         let all = app.palette("");
-        assert!(all.iter().any(|d| d.id == "input.select.all") && all.iter().all(|d| d.id != "command.palette.show" && keymap::in_palette(d.group)));
+        assert!(all.iter().any(|d| d.id == "input.select.all") && all.iter().all(|d| d.id != "command.palette.show" && (keymap::in_palette(d.group) || d.group == SLASH_GROUP)));
+        assert!(all.iter().any(|d| d.slash.as_ref().is_some_and(|e| e.label == "/models")), "the slash commands are listed too");
+        let groups: Vec<&str> = all.iter().map(|d| d.group).fold(Vec::new(), |mut g, x| {
+            if g.last() != Some(&x) {
+                g.push(x);
+            }
+            g
+        });
+        assert_eq!(groups, PALETTE_GROUPS, "each group once, in order");
         typed(&mut app, "selall");
         let Some(Dialog::Palette { query, .. }) = &app.dialog else { panic!("still open") };
         assert_eq!(app.palette(query)[0].id, "input.select.all");
@@ -2742,7 +2947,7 @@ mod tests {
     #[test]
     fn a_config_layer_rebinds_unbinds_and_the_help_says_where() {
         let mut app = idle();
-        app.on_keybinds(Ok(serde_json::json!({ "keybinds": {
+        app.on_config(Ok(serde_json::json!({ "keybinds": {
             "input.submit": { "value": "ctrl+s", "source": "project (C:/w/.lykos/config.yaml)" },
             "app.exit": { "value": false, "source": "global (C:/u/.lykos/config.yaml)" },
             "leader": { "value": "ctrl+q", "source": "global (C:/u/.lykos/config.yaml)" },
@@ -2760,7 +2965,7 @@ mod tests {
         assert_eq!(press(&mut app, key(KeyCode::Char('e'))), vec![], "ctrl+x is no longer the leader");
         assert_eq!(app.keymap.keys("prompt.editor"), "ctrl+q e, f4");
         assert_eq!(app.keymap.source("input.submit"), "project (C:/w/.lykos/config.yaml)");
-        app.on_keybinds(Ok(serde_json::json!({ "keybinds": { "nope": { "value": "ctrl+q", "source": "project (p)" } } })));
+        app.on_config(Ok(serde_json::json!({ "keybinds": { "nope": { "value": "ctrl+q", "source": "project (p)" } } })));
         assert_eq!(app.notice.as_deref(), Some("unknown keybind nope (project (p))"));
         app.run_local(Local::Help);
         assert_eq!(app.dialog, Some(Dialog::Help { scroll: 0 }));
@@ -2819,7 +3024,7 @@ mod tests {
         assert!(app.menu.is_none());
         app.editor.reset();
         typed(&mut app, "keep me");
-        press(&mut app, ctrl('a'));
+        press(&mut app, key(KeyCode::Home));
         typed(&mut app, "/stash");
         assert_eq!(app.menu.as_ref().unwrap().entries[0].label, "/stash");
         press(&mut app, key(KeyCode::Enter));
@@ -2854,7 +3059,7 @@ mod tests {
         let mut app = App::new("/w".into());
         typed(&mut app, "/btw why?");
         assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![]);
-        assert_eq!(app.notice.as_deref(), Some("Open a session first"));
+        assert_eq!(said(&app), Some("Open a session first"));
         let mut app = idle();
         typed(&mut app, "/btw why?");
         assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![Action::Aside { session: "s1".into(), text: "why?".into() }]);
@@ -2944,7 +3149,7 @@ mod tests {
         app.prefs.recent = vec!["p/a".into(), "q/c".into(), "gone/x".into()];
         assert_eq!(sent(&press(&mut app, key(KeyCode::F(2)))), ["/model q/c"], "a model no longer listed is skipped");
         app.run("model.cycle_favorite", Instant::now(), 10);
-        assert_eq!(app.notice.as_deref(), Some("Add a favorite model to use this shortcut"));
+        assert_eq!(said(&app), Some("Add a favorite model to use this shortcut"));
     }
 
     #[test]
@@ -2961,7 +3166,7 @@ mod tests {
         // A provider with a browser sign-in signs in from here; an API key is typed in a terminal.
         assert_eq!(sent(&app.connect("anthropic")), ["/login anthropic"]);
         assert!(app.connect("openai").is_empty());
-        assert!(app.notice.as_deref().unwrap().contains("lykos login openai --api-key"));
+        assert!(said(&app).unwrap().contains("lykos login openai --api-key"));
     }
 
     #[test]
@@ -3178,11 +3383,11 @@ mod tests {
         let mut app = idle();
         let now = Instant::now();
         assert_eq!(app.run("messages.copy", now, 10).unwrap(), Vec::new());
-        assert_eq!(app.notice.as_deref(), Some("No assistant messages found"));
+        assert_eq!(said(&app), Some("No assistant messages found"));
         event(&mut app, "s1", 2, EventData::MessageUser { text: "hi".into() });
         event(&mut app, "s1", 3, EventData::MessageDelta { text: "  hello  ".into() });
         assert_eq!(app.run("messages.copy", now, 10).unwrap(), vec![Action::Copy("hello".into())]);
-        assert_eq!(app.notice.as_deref(), Some("Message copied to clipboard!"));
+        assert_eq!(said(&app), Some("Message copied to clipboard!"));
         assert!(crate::menu::LOCAL.iter().any(|(l, name, _)| *name == "/copy" && *l == Local::Run("messages.copy")));
     }
 
@@ -3243,7 +3448,7 @@ mod tests {
             assert!(app.selection.is_some(), "ctrl+c copies and keeps the selection");
             assert_eq!(app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Right), at(0)), Instant::now()), vec![Action::Copy("done".into())]);
         }
-        assert_eq!(app.notice.as_deref(), Some("Copied to clipboard"));
+        assert_eq!(said(&app), Some("Copied to clipboard"));
         assert_eq!(press(&mut app, key(KeyCode::Esc)), Vec::new());
         assert_eq!(app.selection, None, "esc clears it");
         assert!(app.editor.text().is_empty());
@@ -3266,7 +3471,7 @@ mod tests {
         assert!(matches!(&out[..], [Action::Copy(t)] if t.starts_with("## User\n\nfirst prompt") && t.contains("## Assistant\n\nanswer")));
         session_event(&mut app, "s1", 5, SessionStatus::Idle, "L9", "t");
         assert_eq!(app.run("session.copy.id", Instant::now(), 10).unwrap(), vec![Action::Copy("L9".into())]);
-        assert_eq!(app.notice.as_deref(), Some("Session ID copied to clipboard!"));
+        assert_eq!(said(&app), Some("Session ID copied to clipboard!"));
         press(&mut app, ctrl('x'));
         let out = press(&mut app, key(KeyCode::Char('x')));
         assert_eq!(calls(&out), [("session.export", json!({ "cwd": "/w", "ledgerSessionId": "L9", "file": "session-L9.md" }))]);

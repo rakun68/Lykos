@@ -504,11 +504,18 @@ function validateTuiConfig(layer: ConfigLayer): void {
   const where = layer.path !== undefined ? ` in ${layer.path}` : ` in the ${layer.name} layer`;
   if (typeof tui !== "object" || Array.isArray(tui)) throw new Error(`lykos config: tui must be an object${where}`);
   for (const k of Object.keys(tui)) {
-    if (k !== "server_idle_seconds" && k !== "keybinds") throw new Error(`lykos config: unknown key "${k}" in tui (allowed: server_idle_seconds, keybinds)${where}`);
+    if (k !== "server_idle_seconds" && k !== "keybinds" && k !== "colors") throw new Error(`lykos config: unknown key "${k}" in tui (allowed: server_idle_seconds, keybinds, colors)${where}`);
   }
   const s = (tui as TuiConfig).server_idle_seconds;
   if (s !== undefined && (typeof s !== "number" || !Number.isInteger(s) || s < 0)) {
     throw new Error(`lykos config: tui.server_idle_seconds must be a whole number >= 0${where}`);
+  }
+  const colors: unknown = (tui as Record<string, unknown>).colors;
+  if (colors !== undefined && colors !== null) {
+    if (typeof colors !== "object" || Array.isArray(colors)) throw new Error(`lykos config: tui.colors must be an object${where}`);
+    for (const [name, v] of Object.entries(colors)) {
+      if (typeof v !== "string" || !/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(v)) throw new Error(`lykos config: tui.colors.${name} must be a colour, #rrggbb${where}`);
+    }
   }
   const keybinds: unknown = (tui as Record<string, unknown>).keybinds;
   if (keybinds === undefined || keybinds === null) return;

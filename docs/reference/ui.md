@@ -226,12 +226,33 @@ tui:
 The last layer to name an action wins. A key reads `ctrl+`, `alt+`, `shift+`, `super+` before a key
 name (`return`, `escape`, `pageup`, `a`, `-`). An unknown action or a key that does not parse is
 skipped, and the TUI says so in a notice. Where two actions share a key, the first that applies
-runs: `Ctrl+C` copies a selection, else clears the prompt, else quits.
+runs: `Ctrl+C` copies a selection, else clears the prompt, else asks for a second press within 2 s and then quits
+(#58). `Ctrl+A` selects the whole input on Windows; `Home` is the line's start there.
 
-`Ctrl+P` opens the palette: every action of the App, Session, Agent, System, Prompt and Input groups, with its keys
-and, where it is not a default, the layer that set it. Typing filters it by title, group and id
-(the title weighted twice); `Enter` runs the selected action. `/help` lists every key of every
-group and the layer that set it.
+`Ctrl+P` opens the palette over the dimmed screen: a search box, then every action of the App, Session, Agent,
+System, Prompt and Input groups and every slash command in a Commands group, each under its group's heading, with its
+keys in their own colour and, where it is not a default, the layer that set it. A scroll bar shows where the view is
+in a longer list. Typing filters it by title, group and id (the title weighted twice) across the groups; `Enter` runs
+the selected row. `/help` lists every key of every group and the layer that set it.
+
+**Colours (#58).** `tui.colors` in any config layer sets a role over every theme; the last layer to name a role wins,
+and a value that is not `#rrggbb` or `#rgb` is named in a notice:
+
+```yaml
+tui:
+  colors:
+    accent: "#ff8800"     # the bar, selections in lists, headings
+    selection: "#44415a"  # selected text in the input; default: the accent part way into the surface
+    keybind: "#f6c177"    # keys beside their action; default: the theme's warning colour
+```
+
+The roles: `background` (painted under every cell, as a light theme does), `surface`, `overlay`, `muted`, `subtle`,
+`text`, `error`, `warning`, `success`, `accent`, `selection`, `keybind`. The palette in effect is resolved once per
+theme or colour change; a frame reads it through a reference.
+
+**Toasts (#58).** Short messages (`Copied to clipboard`, `Press ctrl+c again to exit`) show at the top left over
+everything, three at most, each for 2.5 s, with a bar in its kind's colour: success, warning, error or info. Errors
+that need reading stay in the footer.
 
 Where the keybinds differ from OpenCode on purpose:
 

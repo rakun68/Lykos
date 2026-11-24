@@ -376,6 +376,12 @@ export interface TuiConfig {
    * the last layer that names one wins; `lykos-tui` knows the names and refuses one it does not.
    */
   keybinds?: Record<string, TuiKeybindValue>;
+  /**
+   * #58 item 9: `lykos-tui`'s colours by role (`background`, `surface`, `overlay`, `muted`, `subtle`, `text`, `error`,
+   * `warning`, `success`, `accent`, `selection`, `keybind`), each `#rrggbb`, over whichever theme is current. Merged
+   * per role across layers, as `keybinds` is; `lykos-tui` knows the roles and names one it does not.
+   */
+  colors?: Record<string, string>;
 }
 
 export type TuiKeybindValue = string | false | string[];

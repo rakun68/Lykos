@@ -10,6 +10,18 @@ export interface KeybindSetting {
   source: string;
 }
 
+/** #58 item 9: each colour role a layer sets, from the last layer that names it, with that layer. */
+export function tuiColors(layers: readonly ConfigLayer[]): Record<string, { value: string; source: string }> {
+  const out: Record<string, { value: string; source: string }> = {};
+  for (const layer of layers) {
+    if (!layer.present || layer.name === "defaults" || layer.name === "specialist") continue;
+    const colors = layer.value.tui?.colors;
+    if (colors === undefined || colors === null) continue;
+    for (const [name, value] of Object.entries(colors)) out[name] = { value, source: layerLabel(layer) };
+  }
+  return out;
+}
+
 /** Each action a layer binds, from the last layer that names it. Actions no layer names are absent: the defaults. */
 export function tuiKeybinds(layers: readonly ConfigLayer[]): Record<string, KeybindSetting> {
   const out: Record<string, KeybindSetting> = {};

@@ -1,9 +1,13 @@
 //! Completion for `/` commands and `@` files, as OpenCode's `component/prompt/autocomplete.tsx` at `4332e24` does
 //! it: `/` at the start of the prompt completes commands, `@` after a space (or at the start) completes files, the
-//! query is what follows up to the cursor, results are fuzzy with a prefix match scoring double, and ten show.
+//! query is what follows up to the cursor, results are fuzzy with a prefix match scoring double. Ten show at a time and
+//! the list scrolls with the selection, a row under it counting what is above and below (#58 item 1).
 use lykos_client::CommandInfo;
 
+/// The rows shown at once.
 pub const LIMIT: usize = 10;
+/// The most matches a list holds: past this a query narrows it.
+const MAX: usize = 500;
 
 /// What the prompt runs itself, before the session's own commands.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -84,6 +88,8 @@ pub struct Entry {
     pub label: String,
     pub detail: String,
     pub pick: Pick,
+    /// A command that runs with no argument, so Tab runs it (#58 item 15).
+    pub bare: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -99,6 +105,18 @@ pub struct Menu {
     pub at: usize,
     pub entries: Vec<Entry>,
     pub selected: usize,
+}
+
+impl Menu {
+    /// The first entry shown: the selection stays in the window of `LIMIT`.
+    pub fn first(&self) -> usize {
+        (self.selected + 1).saturating_sub(LIMIT)
+    }
+
+    /// The rows it takes: the window, and a count row when there is more than fits.
+    pub fn height(&self) -> usize {
+        self.entries.len().min(LIMIT) + usize::from(self.entries.len() > LIMIT)
+    }
 }
 
 /// Which completion the cursor is in, if any: the trigger, its offset, and the query.
@@ -149,20 +167,29 @@ pub fn score(query: &str, candidate: &str) -> Option<u32> {
 fn rank(query: &str, entries: impl Iterator<Item = Entry>, key: impl Fn(&Entry) -> &str) -> Vec<Entry> {
     let mut scored: Vec<(u32, Entry)> = entries.filter_map(|e| score(query, key(&e)).map(|s| (s, e))).collect();
     scored.sort_by_key(|e| std::cmp::Reverse(e.0));
-    scored.into_iter().take(LIMIT).map(|(_, e)| e).collect()
+    scored.into_iter().take(MAX).map(|(_, e)| e).collect()
 }
 
 pub fn commands(query: &str, session: &[CommandInfo]) -> Vec<Entry> {
-    let locals = LOCAL.iter().map(|(l, n, d)| Entry { label: n.to_string(), detail: d.to_string(), pick: Pick::Local(*l) });
-    let theirs = session
-        .iter()
-        .filter(|c| local(&c.name).is_none())
-        .map(|c| Entry { label: c.name.clone(), detail: c.description.clone(), pick: Pick::Command(c.name.clone()) });
-    rank(query, locals.chain(theirs), |e| e.label.trim_start_matches('/'))
+    rank(query, all_commands(session).into_iter(), |e| e.label.trim_start_matches('/'))
+}
+
+/// Every command, the prompt's own first: what the completion ranks and the palette lists.
+pub fn all_commands(session: &[CommandInfo]) -> Vec<Entry> {
+    let locals = LOCAL.iter().map(|(l, n, d)| Entry { label: n.to_string(), detail: d.to_string(), pick: Pick::Local(*l), bare: *l != Local::Btw });
+    // A built-in that takes no argument, or does something useful without one (it lists, reports or opens its
+    // picker). One whose description shows an argument (`<provider>`), and `/followup`, need one.
+    let theirs = session.iter().filter(|c| local(&c.name).is_none()).map(|c| Entry {
+        label: c.name.clone(),
+        detail: c.description.clone(),
+        pick: Pick::Command(c.name.clone()),
+        bare: bare(&c.name).is_some() || (c.source == "builtin" && !c.description.contains('<') && !matches!(c.name.as_str(), "/followup" | "/btw")),
+    });
+    locals.chain(theirs).collect()
 }
 
 pub fn files(query: &str, files: &[String]) -> Vec<Entry> {
-    rank(query, files.iter().map(|f| Entry { label: f.clone(), detail: String::new(), pick: Pick::File(f.clone()) }), |e| &e.label)
+    rank(query, files.iter().map(|f| Entry { label: f.clone(), detail: String::new(), pick: Pick::File(f.clone()), bare: false }), |e| &e.label)
 }
 
 pub const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
@@ -192,7 +219,12 @@ mod tests {
         assert_eq!(files("ma", &names)[0].label, "Makefile");
         assert!(files("zz", &names).is_empty());
         let many: Vec<String> = (0..30).map(|i| format!("f{i}")).collect();
-        assert_eq!(files("f", &many).len(), LIMIT);
+        let all = files("f", &many);
+        assert_eq!(all.len(), 30, "every match, so the list scrolls to each");
+        let mut m = Menu { trigger: Trigger::At, at: 0, entries: all, selected: 0 };
+        assert_eq!((m.first(), m.height()), (0, LIMIT + 1));
+        m.selected = 14;
+        assert_eq!(m.first(), 5, "the selection stays the window's last row");
         let got = commands("stash", &[]);
         assert_eq!(got[0].label, "/stash");
         assert!(got.iter().any(|e| e.label == "/stash pop"));
@@ -200,9 +232,21 @@ mod tests {
 
     #[test]
     fn session_commands_follow_the_local_ones() {
-        let theirs = [CommandInfo { name: "/skill:tdd".into(), description: "tests first".into(), source: "skill".into() }];
+        let theirs = [
+            CommandInfo { name: "/skill:tdd".into(), description: "tests first".into(), source: "skill".into() },
+            CommandInfo { name: "/context".into(), description: "what is occupying the context window".into(), source: "builtin".into() },
+            CommandInfo { name: "/login".into(), description: "add a credential: /login <provider>".into(), source: "builtin".into() },
+            CommandInfo { name: "/followup".into(), description: "queue a follow-up".into(), source: "builtin".into() },
+        ];
         let got = commands("tdd", &theirs);
         assert_eq!(got[0].pick, Pick::Command("/skill:tdd".into()));
+        let bare_of = |name: &str| all_commands(&theirs).into_iter().find(|e| e.label == name).map(|e| e.bare);
+        assert_eq!(bare_of("/skill:tdd"), Some(false), "a skill takes the prompt");
+        assert_eq!(bare_of("/context"), Some(true));
+        assert_eq!(bare_of("/login"), Some(true), "bare, it opens its list");
+        assert_eq!(bare_of("/followup"), Some(false));
+        assert_eq!(bare_of("/models"), Some(true));
+        assert_eq!(bare_of("/btw"), Some(false));
         assert!(is_image("a/B.PNG") && !is_image("a.rs"));
     }
 }

@@ -3,7 +3,8 @@
 //! padded 1 row and 2 columns; the title, the sections a row apart, the working directory at the foot. It shows by
 //! itself beside the session when the screen is wider than 120 columns, and over the session on a dimmed backdrop when
 //! toggled open on a narrower one; `session.sidebar.toggle` hides it and remembers that (`session.sidebar` "hide").
-//! A pane on the right (the diff viewer) takes its place.
+//! A pane on the right (the diff viewer) takes its place. Lykos draws it 32 columns wide, with `›` at its top right
+//! to collapse it; collapsed on a wide screen, a one-column rail with `‹` opens it again (#58 item 2).
 //!
 //! Sections: Context (`context.tsx`: tokens, % used, $ spent), Todo (`todo.tsx`: the `todo` tool's last list,
 //! collapsible past two items) and Modified Files (a Lykos addition: each file the session's tools changed, with its
@@ -17,10 +18,12 @@ use lykos_term::{Buffer, Color, Style};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
-use crate::theme::{self, c, mix};
+use crate::theme::{self, c};
 
-/// `ui/layout.ts`'s `SESSION_SIDEBAR_WIDTH`.
-pub const WIDTH: u16 = 42;
+/// Narrower than `ui/layout.ts`'s `SESSION_SIDEBAR_WIDTH` (42), as the first TUI audit asked (#58 item 2).
+pub const WIDTH: u16 = 32;
+/// The collapsed sidebar's rail.
+const RAIL: u16 = 1;
 /// `session-frame.tsx`'s `wide`: the screen is wider than this.
 const WIDE: u16 = 120;
 
@@ -65,6 +68,8 @@ pub struct Side {
     pub width: Cell<u16>,
     /// Where it was drawn (x, width), and the Todo header's row.
     pub area: Cell<Option<(u16, u16)>>,
+    /// The rail is what was drawn there: a click opens the sidebar.
+    rail: Cell<bool>,
     pub todo_row: Cell<Option<u16>>,
     /// The furthest it scrolls, as last drawn.
     max: Cell<usize>,
@@ -94,10 +99,17 @@ pub fn place(app: &App, w: u16) -> Option<Place> {
     (app.prefs.sidebar && wide).then_some(Place::Beside)
 }
 
+/// The collapsed rail shows: a wide screen where the sidebar would show but was hidden.
+fn rail(app: &App, w: u16) -> bool {
+    !app.mini && app.diff.is_none() && w > WIDE && app.current().is_some() && place(app, w).is_none() && crate::terminal::pane(app, w).is_none()
+}
+
 /// The width it takes from the session.
 pub fn beside(app: &App, w: u16) -> u16 {
     if place(app, w) == Some(Place::Beside) {
         WIDTH
+    } else if rail(app, w) {
+        RAIL
     } else {
         0
     }
@@ -291,16 +303,17 @@ pub fn draw(app: &App, buf: &mut Buffer) {
     let (w, h) = (buf.width, buf.height);
     app.side.area.set(None);
     app.side.todo_row.set(None);
+    app.side.rail.set(false);
+    if rail(app, w) {
+        app.side.rail.set(true);
+        app.side.area.set(Some((w - RAIL, RAIL)));
+        buf.fill(w - RAIL, 0, RAIL, h, Style::default().on(c().surface));
+        buf.text(w - RAIL, 1, RAIL, "‹", theme::muted().on(c().surface));
+        return;
+    }
     let (Some(at), Some(s)) = (place(app, w), app.current()) else { return };
     if at == Place::Over {
-        // `RGBA.fromInts(0, 0, 0, 70)` over the session.
-        for cell in buf.cells.iter_mut() {
-            let darker = |col: Color| match col {
-                Color::Rgb(..) => mix(col, Color::Rgb(0, 0, 0), 0.27),
-                other => other,
-            };
-            cell.style = Style { fg: darker(cell.style.fg), bg: darker(cell.style.bg), attr: cell.style.attr.with(lykos_term::Attr::DIM) };
-        }
+        theme::dim(buf);
     }
     let sw = WIDTH.min(w);
     let x = w - sw;
@@ -313,6 +326,7 @@ pub fn draw(app: &App, buf: &mut Buffer) {
     let (left, inner) = (x + 2, sw - 4);
     let title = s.summary.title.as_deref().unwrap_or("New session");
     buf.text(left, 1, inner.saturating_sub(2), title, Style::fg(c().text).on(bg).bold());
+    buf.text(x + sw - 2, 1, 1, "›", theme::muted().on(bg));
     // The scroll box: below the title and its padding, above the footer and its padding.
     let (top, bottom) = (3u16, h.saturating_sub(3));
     let shown = bottom.saturating_sub(top) as usize;
@@ -346,7 +360,14 @@ pub fn draw(app: &App, buf: &mut Buffer) {
         }
     }
     let path = location(&s.summary.cwd);
-    buf.text(left, h - 2, inner, &cut_left(&path, (inner as usize).min(38)), theme::muted().on(bg));
+    let key = app.keymap.first("session.sidebar.toggle");
+    let hint = if key.is_empty() { String::new() } else { format!("{key} hide") };
+    let hw = hint.width() as u16;
+    let room = if hw > 0 && hw + 10 <= inner { inner - hw - 2 } else { inner };
+    buf.text(left, h - 2, room, &cut_left(&path, room as usize), theme::muted().on(bg));
+    if room < inner {
+        buf.text(left + inner - hw, h - 2, hw, &hint, theme::muted().on(bg));
+    }
 }
 
 impl App {
@@ -371,11 +392,17 @@ impl App {
         true
     }
 
-    /// The wheel over the sidebar scrolls it; a click on Todo's header folds the list.
+    /// The wheel over the sidebar scrolls it; a click on Todo's header folds the list, on `›` collapses it, on the
+    /// rail opens it.
     pub fn sidebar_mouse(&mut self, m: &MouseEvent) -> bool {
         let Some((x, w)) = self.side.area.get() else { return false };
         if m.column < x || m.column >= x + w {
             return false;
+        }
+        let click = matches!(m.kind, MouseEventKind::Down(MouseButton::Left));
+        if click && (self.side.rail.get() || (m.row == 1 && m.column + 3 >= x + w)) {
+            self.toggle_sidebar();
+            return true;
         }
         match m.kind {
             MouseEventKind::ScrollUp => self.side.scroll = self.side.scroll.min(self.side.max.get()).saturating_sub(3),
@@ -453,7 +480,7 @@ mod tests {
         for want in ["New session", "Context", "12,345 tokens", "6% used", "$0.50 spent", "▼ Todo", "[•] write the sidebar", "[✓] read the code", "Modified Files", "src/a.rs", "+2 -1", "C:/w"] {
             assert!(s.contains(want), "{want}: {s}");
         }
-        assert_eq!(crate::diffview::session_width(&app, 160), 118);
+        assert_eq!(crate::diffview::session_width(&app, 160), 128);
         assert!(!screen(&app, 120, 30).contains("Modified Files"), "120 columns is not wide");
     }
 
@@ -471,6 +498,19 @@ mod tests {
         assert_eq!(crate::diffview::session_width(&app, 100), 100, "over the session, not beside it");
         app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), Instant::now(), 10);
         assert_eq!(place(&app, 100), None, "esc closes it");
+    }
+
+    #[test]
+    fn the_collapse_mark_hides_it_to_a_rail_and_the_rail_opens_it() {
+        let mut app = session();
+        screen(&app, 160, 30);
+        let click = |column, row| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE };
+        app.on_mouse(click(158, 1), Instant::now());
+        let s = screen(&app, 160, 30);
+        assert!(!s.contains("Modified Files") && s.contains('‹'), "{s}");
+        assert_eq!(crate::diffview::session_width(&app, 160), 159, "the rail takes one column");
+        app.on_mouse(click(159, 10), Instant::now());
+        assert!(screen(&app, 160, 30).contains("Modified Files"));
     }
 
     #[test]

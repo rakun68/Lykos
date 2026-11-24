@@ -528,7 +528,7 @@ struct Key {
     session: String,
     width: usize,
     look: Option<Look>,
-    theme: &'static str,
+    theme: u32,
 }
 
 /// The kept blocks, by first item: the last item and the opened groups they were laid out with. And the settled
@@ -562,10 +562,10 @@ pub fn layout(cache: &RefCell<Cache>, session: &Session, look: Look, width: usiz
     let ctx = Ctx { items, running, look, width, tick, opened };
     let mut cache = cache.borrow_mut();
     let opened_hash = opened.map_or(0, |o| o.iter().fold(17u64, |h, ((i, k), on)| h.wrapping_mul(1_000_003) ^ ((*i as u64) << 3 | (*k as u64) << 1 | u64::from(*on))));
-    let same = cache.key.session == session.summary.id && cache.key.width == width && cache.key.look == Some(look) && cache.key.theme == c().name;
+    let same = cache.key.session == session.summary.id && cache.key.width == width && cache.key.look == Some(look) && cache.key.theme == theme::version();
     // A session rebuilt shorter (an undo) has new items where the kept ones were.
     if !same || items.len() < cache.items {
-        cache.key = Key { session: session.summary.id.clone(), width, look: Some(look), theme: c().name };
+        cache.key = Key { session: session.summary.id.clone(), width, look: Some(look), theme: theme::version() };
         cache.blocks.clear();
     }
     // A click lays the settled run out again, from the kept blocks.

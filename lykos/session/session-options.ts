@@ -7,7 +7,9 @@
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ProvidersConfig } from "../config/types.js";
 import { DEFAULT_SPECIALIST, discoverSpecialists, primarySpecialists } from "../config/specialists.js";
-import { providerMatrix, type ProviderReach } from "../config/providers.js";
+import { loadConfig } from "../config/load.js";
+import { providerMatrix, resolveBootModel, specialistModelSpec, type ProviderReach } from "../config/providers.js";
+import { sessionRoleModel } from "../config/roles.js";
 import { defaultCredentialDbPath } from "../credentials/db.js";
 import { poolSummary, summaryPoolSizes } from "../credentials/presence.js";
 import { EFFORT_LEVELS } from "../surface/effort.js";
@@ -52,6 +54,30 @@ export interface OptionsSession {
   readonly thinkingLevel?: string;
   getAvailableThinkingLevels?(): string[];
   supportsThinking?(): boolean;
+}
+
+/**
+ * Pi's own effort when nothing sets one: `DEFAULT_THINKING_LEVEL` in `@earendil-works/pi-coding-agent`
+ * `dist/core/defaults.js`, which the package does not export.
+ */
+export const PI_DEFAULT_EFFORT = "medium";
+
+/**
+ * #58 item 10: the model, effort and specialist a new session in `cwd` boots with, resolved as
+ * `runInteractiveStandaloneSession` resolves them (the default specialist's layers, its model, the role's model, the
+ * configured default), so a client shows them before a session runs. Effort is the config's, else Pi's default; a
+ * model without effort levels shows none once its session reports so.
+ */
+export function sessionDefaults(cwd: string, globalDir?: string): { model: string; effort: string; specialist: string } {
+  const { resolved: config } = loadConfig({ cwd, specialistName: DEFAULT_SPECIALIST, ...(globalDir !== undefined ? { globalDir } : {}) });
+  const specialistModel = specialistModelSpec(config);
+  const roleModel = sessionRoleModel(config.models.roles, DEFAULT_SPECIALIST);
+  const boot = resolveBootModel({
+    ...(specialistModel !== undefined ? { specialistModel } : {}),
+    defaultModel: config.models.default,
+    ...(roleModel !== undefined ? { roleModel } : {}),
+  });
+  return { model: boot.spec, effort: config.thinkingLevel ?? PI_DEFAULT_EFFORT, specialist: DEFAULT_SPECIALIST };
 }
 
 export function sessionOptions(input: {

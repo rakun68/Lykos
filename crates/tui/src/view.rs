@@ -13,15 +13,42 @@ use crate::menu::Menu;
 use crate::theme::{self, c};
 use crate::transcript::{self, Block, Row, SPINNER};
 use crate::wrap::wrap;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 
 /// One transcript row: where it starts, its text, its style, and an optional bar in the first column.
 /// Draws the frame and returns where the cursor goes.
 pub fn draw(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     let cursor = draw_screen(app, buf);
+    toasts(app, buf);
     theme::paint_base(buf);
     cursor
+}
+
+/// #58 item 5: short messages at the top left, over dialogs too, newest last; each goes after `TOAST_TIME`.
+fn toasts(app: &App, buf: &mut Buffer) {
+    use crate::app::ToastKind;
+    let x = pad(buf.width);
+    let room = buf.width.saturating_sub(2 * x);
+    let mut y = 1;
+    for t in &app.toasts {
+        if y >= buf.height || room < 6 {
+            break;
+        }
+        let mark = match t.kind {
+            ToastKind::Success => c().pine,
+            ToastKind::Warning => c().gold,
+            ToastKind::Error => c().love,
+            ToastKind::Info => c().accent,
+        };
+        let text = first_line(&t.text);
+        let tw = (text.width() as u16 + 4).min(room);
+        let bg = Style::default().on(c().overlay);
+        buf.fill(x, y, tw, 1, bg);
+        buf.set(x, y, Cell { ch: '┃', style: Style::fg(mark).on(c().overlay) });
+        buf.text(x + 2, y, tw.saturating_sub(3), text, theme::text().on(c().overlay));
+        y += 1;
+    }
 }
 
 fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
@@ -238,7 +265,7 @@ pub fn mini_height(app: &App, w: u16, screen_h: u16, live: usize) -> u16 {
     if app.dialog.is_some() {
         return (screen_h * 2 / 3).max(12);
     }
-    let menu = app.menu.as_ref().map_or(0, |m| m.entries.len()) as u16;
+    let menu = app.menu.as_ref().map_or(0, Menu::height) as u16;
     live.min(LIVE_ROWS) as u16 + menu + prompt_height(app, w.saturating_sub(2 * pad(w)), screen_h)
 }
 
@@ -248,6 +275,7 @@ pub fn draw_mini(app: &App, buf: &mut Buffer, live: &[Row], screen_h: u16) -> Op
     app.frame.set(None);
     if app.dialog.is_some() {
         dialog(app, buf);
+        toasts(app, buf);
         return None;
     }
     let w = buf.width;
@@ -256,12 +284,13 @@ pub fn draw_mini(app: &App, buf: &mut Buffer, live: &[Row], screen_h: u16) -> Op
     for (i, row) in live.iter().enumerate() {
         paint_row(buf, pad, i as u16, inner, row);
     }
-    let menu = app.menu.as_ref().map_or(0, |m| m.entries.len()) as u16;
+    let menu = app.menu.as_ref().map_or(0, Menu::height) as u16;
     let y = live.len() as u16 + menu;
     let cursor = prompt_box(app, buf, pad, y, inner, screen_h);
     if app.current().is_none() {
         footer_line(app, buf, pad, y + prompt_height(app, inner, screen_h) - 1, inner, 0);
     }
+    toasts(app, buf);
     cursor
 }
 
@@ -387,10 +416,9 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
     buf.fill(x, meta_y, width, 1, raised);
     buf.set(x, meta_y, Cell { ch: '┃', style: bar });
     metadata(app, buf, tx, meta_y, width.saturating_sub(4));
-    // The bottom edge: `╹` under the bar, then `▀` in the box colour, so the box ends on a half cell.
+    // The bottom edge: `▀` in the box colour, so the box ends on a half cell, its corner included.
     let edge_y = meta_y + 1;
-    buf.set(x, edge_y, Cell { ch: '╹', style: Style::fg(if app.running() { c().gold } else { c().accent }) });
-    for col in x + 1..x + width {
+    for col in x..x + width {
         buf.set(col, edge_y, Cell { ch: '▀', style: Style::fg(c().surface) });
     }
     if app.current().is_some() {
@@ -408,7 +436,7 @@ fn input_row(editor: &Editor, buf: &mut Buffer, x: u16, y: u16, max: u16, row: c
         let at = row.start + i;
         let mut style = theme::text().on(c().surface);
         if selection.is_some_and(|(s, e)| at >= s && at < e) {
-            style = style.on(c().overlay);
+            style = style.on(c().selection);
         }
         col = match editor.chip(ch) {
             Some(chip) => buf.text(col, y, end.saturating_sub(col), &chip.label(), Style { fg: c().accent, ..style }.bold()),
@@ -417,17 +445,21 @@ fn input_row(editor: &Editor, buf: &mut Buffer, x: u16, y: u16, max: u16, row: c
     }
 }
 
-/// OpenCode `component/prompt/autocomplete.tsx`: the matches in a box over the prompt, the selected one raised.
+/// OpenCode `component/prompt/autocomplete.tsx`: the matches in a box over the prompt, the selected one raised; a
+/// longer list scrolls in a window of `menu::LIMIT` with a count row under it.
 fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
-    let n = m.entries.len() as u16;
-    if prompt_y < n || n == 0 {
+    let n = m.entries.len();
+    let h = m.height() as u16;
+    if prompt_y < h || n == 0 {
         return;
     }
-    let top = prompt_y - n;
-    let label_w = m.entries.iter().map(|e| e.label.chars().count()).max().unwrap_or(0).min(width as usize / 2) as u16;
-    for (i, e) in m.entries.iter().enumerate() {
+    let top = prompt_y - h;
+    let first = m.first();
+    let shown = &m.entries[first..(first + crate::menu::LIMIT).min(n)];
+    let label_w = shown.iter().map(|e| e.label.chars().count()).max().unwrap_or(0).min(width as usize / 2) as u16;
+    for (i, e) in shown.iter().enumerate() {
         let y = top + i as u16;
-        let on = i == m.selected;
+        let on = first + i == m.selected;
         let bg = if on { c().accent } else { c().overlay };
         buf.fill(x, y, width, 1, Style::default().on(bg));
         buf.text(x + 1, y, label_w, &e.label, Style::fg(if on { c().surface } else { c().text }).on(bg));
@@ -435,55 +467,108 @@ fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
             buf.text(x + label_w + 3, y, width.saturating_sub(label_w + 4), first_line(&e.detail), Style::fg(if on { c().surface } else { c().muted }).on(bg));
         }
     }
+    if n > shown.len() {
+        let y = top + shown.len() as u16;
+        let below = n - first - shown.len();
+        let count = format!("↑ {first} above · ↓ {below} below · {n} matches");
+        buf.fill(x, y, width, 1, Style::default().on(c().overlay));
+        buf.text(x + 1, y, width.saturating_sub(2), &count, theme::muted().on(c().overlay));
+    }
 }
 
-/// A centred dialog over everything, as OpenCode's `DialogLayout`: a title, the body, the keys it takes.
+/// One dialog row: text on the left and, against the right edge, a key or a detail in a colour of its own.
+struct Line {
+    left: String,
+    right: String,
+    style: Style,
+    right_style: Style,
+    /// A group's heading: never selected.
+    heading: bool,
+}
+
+fn line(text: impl Into<String>, style: Style) -> Line {
+    Line { left: text.into(), right: String::new(), style, right_style: style, heading: false }
+}
+
+fn pair(left: impl Into<String>, right: impl Into<String>, style: Style, right_style: Style) -> Line {
+    Line { left: left.into(), right: right.into(), style, right_style, heading: false }
+}
+
+fn heading(text: &str) -> Line {
+    Line { heading: true, ..line(text, Style::fg(c().accent).bold()) }
+}
+
+/// A key and, when a config layer set it, the layer.
+fn keys_with_layer(keys: String, source: &str) -> String {
+    if source == "default" {
+        keys
+    } else {
+        format!("{keys} · {}", layer_name(source))
+    }
+}
+
+/// A centred dialog over everything, as OpenCode's `DialogLayout`: the screen dimmed behind it, a title, a search
+/// box where it takes a search, the body with a scroll bar when it is longer than the room, the keys it takes.
 fn dialog(app: &App, buf: &mut Buffer) {
     let Some(d) = &app.dialog else { return };
     let (w, h) = (buf.width, buf.height);
+    theme::dim(buf);
     let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. } | Dialog::Help { .. } | Dialog::Output { .. }) { 100 } else { 72 });
     let inner = dw.saturating_sub(4) as usize;
-    let room = h.saturating_sub(6) as usize;
+    let searching = matches!(d, Dialog::Palette { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. });
+    let search_h: u16 = if searching && h >= 14 { 3 } else { 0 };
+    let room = h.saturating_sub(6 + search_h) as usize;
     let k = |id: &str| app.keymap.first(id);
     let close = format!("{} close", k("dialog.close"));
+    let keyed = Style::fg(c().keybind);
     let mut scrolled = None;
-    let (title, lines, selected, keys): (String, Vec<(String, Style)>, Option<usize>, String) = match d {
+    let mut search: Option<(&str, String)> = None;
+    let (title, lines, selected, keys): (String, Vec<Line>, Option<usize>, String) = match d {
         Dialog::Queue { selected } => (
             "Queued prompts".into(),
-            app.queue.iter().map(|q| (first_line(q).to_string(), theme::text())).collect(),
+            app.queue.iter().map(|q| line(first_line(q), theme::text())).collect(),
             Some(*selected),
             format!("{} steer · {} edit · {} delete · {close}", k("dialog.select.submit"), k("queued_prompt.undo"), k("queued_prompt.delete")),
         ),
         Dialog::Stash { selected } => (
             "Stashed prompts".into(),
-            app.stash.entries.iter().rev().map(|e| (first_line(&e.text).to_string(), theme::text())).collect(),
+            app.stash.entries.iter().rev().map(|e| line(first_line(&e.text), theme::text())).collect(),
             Some(*selected),
             format!("{} restore · {} delete · {close}", k("dialog.select.submit"), k("stash.delete")),
         ),
         Dialog::Palette { query, selected } => {
-            let rows = app
-                .palette(query)
-                .into_iter()
-                .map(|d| {
-                    let source = app.keymap.source(d.id);
-                    let right = if source == "default" { app.keymap.keys(d.id) } else { format!("{} · {}", app.keymap.keys(d.id), layer_name(source)) };
-                    (columns(&app.title(d), &right, inner), theme::text())
-                })
-                .collect();
-            let title = if query.is_empty() { "Commands  type to search".to_string() } else { format!("Commands  {query}") };
-            (title, rows, Some(*selected), format!("{} run · {close}", k("dialog.select.submit")))
+            let rows = app.palette(query);
+            let mut lines = Vec::new();
+            let mut at = None;
+            let mut group = "";
+            for (i, r) in rows.iter().enumerate() {
+                // Grouped while nothing is searched; a search ranks across the groups.
+                if query.is_empty() && r.group != group {
+                    lines.push(heading(r.group));
+                    group = r.group;
+                }
+                if i == *selected {
+                    at = Some(lines.len());
+                }
+                lines.push(pair(&r.title, keys_with_layer(r.keys.clone(), &r.source), theme::text(), keyed));
+            }
+            if lines.is_empty() {
+                lines.push(line("No matching commands", theme::muted()));
+            }
+            search = Some(("Search commands", query.clone()));
+            ("Commands".into(), lines, at, format!("{} run · {close}", k("dialog.select.submit")))
         }
         Dialog::Help { scroll } => {
             let mut rows = vec![
-                (format!("Press {} to see all available actions and commands in any context.", k("command.palette.show")), theme::muted()),
-                (columns("Leader", &format!("{} · {}", app.keymap.leader_label(), layer_name(app.keymap.source("leader"))), inner), theme::text()),
+                line(format!("Press {} to see all available actions and commands in any context.", k("command.palette.show")), theme::muted()),
+                pair("Leader", format!("{} · {}", app.keymap.leader_label(), layer_name(app.keymap.source("leader"))), theme::text(), keyed),
             ];
             for g in keymap::GROUPS {
-                rows.push((g.to_string(), theme::text().bold()));
+                rows.push(heading(g));
                 for d in keymap::DEFS.iter().filter(|d| d.group == g) {
                     let keys = app.keymap.keys(d.id);
                     let keys = if keys.is_empty() { "none".to_string() } else { keys };
-                    rows.push((columns(d.title, &format!("{keys} · {}", layer_name(app.keymap.source(d.id))), inner), theme::text()));
+                    rows.push(pair(d.title, format!("{keys} · {}", layer_name(app.keymap.source(d.id))), theme::text(), keyed));
                 }
             }
             scrolled = Some(*scroll);
@@ -496,10 +581,10 @@ fn dialog(app: &App, buf: &mut Buffer) {
                 _ => String::new(),
             };
             let keys = if images.len() > 1 { format!("← previous · next → · {close}") } else { close.clone() };
-            (format!("Image {} of {}", index + 1, images.len()), vec![(path, theme::text())], None, keys)
+            (format!("Image {} of {}", index + 1, images.len()), vec![line(path, theme::text())], None, keys)
         }
         Dialog::List { list, query, selected } => {
-            let (mut lines, at) = select_lines(&app.list_rows(list, query), *selected, inner);
+            let (mut lines, at) = select_lines(&app.list_rows(list, query), *selected);
             let (name, empty, extra) = match list {
                 List::Models => ("Select model", "No models: open a session first, or connect a provider", format!(" · {} favorite · {} providers", k("model.dialog.favorite"), k("model.dialog.provider"))),
                 List::Efforts => ("Select thinking effort", "This model has no effort levels, or no session is open", String::new()),
@@ -508,19 +593,16 @@ fn dialog(app: &App, buf: &mut Buffer) {
                 List::Providers => ("Connect a provider", "No providers: open a session first", String::new()),
             };
             if lines.is_empty() {
-                lines.push((empty.to_string(), theme::muted()));
+                lines.push(line(empty, theme::muted()));
             }
-            let title = if query.is_empty() { format!("{name}  type to search") } else { format!("{name}  {query}") };
-            (title, lines, at, format!("{} select{extra} · {close}", k("dialog.select.submit")))
+            search = Some(("Search", query.clone()));
+            (name.into(), lines, at, format!("{} select{extra} · {close}", k("dialog.select.submit")))
         }
         Dialog::Info { info } => {
-            let row = |a: &str, b: String| (columns(a, &b, inner), theme::text());
+            let row = |a: &str, b: String| pair(a, b, theme::text(), theme::text());
             let unknown = || "unknown".to_string();
             let usage = app.current().and_then(|s| s.usage.clone()).unwrap_or_default();
-            let no_mcp = vec![
-                ("No MCP servers".to_string(), theme::text()),
-                ("A Lykos session connects to none; Lykos is one itself (lykos mcp).".to_string(), theme::muted()),
-            ];
+            let no_mcp = vec![line("No MCP servers", theme::text()), line("A Lykos session connects to none; Lykos is one itself (lykos mcp).", theme::muted())];
             match info {
                 Info::Status => {
                     let link = match &app.link {
@@ -533,7 +615,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
                         row("Session", app.current().map_or_else(|| "none".into(), |s| format!("{:?}", s.summary.status).to_lowercase())),
                         row("Model", app.model_now().unwrap_or_else(unknown)),
                         row("Effort", app.effort_now().unwrap_or_else(|| "none".into())),
-                        row("Specialist", app.options.as_ref().map_or_else(unknown, |o| o.specialist.clone())),
+                        row("Specialist", app.specialist_now().unwrap_or_else(unknown)),
                         row("Theme", theme::c().name.to_string()),
                     ];
                     rows.extend(no_mcp);
@@ -568,8 +650,8 @@ fn dialog(app: &App, buf: &mut Buffer) {
                     ];
                     for a in &usage.alerts {
                         let style = Style::fg(if a.severity == "danger" { c().love } else { c().gold });
-                        rows.push((format!("⚠ {} · {}", a.id, a.message), style));
-                        rows.push((format!("  {}", a.remedy), theme::muted()));
+                        rows.push(line(format!("⚠ {} · {}", a.id, a.message), style));
+                        rows.push(line(format!("  {}", a.remedy), theme::muted()));
                     }
                     ("Usage".into(), rows, None, close.clone())
                 }
@@ -582,12 +664,12 @@ fn dialog(app: &App, buf: &mut Buffer) {
             }
         }
         Dialog::Sessions { query, selected, all, confirm } => {
-            let (mut lines, at) = select_lines(&app.session_rows(query, confirm.as_deref()), *selected, inner);
+            let (mut lines, at) = select_lines(&app.session_rows(query, confirm.as_deref()), *selected);
             if lines.is_empty() {
-                lines.push((if app.past.is_none() { "Loading sessions…" } else { "No sessions" }.to_string(), theme::muted()));
+                lines.push(line(if app.past.is_none() { "Loading sessions…" } else { "No sessions" }, theme::muted()));
             }
             let name = if *all { "Sessions  every project" } else { "Sessions" };
-            let title = if query.is_empty() { format!("{name}  Search sessions") } else { format!("{name}  {query}") };
+            search = Some(("Search sessions", query.clone()));
             let keys = format!(
                 "{} open · {} delete · {} rename · {} pin · {} {} · {close}",
                 k("dialog.select.submit"),
@@ -597,17 +679,17 @@ fn dialog(app: &App, buf: &mut Buffer) {
                 k("session.list.all"),
                 if *all { "this project" } else { "all projects" }
             );
-            (title, lines, at, keys)
+            (name.into(), lines, at, keys)
         }
         Dialog::Timeline { query, selected } => {
-            let (lines, at) = select_lines(&app.timeline_rows(query), *selected, inner);
-            let title = if query.is_empty() { "Timeline  Search timeline".to_string() } else { format!("Timeline  {query}") };
-            (title, lines, at, format!("{} jump · {close}", k("dialog.select.submit")))
+            let (lines, at) = select_lines(&app.timeline_rows(query), *selected);
+            search = Some(("Search timeline", query.clone()));
+            ("Timeline".into(), lines, at, format!("{} jump · {close}", k("dialog.select.submit")))
         }
         Dialog::Worktrees { selected, .. } => {
-            let (mut lines, at) = select_lines(&app.worktree_rows(), *selected, inner);
+            let (mut lines, at) = select_lines(&app.worktree_rows(), *selected);
             if lines.is_empty() {
-                lines.push((if app.worktrees.is_none() { "Loading worktrees…" } else { "No worktrees available" }.to_string(), theme::muted()));
+                lines.push(line(if app.worktrees.is_none() { "Loading worktrees…" } else { "No worktrees available" }, theme::muted()));
             }
             let keys = format!(
                 "{} move · {} new · {} delete · {} refresh · {close}",
@@ -618,7 +700,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
             );
             ("Worktrees".into(), lines, at, keys)
         }
-        Dialog::Input { title, text, .. } => (title.clone(), vec![(format!("{text}▏"), theme::text())], None, format!("{} confirm · {close}", k("dialog.select.submit"))),
+        Dialog::Input { title, text, .. } => (title.clone(), vec![line(format!("{text}▏"), theme::text())], None, format!("{} confirm · {close}", k("dialog.select.submit"))),
         Dialog::Aside { question, answer, scroll } => {
             let (text, style) = match answer {
                 Ok(a) => (a.as_str(), theme::text()),
@@ -626,16 +708,16 @@ fn dialog(app: &App, buf: &mut Buffer) {
             };
             let all = wrap(text, inner.max(1));
             let start = (*scroll).min(all.len().saturating_sub(room));
-            let shown = all.into_iter().skip(start).take(room).map(|l| (l, style)).collect();
+            let shown = all.into_iter().skip(start).take(room).map(|l| line(l, style)).collect();
             (format!("/btw {}", first_line(question)), shown, None, format!("{} copy · ↑↓ scroll · {close}", k("aside.copy")))
         }
         // `dialog-shell-output.tsx`: the command as the title, the output's end, `Loading…` until the first read.
         Dialog::Output { command, text, offset, scroll, error, .. } => {
-            let mut all: Vec<(String, Style)> = match (error, offset) {
-                (Some(e), _) => vec![(e.clone(), Style::fg(c().love))],
-                (None, None) => vec![("Loading…".into(), theme::muted())],
-                (None, Some(_)) if text.is_empty() => vec![("No output".into(), theme::muted())],
-                (None, Some(_)) => text.trim_end_matches('\n').split('\n').flat_map(|l| wrap(l, inner.max(1))).map(|l| (l, theme::text())).collect(),
+            let mut all: Vec<Line> = match (error, offset) {
+                (Some(e), _) => vec![line(e.clone(), Style::fg(c().love))],
+                (None, None) => vec![line("Loading…", theme::muted())],
+                (None, Some(_)) if text.is_empty() => vec![line("No output", theme::muted())],
+                (None, Some(_)) => text.trim_end_matches('\n').split('\n').flat_map(|l| wrap(l, inner.max(1))).map(|l| line(l, theme::text())).collect(),
             };
             let end = all.len().saturating_sub(room);
             let start = end.saturating_sub(*scroll);
@@ -644,20 +726,64 @@ fn dialog(app: &App, buf: &mut Buffer) {
             (format!("$ {}", first_line(command)), shown, None, format!("↑↓ scroll · {close}"))
         }
     };
-    // A list longer than the dialog scrolls with its selection.
-    let skip = scrolled.map_or_else(|| selected.map_or(0, |s| (s + 1).saturating_sub(room)), |s| s.min(lines.len().saturating_sub(room)));
+    let search = search.filter(|_| search_h > 0);
+    // A list longer than the dialog scrolls with its selection; the heading above the first row stays in view.
+    let skip = scrolled.map_or_else(
+        || selected.map_or(0, |s| if s == 1 && lines.first().is_some_and(|l| l.heading) { 0 } else { (s + 1).saturating_sub(room) }),
+        |s| s.min(lines.len().saturating_sub(room)),
+    );
     let body = (lines.len().min(room) as u16).max(1);
-    let dh = body + 4;
+    let dh = body + 4 + search_h;
     let (x, y) = ((w - dw) / 2, h.saturating_sub(dh) / 2);
     buf.fill(x, y, dw, dh, Style::default().on(c().surface));
     buf.text(x + 2, y + 1, dw.saturating_sub(4), &title, theme::text().on(c().surface).bold());
-    for (i, (line, style)) in lines.iter().enumerate().skip(skip).take(body as usize) {
-        let ly = y + 2 + (i - skip) as u16;
-        if selected == Some(i) {
-            buf.fill(x + 1, ly, dw.saturating_sub(2), 1, Style::default().on(c().accent));
-            buf.text(x + 2, ly, inner as u16, line, Style::fg(c().surface).on(c().accent));
+    let esc = k("dialog.close");
+    let ew = esc.width() as u16;
+    if ew + title.width() as u16 + 6 < dw {
+        buf.text(x + dw - 2 - ew, y + 1, ew, &esc, theme::muted().on(c().surface));
+    }
+    // #58 item 6: the search in a box of its own, set apart from the list under it.
+    if let Some((placeholder, query)) = &search {
+        let caret = Cell { ch: '▏', style: Style::fg(c().accent).on(c().surface) };
+        buf.border(x + 2, y + 2, dw.saturating_sub(4), 3, Style::fg(c().accent).on(c().surface));
+        let tw = dw.saturating_sub(8);
+        if query.is_empty() {
+            buf.set(x + 4, y + 3, caret);
+            buf.text(x + 5, y + 3, tw.saturating_sub(1), placeholder, theme::muted().on(c().surface));
         } else {
-            buf.text(x + 2, ly, inner as u16, line, style.on(c().surface));
+            let tail: Vec<char> = query.chars().rev().take(tw.saturating_sub(1) as usize).collect();
+            let shown: String = tail.into_iter().rev().collect();
+            let col = buf.text(x + 4, y + 3, tw, &shown, theme::text().on(c().surface));
+            buf.set(col, y + 3, caret);
+        }
+    }
+    let top = y + 2 + search_h;
+    // #58 item 11: where the view is in a longer list.
+    let bar = lines.len() > body as usize;
+    let width = (inner as u16).saturating_sub(u16::from(bar));
+    for (i, l) in lines.iter().enumerate().skip(skip).take(body as usize) {
+        let ly = top + (i - skip) as u16;
+        let (style, right_style) = if selected == Some(i) {
+            buf.fill(x + 1, ly, dw.saturating_sub(2 + u16::from(bar)), 1, Style::default().on(c().accent));
+            (Style::fg(c().surface).on(c().accent), Style::fg(c().surface).on(c().accent))
+        } else {
+            (l.style.on(c().surface), l.right_style.on(c().surface))
+        };
+        let rw = (l.right.width() as u16).min(width);
+        let lw = if rw == 0 { width } else { width.saturating_sub(rw + 2) };
+        buf.text(x + 2, ly, lw, &l.left, style);
+        if rw > 0 {
+            buf.text(x + 2 + width - rw, ly, rw, &l.right, right_style);
+        }
+    }
+    if bar {
+        let (n, b) = (lines.len(), body as usize);
+        let thumb = (b * b / n).max(1);
+        let at = skip.min(n - b) * (b - thumb) / (n - b).max(1);
+        let sx = x + dw - 2;
+        for i in 0..b {
+            let on = (at..at + thumb).contains(&i);
+            buf.set(sx, top + i as u16, Cell { ch: if on { '┃' } else { '│' }, style: Style::fg(if on { c().accent } else { c().overlay }).on(c().surface) });
         }
     }
     buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), &keys, theme::muted().on(c().surface));
@@ -665,13 +791,13 @@ fn dialog(app: &App, buf: &mut Buffer) {
 
 /// A select dialog's rows (`dialog-select.tsx`): each category headed (a search shows none), the row in use
 /// marked, a favorite or pinned one starred. Returns the lines and the selected row's line.
-fn select_lines(rows: &[ListRow], selected: usize, inner: usize) -> (Vec<(String, Style)>, Option<usize>) {
+fn select_lines(rows: &[ListRow], selected: usize) -> (Vec<Line>, Option<usize>) {
     let mut lines = Vec::new();
     let mut at = None;
     let mut group = "";
     for (i, r) in rows.iter().enumerate() {
         if !r.group.is_empty() && r.group != group {
-            lines.push((r.group.clone(), theme::text().bold()));
+            lines.push(heading(&r.group));
         }
         group = &r.group;
         if i == selected {
@@ -679,28 +805,9 @@ fn select_lines(rows: &[ListRow], selected: usize, inner: usize) -> (Vec<(String
         }
         let mark = if r.current { "● " } else { "  " };
         let right = if r.favorite { format!("{} *", r.detail) } else { r.detail.clone() };
-        lines.push((columns(&format!("{mark}{}", r.title), &right, inner), theme::text()));
+        lines.push(pair(format!("{mark}{}", r.title), right, theme::text(), theme::muted()));
     }
     (lines, at)
-}
-
-/// `left`, then `right` against the right edge of `width` columns; `left` is cut short to make room.
-fn columns(left: &str, right: &str, width: usize) -> String {
-    let rw = right.width();
-    let lw = width.saturating_sub(rw + 2);
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in left.chars() {
-        let cw = ch.width().unwrap_or(0);
-        if used + cw > lw {
-            break;
-        }
-        out.push(ch);
-        used += cw;
-    }
-    out.push_str(&" ".repeat(width.saturating_sub(used + rw)));
-    out.push_str(right);
-    out
 }
 
 /// A layer's name without its file, as a row has room for: `project`, `global`.
@@ -708,19 +815,66 @@ fn layer_name(source: &str) -> &str {
     source.split(" (").next().unwrap_or(source)
 }
 
-/// `component/prompt/metadata.tsx`: model, then ` · ` and the thinking effort in bold warning colour.
+/// `component/prompt/metadata.tsx`: the specialist, the model's name, then the thinking effort in bold warning
+/// colour; before a session answers, what a new one starts with. On the right, the context window's use as a bar.
 fn metadata(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16) {
-    let usage = app.current().and_then(|s| s.usage.as_ref());
-    let model = usage.and_then(|u| u.model.clone()).or_else(|| app.current().map(|s| s.summary.model.clone())).filter(|m| !m.is_empty());
+    let on = |st: Style| st.on(c().surface);
+    let end = x + width;
+    let bar = context_bar(app);
+    let bw = bar.as_ref().map_or(0, |(b, p, _)| (b.chars().count() + 1 + p.width()) as u16);
+    let room = if bw + 4 <= width { end - bw - 2 } else { end };
+    let model = app.model_now().or_else(|| app.current().map(|s| s.summary.model.clone()).filter(|m| !m.is_empty()));
     let Some(model) = model else {
-        buf.text(x, y, width, "lykos", theme::muted().on(c().surface));
+        buf.text(x, y, width, "lykos", on(theme::muted()));
         return;
     };
-    let mut col = buf.text(x, y, width, &model, theme::text().on(c().surface));
-    if let Some(effort) = usage.and_then(|u| u.effort.as_deref()).filter(|e| !e.is_empty()) {
-        col = buf.text(col, y, (x + width).saturating_sub(col), " · ", theme::muted().on(c().surface));
-        buf.text(col, y, (x + width).saturating_sub(col), effort, Style::fg(c().gold).on(c().surface).bold());
+    let mut col = x;
+    if let Some(sp) = app.specialist_now() {
+        let mut name = sp.clone();
+        if let Some(f) = name.get(..1) {
+            name = f.to_uppercase() + &sp[1..];
+        }
+        col = buf.text(col, y, room.saturating_sub(col), &name, on(Style::fg(c().accent).bold()));
+        col = buf.text(col, y, room.saturating_sub(col), " · ", on(theme::muted()));
     }
+    col = buf.text(col, y, room.saturating_sub(col), &model_name(app, &model), on(theme::text()));
+    if let Some(effort) = app.effort_now() {
+        col = buf.text(col, y, room.saturating_sub(col), " · ", on(theme::muted()));
+        buf.text(col, y, room.saturating_sub(col), &effort, on(Style::fg(c().gold).bold()));
+    }
+    if let Some((cells, label, colour)) = bar.filter(|_| room < end) {
+        let bx = end - bw;
+        let col = buf.text(bx, y, bw, &cells, on(Style::fg(colour)));
+        buf.text(col + 1, y, end.saturating_sub(col + 1), &label, on(theme::muted()));
+    }
+}
+
+/// A model's display name from the session's list, else its id without the provider.
+fn model_name(app: &App, model: &str) -> String {
+    let split = model.split_once('/');
+    let found = app.options.as_ref().and_then(|o| o.models.iter().find(|m| split == Some((m.provider.as_str(), m.id.as_str())) || m.id == model));
+    match found {
+        Some(m) if !m.name.is_empty() => m.name.clone(),
+        _ => model.rsplit('/').next().unwrap_or(model).to_string(),
+    }
+}
+
+/// Cells in the context bar.
+const CONTEXT_CELLS: usize = 10;
+
+/// #58 item 14: the context window's use as filled cells, its percent, and a colour that warms as it fills.
+fn context_bar(app: &App) -> Option<(String, String, lykos_term::Color)> {
+    let p = app.current()?.usage.as_ref()?.context_percent?.clamp(0.0, 100.0);
+    let filled = ((p / 100.0) * CONTEXT_CELLS as f64).round() as usize;
+    let cells: String = (0..CONTEXT_CELLS).map(|i| if i < filled { '▰' } else { '▱' }).collect();
+    let colour = if p > 90.0 {
+        c().love
+    } else if p > 70.0 {
+        c().gold
+    } else {
+        c().accent
+    };
+    Some((cells, format!("{}%", p.round() as u64), colour))
 }
 
 /// The row under the prompt box: the spinner and `esc interrupt` while running, else the directory; on the right,
@@ -1037,12 +1191,12 @@ mod tests {
     fn the_palette_and_the_help_show_each_actions_keys_and_where_they_were_set() {
         let mut app = App::new("C:/work".into());
         app.connected();
-        app.on_keybinds(Ok(serde_json::json!({ "keybinds": { "input.undo": { "value": "alt+u", "source": "project (C:/w/.lykos/config.yaml)" } } })));
+        app.on_config(Ok(serde_json::json!({ "keybinds": { "input.undo": { "value": "alt+u", "source": "project (C:/w/.lykos/config.yaml)" } } })));
         app.dialog = Some(Dialog::Palette { query: "undo".into(), selected: 0 });
         let mut buf = Buffer::new(100, 30);
         assert_eq!(draw(&app, &mut buf), None, "no prompt cursor under a dialog");
         let s = screen(&buf);
-        assert!(s.contains("Commands  undo") && s.contains("Undo in input") && s.contains("alt+u · project"), "{s}");
+        assert!(s.contains("Commands") && s.contains("undo▏") && s.contains("Undo in input") && s.contains("alt+u · project"), "{s}");
         app.dialog = Some(Dialog::Help { scroll: 0 });
         draw(&app, &mut buf);
         let s = screen(&buf);
@@ -1066,6 +1220,19 @@ mod tests {
     }
 
     #[test]
+    fn the_home_screen_names_the_default_specialist_model_and_effort_and_a_toast_shows_over_it() {
+        let mut app = App::new("C:/work".into());
+        app.connected();
+        app.on_config(Ok(serde_json::json!({ "keybinds": {}, "defaults": { "model": "deepseek/deepseek-v4-flash", "effort": "low", "specialist": "build" } })));
+        app.toast(crate::app::ToastKind::Success, "Copied to clipboard".into());
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("Build · deepseek-v4-flash · low"), "{s}");
+        assert!(s.lines().nth(1).is_some_and(|l| l.contains("┃ Copied to clipboard")), "{s}");
+    }
+
+    #[test]
     fn the_session_screen_shows_model_effort_context_and_the_turn() {
         let mut app = app_with_session();
         let mut buf = Buffer::new(100, 30);
@@ -1076,7 +1243,7 @@ mod tests {
         app.prefs.verbosity = crate::transcript::Verbosity::High;
         draw(&app, &mut buf);
         let s = screen(&buf);
-        for want in ["Fix it", "On it.", "read src/main.rs", "claude-opus · high", "12,345 tokens · 6% used", "esc interrupt"] {
+        for want in ["Fix it", "On it.", "read src/main.rs", "claude-opus · high", "12,345 tokens · 6% used", "esc interrupt", "▰▱▱▱▱▱▱▱▱▱ 6%"] {
             assert!(s.contains(want), "missing {want:?} in\n{s}");
         }
     }

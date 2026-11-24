@@ -359,7 +359,7 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             Vec::new()
         }
         Msg::Keybinds(result) => {
-            app.on_keybinds(result);
+            app.on_config(result);
             Vec::new()
         }
         Msg::Options(result) => {

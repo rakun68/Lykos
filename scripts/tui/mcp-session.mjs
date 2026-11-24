@@ -71,6 +71,16 @@ try {
     await call("send_text", { sessionId: id, text: "y\r" });
     await waitText("Ask anything");
   });
+  await step("before any prompt, the metadata row names the default specialist and effort (#58 item 10)", async () => {
+    await waitText("Build · ");
+  });
+  await step("a slash lists commands in a window with a count of the rest (#58 item 1)", async () => {
+    await call("send_text", { sessionId: id, text: "/" });
+    await waitText("↓ [0-9]+ below");
+    await call("send_keys", { sessionId: id, keys: "Down" });
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+    await call("send_keys", { sessionId: id, keys: "Backspace" });
+  });
   await step("a typed prompt is sent with Enter and answered", async () => {
     await call("send_text", { sessionId: id, text: "hello through the mcp" });
     await waitText("hello through the mcp");
@@ -79,11 +89,14 @@ try {
   });
   await step("model, context and effort are on screen once the session runs", async () => {
     // The model's name arrives with the session the engine server starts.
-    await waitText("scripted");
+    // #58 item 3: the specialist, then the model's display name.
+    await waitText("Build · Scripted");
   });
   await step("ctrl+p opens the palette of every action", async () => {
     await call("send_keys", { sessionId: id, keys: "Ctrl+P" });
     await waitText("Exit the application");
+    // #58 items 6 and 11: a search box, and the slash commands in a group of their own.
+    await waitText("Search commands");
     await call("wait_for_idle", { sessionId: id, timeout: 3000 });
   });
   await step("typing filters the palette", async () => {
@@ -105,8 +118,9 @@ try {
     await waitText("[Cc]trl\\+[Pp]");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
-  await step("ctrl+c twice quits lykos", async () => {
+  await step("ctrl+c twice quits lykos, the first one says so (#58 item 5)", async () => {
     await call("send_keys", { sessionId: id, keys: "Ctrl+C" });
+    await waitText("again to exit");
     await new Promise((r) => setTimeout(r, 200));
     await call("send_keys", { sessionId: id, keys: "Ctrl+C" });
     await call("wait_for_exit", { sessionId: id, timeout: 20000 });

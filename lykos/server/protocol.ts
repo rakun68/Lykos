@@ -220,6 +220,18 @@ export interface CommandInfo {
 /** What `config.keybinds` answers: only what a config layer sets; the client holds the defaults. */
 export interface KeybindsResult {
   keybinds: Record<string, KeybindSetting>;
+  /** #58 item 9: `tui.colors`, each role from the last layer that sets it. */
+  colors: Record<string, { value: string; source: string }>;
+  /** #58 item 10: what a new session in this workspace starts with, so a client shows it before one runs. */
+  defaults?: SessionDefaults;
+}
+
+/** The model, effort and specialist a new session starts with, as its boot resolves them. */
+export interface SessionDefaults {
+  /** `provider/id`. */
+  model: string;
+  effort: string;
+  specialist: string;
 }
 
 /** What `session.aside` answers. */

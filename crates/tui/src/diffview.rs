@@ -180,7 +180,7 @@ impl Viewer {
 
     /// The body laid out `width` columns wide, once per change to what it shows.
     pub fn laid(&self, width: usize, split: bool, wrap: bool) -> Rc<Laid> {
-        let key = (self.generation, width, split, wrap, self.reviewed_generation, self.single.then_some(self.selected), c() as *const theme::Palette as usize);
+        let key = (self.generation, width, split, wrap, self.reviewed_generation, self.single.then_some(self.selected), theme::version() as usize);
         if let Some((k, l)) = self.laid.borrow().as_ref() {
             if *k == key {
                 return l.clone();

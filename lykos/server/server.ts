@@ -17,7 +17,8 @@ import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, rmSync, statSync, type WriteStream } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { resolve as resolvePath } from "node:path";
-import { tuiKeybinds } from "../config/keybinds.js";
+import { tuiColors, tuiKeybinds } from "../config/keybinds.js";
+import { sessionDefaults } from "../session/session-options.js";
 import { loadConfig } from "../config/load.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
 import { isWithinRoot } from "../gate/approval.js";
@@ -218,7 +219,16 @@ export class EngineServer {
       }
       case "config.keybinds": {
         if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("config.keybinds needs cwd");
-        const result: KeybindsResult = { keybinds: tuiKeybinds(loadConfig({ cwd: resolvePath(params.cwd), ...(this.opts.globalDir !== undefined ? { globalDir: this.opts.globalDir } : {}) }).layers) };
+        const cwd = resolvePath(params.cwd);
+        const { layers } = loadConfig({ cwd, ...(this.opts.globalDir !== undefined ? { globalDir: this.opts.globalDir } : {}) });
+        // A config the default specialist cannot load leaves the defaults out; the session reports its own.
+        let defaults;
+        try {
+          defaults = sessionDefaults(cwd, this.opts.globalDir);
+        } catch {
+          defaults = undefined;
+        }
+        const result: KeybindsResult = { keybinds: tuiKeybinds(layers), colors: tuiColors(layers), ...(defaults !== undefined ? { defaults } : {}) };
         return result;
       }
       case "session.aside": {

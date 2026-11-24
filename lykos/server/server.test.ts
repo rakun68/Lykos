@@ -202,7 +202,7 @@ describe("engine server", () => {
     const work = mkdtempSync(join(tmpdir(), "lykos-keybinds-"));
     mkdirSync(join(work, ".lykos"));
     writeFileSync(join(dir, "config.yaml"), ["tui:", "  keybinds:", "    leader: ctrl+o", "    app.exit: none", ""].join("\n"));
-    writeFileSync(join(work, ".lykos", "config.yaml"), ["tui:", "  keybinds:", "    app.exit: [ctrl+q]", "    input.undo: false", ""].join("\n"));
+    writeFileSync(join(work, ".lykos", "config.yaml"), ["tui:", "  keybinds:", "    app.exit: [ctrl+q]", "    input.undo: false", "  colors:", "    accent: '#ff8800'", ""].join("\n"));
     await server.listen();
     try {
       const a = await connectEngine(server.address, key);
@@ -213,6 +213,13 @@ describe("engine server", () => {
         "input.undo": [false, "project"],
       });
       assert.match(got.keybinds.leader?.source ?? "", /config\.yaml\)$/);
+      // #58 items 9 and 10: the colours set, and what a new session starts with.
+      assert.deepEqual([got.colors.accent?.value, got.colors.accent?.source.split(" ")[0]], ["#ff8800", "project"]);
+      if (got.defaults) {
+        assert.ok(got.defaults.specialist.length > 0 && got.defaults.effort.length > 0, JSON.stringify(got.defaults));
+      }
+      writeFileSync(join(work, ".lykos", "config.yaml"), ["tui:", "  colors:", "    accent: orange", ""].join("\n"));
+      await assert.rejects(a.request("config.keybinds", { cwd: work }), /tui\.colors\.accent/);
       writeFileSync(join(work, ".lykos", "config.yaml"), ["tui:", "  keybinds:", "    app.exit: 3", ""].join("\n"));
       await assert.rejects(a.request("config.keybinds", { cwd: work }), /tui\.keybinds\.app\.exit must be/);
       a.close();

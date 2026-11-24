@@ -656,6 +656,9 @@ tui:
   # Rebinds the TUI's actions (ui.md §5, #39): an action id, then a key list ("a,b"), a list of
   # keys, "none" or false. `leader` is the leader key. The last layer to name an action wins.
   keybinds: {}
+  # Sets a colour role over every theme (ui.md §5, #58): background, surface, overlay, muted,
+  # subtle, text, error, warning, success, accent, selection, keybind; each "#rrggbb" or "#rgb".
+  colors: {}
 ```
 
 ---
