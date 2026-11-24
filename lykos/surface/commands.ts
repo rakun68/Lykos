@@ -153,6 +153,7 @@ export const BUILTIN_COMMANDS: readonly CommandSpec[] = [
   // P14.6 ticket 06: the same login flow as `lykos login`, and the session's
   // credential pin. Both are free: neither sends anything to a model.
   { name: "/login", costClass: "local", description: "add a credential: /login <provider> [--api-key]", source: "builtin" },
+  { name: "/provider", costClass: "local", description: "declare a custom provider: /provider add", source: "builtin" },
   {
     name: "/credential",
     costClass: "local",

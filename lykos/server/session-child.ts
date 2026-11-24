@@ -21,6 +21,7 @@ import type { AsideAnswer } from "../session/aside.js";
 import type { SessionOptions } from "../session/session-options.js";
 import { createEventUi } from "./event-ui.js";
 import { TranscriptEvents } from "./transcript-events.js";
+import type { ProviderAddQuestion } from "../config/provider-add.js";
 import type { ResumePreflight } from "../session/resume-preflight.js";
 import type { EventData, JobLogResult, RequestData, SessionStatus } from "./protocol.js";
 import type { JobRegistry } from "../tools/job-runner.js";
@@ -80,6 +81,13 @@ class QueuedLines implements LineSource {
 
   /** Set once the child can open requests: a secret is asked as a request the client masks. */
   secret: (() => Promise<string | null>) | undefined;
+
+  /** Set once the child can open requests: a question in a dialog of its own. */
+  question: ((q: ProviderAddQuestion) => Promise<string | null>) | undefined;
+
+  ask(q: ProviderAddQuestion): Promise<string | null> {
+    return this.question !== undefined ? this.question(q) : this.next();
+  }
 
   nextSecret(): Promise<string | null> {
     return this.secret !== undefined ? this.secret() : this.next();
@@ -272,6 +280,13 @@ export async function runSessionChild(
     const key = await answer(true);
     status("idle");
     return key;
+  };
+  // `/provider add` asks its questions here, also only while the session is idle.
+  lines.question = async (q) => {
+    open({ kind: "question", title: q.title, detail: q.detail, options: q.options ? [...q.options] : [] });
+    const reply = await answer();
+    status("idle");
+    return reply;
   };
 
   const gate = resolveApprovalGate({

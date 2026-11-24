@@ -109,6 +109,8 @@ pub const LEADER_WINDOW: Duration = Duration::from_secs(2);
 pub const BACKGROUND_HINT_DELAY: Duration = Duration::from_secs(3);
 /// Two clicks this close are a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// The provider list's first row: not a provider name (one starts with a letter or digit), so none can clash with it.
+const CUSTOM_PROVIDER: &str = "+custom";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
@@ -1009,7 +1011,11 @@ impl App {
                 .unwrap_or_default(),
             List::Themes { initial } => theme::PALETTES.iter().map(|p| row(p.name.into(), p.name.into(), if p.light() { "light".into() } else { "dark".into() }, "", p.name == *initial, false)).collect(),
             List::Providers => o
-                .map(|o| o.providers.iter().map(|p| row(p.name.clone(), p.name.clone(), format!("{} · {}", p.reach, p.reason), "", false, false)).collect())
+                .map(|o| {
+                    // `/provider add` asks for an endpoint of one's own, then its key.
+                    let custom = row(CUSTOM_PROVIDER.into(), "Add a custom provider…".into(), "your own endpoint".into(), "", false, false);
+                    std::iter::once(custom).chain(o.providers.iter().map(|p| row(p.name.clone(), p.name.clone(), format!("{} · {}", p.reach, p.reason), "", false, false))).collect()
+                })
                 .unwrap_or_default(),
         };
         if query.is_empty() || matches!(list, List::Models) {
@@ -1599,6 +1605,10 @@ impl App {
 
     /// `/login` signs in to an OAuth provider, or asks for an API key in a request whose answer is masked.
     fn connect(&mut self, name: &str) -> Vec<Action> {
+        if name == CUSTOM_PROVIDER {
+            self.dialog = None;
+            return self.command("/provider add".into());
+        }
         let oauth = self.options.as_ref().and_then(|o| o.providers.iter().find(|p| p.name == name)).is_some_and(|p| p.auth.contains("oauth"));
         // An API key is asked for in a request the prompt box masks.
         self.dialog = None;
@@ -3246,6 +3256,10 @@ mod tests {
         // A provider with a browser sign-in signs in from here; an API key is asked for here too, masked.
         assert_eq!(sent(&app.connect("anthropic")), ["/login anthropic"]);
         assert_eq!(sent(&app.connect("openai")), ["/login openai --api-key"]);
+        // The list opens on "Add a custom provider…", which asks for one in the session's dialogs.
+        let first = app.list_rows(&List::Providers, "").into_iter().next().map(|r| r.value);
+        assert_eq!(first.as_deref(), Some(CUSTOM_PROVIDER));
+        assert_eq!(sent(&app.connect(CUSTOM_PROVIDER)), ["/provider add"]);
     }
 
     #[test]

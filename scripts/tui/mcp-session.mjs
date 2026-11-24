@@ -126,6 +126,13 @@ try {
     await waitText("Free space");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
+  await step("/connect lists providers under a row to add a custom one", async () => {
+    await call("send_text", { sessionId: id, text: "/connect" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Add a custom provider");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
   await step("ctrl+c twice quits lykos, the first one says so (#58 item 5)", async () => {
     await call("send_keys", { sessionId: id, keys: "Ctrl+C" });
     await waitText("again to exit");

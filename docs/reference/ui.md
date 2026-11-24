@@ -270,6 +270,14 @@ shows the head estimate as the context bar until a request measures it, never `u
 **Login.** `/connect` on a provider with OAuth sends `/login <name>`; any other asks for its API key in a request
 dialog whose answer is drawn as `•` and is never echoed in the conversation or the event log.
 
+**Custom providers.** The `/connect` list opens on `Add a custom provider…`, which sends `/provider add`. The
+session asks, one dialog each: the provider's name, its API (`openai-completions`, `openai-responses`,
+`anthropic-messages`, `google-generative-ai`), its base URL, its model ids, and whether to save it to the global or
+the project `config.yaml`. It appends the declaration to that file's `providers:` block, leaving the rest of the file
+as it was, then asks for the key as `/login <name> --api-key` does. A new session uses it, as `<name>/<model>`. A
+name in use, a URL that is not http or https, or no model id stops it with the reason, and nothing is written.
+`/provider add` on the line surface asks the same questions as lines.
+
 **Command answers (#58).** What a session's slash command answers (`/session`, the lists of `/specialist` and
 `/output-style`, `/rewind`, `/compact`, `/mode`, `/model`) comes as a `report` event, not a line of the conversation:
 one short line is a toast (an error toast for `lykos:` refusals), more opens a popup titled with the command, and a

@@ -2,6 +2,9 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import type { ResolvedConfig } from "../config/types.js";
 import { DEFAULT_SPECIALIST, discoverSpecialists } from "../config/specialists.js";
+import { globalConfigPath, projectConfigPath } from "../config/load.js";
+import { runProviderAdd } from "../config/provider-add.js";
+import { BUILTIN_PROVIDERS } from "../config/provider-table.js";
 import {
   applySpecialistGuardEnv,
   formatSpecialistChangeReport,
@@ -501,6 +504,12 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
       continuationRequested: () => booted.continuationState.requested,
       login: credentialCommands.login,
       credential: credentialCommands.credential,
+      addProvider: (io) =>
+        runProviderAdd(io, {
+          globalPath: globalConfigPath(defaultGlobalDir()),
+          projectPath: projectConfigPath(cwd),
+          taken: [...new Set([...Object.keys(BUILTIN_PROVIDERS), ...Object.keys(config.providers)])],
+        }),
       rewind: booted.rewind,
       ...(input.resume?.inputText !== undefined ? { inputText: input.resume.inputText } : {}),
     });

@@ -110,6 +110,7 @@ export const S0_HELP = [
   "  /specialist [name]    list specialists, or switch to one (records a prefix break)",
   "  /output-style [name]  list output styles, or switch to one (in stream)",
   "  /login <provider> [--api-key]   add a credential to the provider's pool (free)",
+  "  /provider add   declare a custom provider, then add its key (free)",
   "  /credential [label|auto]   list the pool, pin one credential to this session, or unpin (free)",
   "  /new               refused — would rewrite the cache prefix; start a new session",
   "  /<skill>           run a discovered skill, e.g. /handoff (/skill:<name> if a command shadows it)",

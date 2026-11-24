@@ -144,6 +144,7 @@ import { buildContinuationPrompt, decideContinuation, type ContinuationPlan } fr
 import { listCheckpoints } from "../loop/checkpoint.js";
 import { sessionChangedPaths } from "../loop/diff-summary.js";
 import { contextBreakdown, type ContextBreakdown, type ContextTool } from "./context-breakdown.js";
+import type { CustomProvider, ProviderAddIO, ProviderAddQuestion } from "../config/provider-add.js";
 
 /** The subset of `AgentSession` this loop actually calls — the real class satisfies this structurally. */
 export interface InteractiveSession extends RewindableSession {
@@ -192,6 +193,11 @@ export interface LineSource {
    * in cooked mode), where `/login` says so before it asks.
    */
   nextSecret?(): Promise<string | null>;
+  /**
+   * A question in a dialog of its own, with choices when `options` has any. Absent on a source with no dialogs
+   * (readline), where the loop prints the question and reads the next line.
+   */
+  ask?(q: ProviderAddQuestion): Promise<string | null>;
   /** Wakes any pending `next()` with null — used by the idle-Ctrl-C handler. */
   close(): void;
   /**
@@ -471,6 +477,8 @@ export interface RunInteractiveLoopOpts {
    * channel to print on.
    */
   login?: (provider: string, apiKey: boolean, io: TuiLoginIO) => Promise<void>;
+  /** `/provider add`: asks for a custom provider and writes it (`config/provider-add.ts`). */
+  addProvider?: (io: ProviderAddIO) => Promise<{ provider: CustomProvider; path: string } | null>;
   /** P14.6 ticket 06: `/credential [label|auto]`. Returns the lines to print. */
   credential?: (arg: string) => string;
   /** T263: this session's rewind (`booted.rewind`). Absent, `/rewind` says it is not available. */
@@ -1161,6 +1169,47 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
           },
           masks: lineSource.nextSecret !== undefined,
         });
+        return "ok";
+      }
+      case "provider": {
+        if (parsed.action !== "add") {
+          say("usage: /provider add");
+          return "ok";
+        }
+        if (!opts.addProvider) {
+          say("lykos: /provider is not available on this session");
+          return "ok";
+        }
+        if (!session.isIdle) {
+          say("lykos: /provider cannot run while a turn is in flight");
+          return "ok";
+        }
+        const report = (line: string): void => (ui?.writeReport ? ui.writeReport("provider", line) : chrome(line));
+        // Top level only (refused mid-turn above), so no read is pending and these answers cannot be taken for prompts.
+        const ask =
+          lineSource.ask?.bind(lineSource) ??
+          (async (q: ProviderAddQuestion): Promise<string | null> => {
+            chrome(`${q.title}: ${q.detail}${q.options ? ` (${q.options.map((o) => o.value).join(" | ")})` : ""}`);
+            const line = await nextLine();
+            consumeLine();
+            return line;
+          });
+        const added = await opts.addProvider({ ask, say: report });
+        if (added === null) return "ok";
+        const { provider, path } = added;
+        report(`${provider.id} (${provider.models.join(", ")}) is in ${path}; a new session can use ${provider.id}/${provider.models[0]}.`);
+        if (opts.login) {
+          await opts.login(provider.id, true, {
+            write: report,
+            read: async (secret) => {
+              if (secret && lineSource.nextSecret) return lineSource.nextSecret();
+              const line = await nextLine();
+              consumeLine();
+              return line;
+            },
+            masks: lineSource.nextSecret !== undefined,
+          });
+        }
         return "ok";
       }
       case "credential":

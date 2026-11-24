@@ -108,6 +108,8 @@ export type ParsedInput =
   | { kind: "login"; provider: string; apiKey: boolean }
   /** P14.6 ticket 06: `/credential` lists the pool, `/credential <label>` pins, `/credential auto` unpins. */
   | { kind: "credential"; arg: string }
+  /** `/provider add`: declare a custom provider, question by question. `action` is what followed `/provider`. */
+  | { kind: "provider"; action: string }
   | { kind: "bash"; command: string; sendToModel: boolean }
   /** T131: a skill invoked as `/handoff` or `/skill:handoff`. `skill` is the roster name, whose case may differ from what was typed. */
   | { kind: "skill"; skill: string; args: string }
@@ -199,6 +201,7 @@ export function parseInteractiveInput(line: string): ParsedInput {
     return { kind: "login", provider: positionals.length === 1 && !unknownFlag ? positionals[0]! : "", apiKey };
   }
   if (name === "credential") return { kind: "credential", arg };
+  if (name === "provider") return { kind: "provider", action: arg.toLowerCase() };
   if (name === "model") {
     const persist = arg.endsWith(" --persist") || arg === "--persist";
     const spec = arg.replace(/\s+--persist$/, "").trim();
