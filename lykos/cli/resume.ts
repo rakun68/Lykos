@@ -60,7 +60,7 @@ import { openLedgerSync, type Ledger } from "../ledger/use.js";
 import { sessionModelPath } from "../delegate/session-base.js";
 
 import { preflightResume, formatPreflight, type ResumePreflight } from "../session/resume-preflight.js";
-import type { ResumePlan } from "../session/interactive.js";
+import type { LaunchInput, LaunchResult, ResumePlan } from "../session/interactive.js";
 import { earlierPrompts } from "../session/rewind.js";
 import type { LineSource } from "../session/interactive.js";
 import { stdoutWrite } from "../tui/io-mode.js";
@@ -92,21 +92,7 @@ export interface ResumeOptions {
   now?: Date;
 }
 
-export interface LaunchResult {
-  status: "ok" | "error";
-  sessionId?: string;
-  message?: string;
-  forkRequested?: boolean;
-  /** T264: a rewind went back past this process's prompts: rebuild the session from its transcript. */
-  rewindRebuild?: { inputText: string };
-}
-
-export interface LaunchInput {
-  workspace: string;
-  ledgerPath: string;
-  model: string | undefined;
-  resume: ResumePlan;
-}
+export type { LaunchInput, LaunchResult };
 
 /**
  * Resolves a session id or unique prefix, the same way `lykos show` does.

@@ -62,6 +62,8 @@ export async function runServerSession(): Promise<number> {
       process.on("message", fn as (m: unknown) => void);
       process.once("disconnect", () => fn({ kind: "close" }));
     },
+    // Loaded when a session resumes, not for every session.
+    async (...args) => (await import("./resume.js")).runResume(...args),
   );
   process.disconnect?.();
   return code;

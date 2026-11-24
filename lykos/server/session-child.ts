@@ -13,8 +13,7 @@ import { folderOfPath, TerminalApprovalGate, type ApprovalRequest } from "../gat
 import { resolveProject } from "../session/identity.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { resolveApprovalGate } from "../session/session.js";
-import type { InteractiveHandle, LineSource, ResumePlan } from "../session/interactive.js";
-import type { LaunchResult } from "../cli/resume.js";
+import type { InteractiveHandle, LaunchResult, LineSource, ResumePlan, ResumeRunner } from "../session/interactive.js";
 import { defaultLedgerPath } from "../ledger/ledger.js";
 import { TerminalAsk, type AskRequest } from "../tools/ask.js";
 import { slashCandidates } from "../tui/commands.js";
@@ -157,7 +156,11 @@ export function watchJobs(jobs: JobRegistry, emit: (data: EventData) => void): v
   });
 }
 
-export async function runSessionChild(send: (msg: FromChild) => void, receive: (fn: (msg: ToChild) => void) => void): Promise<number> {
+export async function runSessionChild(
+  send: (msg: FromChild) => void,
+  receive: (fn: (msg: ToChild) => void) => void,
+  runResume: ResumeRunner,
+): Promise<number> {
   const params = await new Promise<ChildStartParams>((resolve) => {
     receive((msg) => {
       if (msg.kind === "start") resolve(msg.params);
@@ -319,7 +322,6 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
   };
   /** P5 #42: `lykos resume` on these seams: the preflight's agreement is a question to the client. */
   const resume = async (id: string, opts: { fork?: boolean; inputText?: string }): Promise<number> => {
-    const { runResume } = await import("../cli/resume.js");
     let refusal: string | undefined;
     const code = await runResume(params.cwd, ledgerPath ?? defaultLedgerPath(params.cwd), id, {
       ...(opts.fork === true ? { fork: true } : {}),

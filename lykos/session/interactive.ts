@@ -1367,6 +1367,40 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
  * so the number the person confirmed is the number that gets sent and the
  * number the transcript records.
  */
+/** What one process of a resumed session reports to `lykos resume` (`cli/resume.ts`). */
+export interface LaunchResult {
+  status: "ok" | "error";
+  sessionId?: string;
+  message?: string;
+  forkRequested?: boolean;
+  /** T264: a rewind went back past this process's prompts: rebuild the session from its transcript. */
+  rewindRebuild?: { inputText: string };
+}
+
+export interface LaunchInput {
+  workspace: string;
+  ledgerPath: string;
+  model: string | undefined;
+  resume: ResumePlan;
+}
+
+/**
+ * `lykos resume`'s `runResume`, as the engine server's session child calls it (P5 #42). The CLI hands it in, so
+ * `server/` does not import `cli/` (dependency rule 1).
+ */
+export type ResumeRunner = (
+  cwd: string,
+  ledgerPath: string,
+  idOrPrefix: string,
+  opts: {
+    fork?: boolean;
+    inputText?: string;
+    confirm?: (preflight: string) => Promise<boolean>;
+    onRefusal?: (reason: string) => void;
+    launch?: (input: LaunchInput) => Promise<LaunchResult>;
+  },
+) => Promise<number>;
+
 export interface ResumePlan {
   /** The session being continued. Written to `resumed_from`; the original is never touched. */
   fromSessionId: string;
