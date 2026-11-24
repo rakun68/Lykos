@@ -69,6 +69,9 @@ npm run build
 npm link
 ```
 
+`npm install` also fetches the prebuilt terminal UI, `lykos-tui`, for Windows or Linux x64; no Rust
+toolchain is needed. On another platform, `cargo build --release -p lykos-tui` builds it.
+
 `npm link` puts the `lykos` command on your `PATH`. Check the install:
 
 ```bash
@@ -101,6 +104,8 @@ Start the terminal UI:
 ```bash
 lykos
 ```
+
+`lykos --old-tui` starts the previous one.
 
 Or run one task and exit:
 

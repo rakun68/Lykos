@@ -12,7 +12,8 @@
     "build": "tsc && node scripts/copy-ledger-assets.mjs",
     "dev": "tsx lykos/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"lykos/**/*.test.ts\""
+    "test": "tsx --test \"lykos/**/*.test.ts\"",
+    "postinstall": "node scripts/tui/install.mjs"
   },
   "engines": {
     "node": ">=22"

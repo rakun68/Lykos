@@ -38,7 +38,7 @@ async function main(argv: string[]): Promise<number> {
   // Pi session (bare `lykos`, `run`, `resume`, `mcp`). Everything else — `hud`
   // on the S1 hot path, `usage`, `doctor` — pays for the variable only and
   // never writes into the home.
-  if (command === undefined || command === "run" || command === "resume" || command === "mcp" || command === "session-child" || command === "server-session") {
+  if (command === undefined || command === "--old-tui" || command === "run" || command === "resume" || command === "mcp" || command === "session-child" || command === "server-session") {
     try {
       ensurePiHost({ dir: piHost });
     } catch (err) {
@@ -52,7 +52,12 @@ async function main(argv: string[]): Promise<number> {
   // standalone terminal UI"; nothing implemented it, so a bare `lykos`
   // answered `unknown command "undefined"`. Found 2026-09-07 while looking
   // into UI feedback item 3, which begins "if we just start lykos".
+  // P5 #52: bare `lykos` is the Rust TUI; `lykos --old-tui` the TypeScript one, until #55 removes it.
   if (command === undefined) {
+    const { runTui } = await import("./cli/tui.js");
+    return runTui(cwd);
+  }
+  if (command === "--old-tui") {
     const { runRun, askOutcomeFromEnv } = await import("./cli/run.js");
     return runRun(cwd, undefined, { interactive: true, askOutcome: askOutcomeFromEnv() });
   }

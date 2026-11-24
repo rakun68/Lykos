@@ -144,7 +144,9 @@ When prompted, answers are:
 
 ## 5. The Rust TUI (`lykos-tui`, P5)
 
-`crates/tui` builds `lykos-tui`. It draws its first frame before it connects, then connects to the
+`crates/tui` builds `lykos-tui`; `lykos` with no arguments runs it, and `lykos --old-tui` runs the
+TypeScript TUI of sections 2 to 4 until #55 removes it. It ships prebuilt for Windows and Linux x64
+([cli-and-config.md](cli-and-config.md) §1.1). It draws its first frame before it connects, then connects to the
 engine server on a thread, starting one when none answers ([engine-server.md](engine-server.md)).
 It sleeps while nothing on screen moves and draws only after a key, an event or a spinner tick.
 Its layout and keys follow OpenCode's TUI at `4332e24`, read from source; each place in the code

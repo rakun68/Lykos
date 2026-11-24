@@ -89,6 +89,16 @@ The `lykos` executable provides the following commands:
 
 ### 1.1 `lykos-tui` (P5)
 
+`lykos` with no arguments runs `lykos-tui` in the current directory (P5 #52); `lykos --old-tui` runs the
+TypeScript TUI (`lykos run --interactive`). `lykos` asks to trust an untrusted workspace on the terminal
+first, as the old TUI does, and passes `--trust-workspace` when the trust was not read from the store. The
+binary is `LYKOS_TUI_BIN`, else a source build at `target/release/`, else the prebuilt one `npm install`
+fetched into `vendor/tui/<platform>-<arch>/`. Its server command is this Node and this `lykos`, so it needs
+no `lykos` on `PATH`. Prebuilt binaries exist for `win32-x64` and `linux-x64` (static, musl): the `tui`
+workflow builds them and publishes them as the GitHub release `tui-v<version>` of the Cargo workspace's
+version, with `SHA256SUMS`; `scripts/tui/install.mjs` (the postinstall) checks the checksum and fetches
+once per version. A failed fetch leaves `npm install` passing and says how to get one.
+
 `lykos-tui [--cwd DIR] [--model PROVIDER/MODEL] [--trust-workspace] [--mini] [-s|--session ID]`: the
 Rust TUI ([ui.md](ui.md) §5). `--cwd` is the workspace (default: the current directory), `--model` the
 model its sessions start with (default: the config's), and `--trust-workspace` starts a session in
@@ -831,7 +841,10 @@ These environment variables participate in the standard config precedence hierar
 - `LYKOS_TRUST_WORKSPACE`: If `1`, a headless run passes the trust gate for this run without writing the store. It never authorises running a workspace's own binaries or loading its own extensions in a delegated session: only the user-level trust store does (see [lsp.md](lsp.md#trust-and-workspace-binaries-t171)). A project already in the store reports `stored` even with this set.
 - `LYKOS_TUI_DIR`: lykos-tui's own state directory (default `~/.lykos/tui`): its prompt stash and `state.json`. Tests point it at a temporary directory.
 - `LYKOS_ENGINE_DIR`: The engine server's run directory (default `~/.lykos/run`): its key, its log, and on Linux its socket. A second directory is a second server ([engine-server.md](engine-server.md) §5).
-- `LYKOS_SERVE_CMD`: The command the Rust client starts a server with, as a JSON array.
+- `LYKOS_SERVE_CMD`: The command the Rust client starts a server with, as a JSON array. `lykos` sets it to itself when unset.
+- `LYKOS_TUI_BIN`: The `lykos-tui` binary `lykos` runs, over a source build and the fetched one.
+- `LYKOS_TUI_RELEASE_URL`: Where `npm install` fetches `lykos-tui` and `SHA256SUMS` from (default the GitHub release `tui-v<version>`).
+- `LYKOS_TUI_SKIP_DOWNLOAD`: If `1`, `npm install` fetches no `lykos-tui`.
 - `LYKOS_ENGINE_CHILD`, `LYKOS_RECORD_EVENTS`: Tests only (engine-server.md §5).
 - `PI_CODING_AGENT_DIR`: Root for Pi packages and agent definitions.
 - `DEEPSEEK_API_KEY`: API credential for DeepSeek provider.

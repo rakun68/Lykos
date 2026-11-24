@@ -1,0 +1,69 @@
+# lykos-tui's prebuilt binaries (P5 #52): built for Windows and Linux x64 on every change to the Rust crates, and
+# published as a GitHub release for a `tui-v<version>` tag, where `scripts/tui/install.mjs` fetches them.
+# Linux is built for musl, a static binary that runs on any distribution.
+name: tui
+
+on:
+  push:
+    tags: ["tui-v*"]
+  pull_request:
+    paths: ["crates/**", "Cargo.toml", "Cargo.lock", ".github/workflows/tui.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            built: lykos-tui.exe
+            asset: lykos-tui-win32-x64.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            built: lykos-tui
+            asset: lykos-tui-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: musl
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo test -p lykos-tui --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p lykos-tui --target ${{ matrix.target }}
+      - name: asset
+        shell: bash
+        run: cp "target/${{ matrix.target }}/release/${{ matrix.built }}" "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/tui-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: the tag matches the workspace version
+        run: |
+          version=$(sed -n '/\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Cargo.toml)
+          test "tui-v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, Cargo.toml $version"; exit 1; }
+      - name: SHA256SUMS
+        working-directory: assets
+        run: sha256sum lykos-tui-* > SHA256SUMS && cat SHA256SUMS
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" assets/* --title "lykos-tui ${GITHUB_REF_NAME#tui-v}" --notes "Prebuilt lykos-tui for Windows and Linux x64. npm install fetches the one for this platform."

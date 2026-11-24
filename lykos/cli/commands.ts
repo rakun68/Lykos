@@ -693,7 +693,7 @@ export const COMMANDS: readonly Command[] = [
       "            (stdin, then each @file, then the argument; `--` makes the next argument the task verbatim).",
       "            On Windows give a multi-line task as @task.md: a .cmd launcher (npm run, npx, lykos.cmd)",
       "            cuts an argument at its first newline, and PowerShell 5.1 reads a file without a BOM as ANSI",
-      "            `lykos run --interactive` (or `lykos` with no args) starts the standalone terminal UI",
+      "            `lykos run --interactive` (or `lykos --old-tui`) starts the old terminal UI; `lykos` alone starts lykos-tui",
       "            `lykos run task.md`: a task file (frontmatter files/sealed/test/scope/red/steps/issue, then the brief)",
       "            [--max-steps n] the step cap; [--request-id id] a retry with the same id finds its session; [--base ref]",
       "            [--rulings-from id[,id]] sessions whose spec-check rulings bind this one (a reviewer names the implementer it reviews)",

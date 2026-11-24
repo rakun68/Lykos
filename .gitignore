@@ -48,3 +48,6 @@ desktop.ini
 /target/
 /bench/renderers/target/
 /.scratch/
+
+# The prebuilt lykos-tui npm install fetches (scripts/tui/install.mjs)
+vendor/tui/
