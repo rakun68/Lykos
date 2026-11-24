@@ -10,11 +10,15 @@ const send = (msg: FromChild): void => {
 };
 let holding = false;
 let asked: string | undefined;
+let ledgerSessionId = "ledger-1";
 
 process.on("message", (msg: ToChild) => {
   switch (msg.kind) {
     case "start":
-      send({ kind: "status", status: "idle", ledgerSessionId: "ledger-1", model: msg.params.model ?? "faux/scripted" });
+      // A resume keeps the ledger session; the ledger it writes is said, so a test can see which.
+      ledgerSessionId = msg.params.resume ?? "ledger-1";
+      send({ kind: "status", status: "idle", ledgerSessionId, model: msg.params.model ?? "faux/scripted" });
+      send({ kind: "event", data: { type: "system", text: `ledger ${msg.params.ledgerPath}` } });
       send({ kind: "event", data: { type: "commands", commands: [{ name: "/help", description: "list commands", source: "builtin" }, { name: "/skill:tdd", description: "test first", source: "skill" }] } });
       break;
     case "aside":
@@ -97,7 +101,7 @@ process.on("message", (msg: ToChild) => {
       send({ kind: "status", status: "idle" });
       break;
     case "close":
-      send({ kind: "exit", ok: true, ledgerSessionId: "ledger-1" });
+      send({ kind: "exit", ok: true, ledgerSessionId });
       process.disconnect();
       break;
     default:

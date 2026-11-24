@@ -366,8 +366,13 @@ impl App {
         }
         if Some(&event.session) == self.session.as_ref() {
             // An undone prompt comes back to be edited (P5 #42).
+            // An undone prompt comes back ahead of anything typed since; an empty one (a redo) leaves the box alone.
             if let EventData::PromptSet { text } = &event.data {
-                self.editor.set(text);
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                let now = self.editor.text().to_string();
+                self.editor.set(&if now.is_empty() { text.clone() } else { format!("{text}\n{now}") });
                 return self.refresh_menu();
             }
             if let EventData::SessionStatus { session } = &event.data {
@@ -666,6 +671,10 @@ impl App {
 
     /// A session of the list: its tab when it runs here, else resumed (`session.start` with `resume`).
     fn open_session(&mut self, id: &str, cwd: Option<String>) -> Vec<Action> {
+        // One start at a time: a second press before the first answers would resume the session twice.
+        if self.starting {
+            return Vec::new();
+        }
         let live = self.past.as_ref().and_then(|p| p.live.get(id)).cloned();
         if let Some(sid) = live.filter(|sid| self.store.sessions.get(sid).is_some_and(|s| s.summary.status != SessionStatus::Closed)) {
             return self.activate(sid);
@@ -683,6 +692,10 @@ impl App {
                     self.starting = false;
                 }
                 self.notice = Some(e);
+                // The list already left out what was archived: a failure shows it again.
+                if let Then::Refresh { all } = then {
+                    return vec![self.history_call(all, Then::History)];
+                }
                 return Vec::new();
             }
         };
@@ -2451,8 +2464,11 @@ mod tests {
             assert_eq!(sent(&press(&mut app, key(KeyCode::Char(k)))), [cmd]);
         }
         assert_eq!(sent(&app.run("session.fork", Instant::now(), 10).unwrap()), ["/fork"]);
+        typed(&mut app, "draft");
         event(&mut app, "s1", 2, EventData::PromptSet { text: "do it again".into() });
-        assert_eq!(app.editor.text(), "do it again");
+        assert_eq!(app.editor.text(), "do it again\ndraft", "the undone prompt goes ahead of the draft");
+        event(&mut app, "s1", 3, EventData::PromptSet { text: String::new() });
+        assert_eq!(app.editor.text(), "do it again\ndraft", "a redo's empty text leaves the box alone");
     }
 
     #[test]
@@ -2500,6 +2516,8 @@ mod tests {
         assert!(app.session_rows("", Some("L0"))[0].title.starts_with("Press ctrl+d again"));
         let out = press(&mut app, ctrl('d'));
         assert_eq!(calls(&out), [("session.archive", json!({ "cwd": "/w", "ledgerSessionId": "L0" }))]);
+        let out = app.on_reply(Then::Refresh { all: false }, Err("no ledger".into()));
+        assert_eq!(calls(&out), [("sessions.history", json!({ "cwd": "/w", "all": false }))], "a failed archive reloads the list");
         // Rename from the list.
         app.on_reply(Then::History, Ok(json!({ "rows": [{ "id": "L0", "title": "old", "startedUtc": "2026-01-01T08:00:00Z", "endedUtc": null, "model": null, "parentSessionId": null, "archived": false, "resumable": true, "projectPath": null, "projectName": null }], "live": {} })));
         press(&mut app, ctrl('r'));

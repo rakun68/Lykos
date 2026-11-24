@@ -297,14 +297,25 @@ export function listNamedWorktrees(workspace: string): NamedWorktree[] {
 }
 
 /**
- * Removes a worktree as a session's is released: uncommitted work committed onto its branch first, the ignored files
- * it wrote archived beside it. The branch and its commits stay, and every session that ran there stays resumable.
+ * Removes a worktree Lykos made, as a session's is released: uncommitted work committed onto its branch first, the
+ * ignored files it wrote archived beside it. The branch and its commits stay, and every session that ran there stays
+ * resumable. Only a worktree under `<root>/<projectId>/` on a `lykos/` branch is removed: a detached one would lose
+ * the commit that saves its work, and one the person made is theirs. One whose session lock is held is in use.
  */
-export function removeNamedWorktree(workspace: string, path: string): ReleaseResult {
-  const tree = listNamedWorktrees(workspace).find((w) => samePath(w.path, path));
-  if (tree === undefined) throw new WorktreeError("git", `${path} is not a worktree of this repository`);
+export function removeNamedWorktree(input: { workspace: string; projectId: string; path: string; root?: string }): ReleaseResult {
+  const tree = listNamedWorktrees(input.workspace).find((w) => samePath(w.path, input.path));
+  if (tree === undefined) throw new WorktreeError("git", `${input.path} is not a worktree of this repository`);
   if (tree.main) throw new WorktreeError("git", "the project's own checkout is not removed from here");
-  return finish(tree.path, workspace, basename(tree.path), `${tree.path}.ignored`);
+  const projectDir = join(input.root ?? defaultWorktreesRoot(), input.projectId);
+  if (!samePath(dirname(tree.path), projectDir) || tree.branch === null || !tree.branch.startsWith(BRANCH_PREFIX)) {
+    throw new WorktreeError("git", `${tree.path} was not made by Lykos (a lykos/ branch under ${projectDir}); remove it with git`);
+  }
+  const lock = join(projectDir, `${basename(tree.path)}.lock`);
+  if (existsSync(lock)) {
+    const owner = Number(readFileSync(lock, "utf8").trim());
+    if (Number.isInteger(owner) && owner > 0 && alive(owner)) throw new WorktreeError("busy", `a session runs in ${tree.path} (pid ${owner}); stop it first`);
+  }
+  return finish(tree.path, input.workspace, basename(tree.path), `${tree.path}.ignored`);
 }
 
 /** Windows paths compare without case; git prints them with forward slashes. */

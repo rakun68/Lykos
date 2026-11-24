@@ -11,12 +11,13 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, rmSync, type WriteStream } from "node:fs";
+import { createWriteStream, existsSync, rmSync, statSync, type WriteStream } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { resolve as resolvePath } from "node:path";
 import { tuiKeybinds } from "../config/keybinds.js";
 import { loadConfig } from "../config/load.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
+import { isWithinRoot } from "../gate/approval.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { createNamedWorktree, listNamedWorktrees, removeNamedWorktree } from "../git/worktree.js";
@@ -55,6 +56,8 @@ interface LiveSession {
   child: ChildProcess;
   events: Event[];
   exited: Promise<void>;
+  /** The ledger the session writes, fixed when it starts: a later `session.cd` moves its cwd, never its ledger. */
+  ledgerPath: string;
   /** `session.aside` and `session.options` calls waiting on the child, by id. */
   asides: Map<string, (msg: Extract<FromChild, { kind: "aside" | "options" }>) => void>;
 }
@@ -76,6 +79,8 @@ export class EngineServer {
   private readonly sessions = new Map<string, LiveSession>();
   private readonly clients = new Set<Client>();
   private asideSeq = 0;
+  /** Ledger sessions a `session.start` is resuming, until its child is live: one ledger row runs in one child. */
+  private readonly resuming = new Set<string>();
   /** Every open connection, authenticated or not: stop() must close them all, or server.close() never returns. */
   private readonly sockets = new Set<Socket>();
   private server: Server | undefined;
@@ -247,7 +252,7 @@ export class EngineServer {
         const cwd = needCwd(params, method);
         const id = needString(params, "ledgerSessionId", method);
         if (typeof params.title !== "string") throw new Error("session.rename needs title");
-        renameHistorySession(cwd, id, params.title);
+        renameHistorySession(this.ledgerOf(cwd, id), id, params.title);
         for (const s of this.sessions.values()) {
           if (s.summary.ledgerSessionId !== id) continue;
           s.summary.title = params.title.trim();
@@ -258,19 +263,20 @@ export class EngineServer {
       case "session.archive": {
         const cwd = needCwd(params, method);
         const id = needString(params, "ledgerSessionId", method);
+        const ledgerPath = this.ledgerOf(cwd, id);
         // A live session ends first, as OpenCode's delete of an open session does; its row is then archived.
         for (const s of [...this.sessions.values()]) {
           if (s.summary.ledgerSessionId !== id) continue;
           this.toChild(s, { kind: "close" });
           await s.exited;
         }
-        archiveHistorySession(cwd, id);
+        archiveHistorySession(ledgerPath, id);
         return { ok: true };
       }
       case "session.export": {
         const cwd = needCwd(params, method);
         const id = needString(params, "ledgerSessionId", method);
-        return exportHistorySession(cwd, id, typeof params.file === "string" ? params.file : undefined);
+        return exportHistorySession(this.ledgerOf(cwd, id), cwd, id, typeof params.file === "string" ? params.file : undefined);
       }
       case "session.move": {
         // OpenCode `session.move`: the session continues in another directory, a worktree of the project or another.
@@ -279,15 +285,17 @@ export class EngineServer {
         const id = s.summary.ledgerSessionId;
         if (id === null) throw new Error("the session has not started");
         if (s.summary.status === "running" || s.summary.status === "waiting") throw new Error(`the session is ${s.summary.status}`);
-        const ledgerPath = ledgerFor(s.summary.cwd);
+        // The target is checked before the session closes: a typo or an untrusted directory leaves it running.
+        if (!statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${cwd} is not a directory`);
+        const trustSource = await this.trustOf(cwd, params.trust === true);
         this.toChild(s, { kind: "close" });
         await s.exited;
-        return this.start({ cwd, resume: id, model: s.summary.model, origin: s.summary.origin }, ledgerPath);
+        return this.start({ cwd, resume: id, model: s.summary.model, origin: s.summary.origin }, s.ledgerPath, trustSource);
       }
       case "worktree.list": {
         const cwd = needCwd(params, method);
-        const busy = new Set([...this.sessions.values()].map((s) => s.summary.cwd.toLowerCase()));
-        return listNamedWorktrees(projectRoot(cwd)).map((w) => ({ ...w, sessions: busy.has(w.path.toLowerCase()) }));
+        const cwds = [...this.sessions.values()].map((s) => s.summary.cwd);
+        return listNamedWorktrees(projectRoot(cwd)).map((w) => ({ ...w, sessions: cwds.some((c) => isWithinRoot(w.path, c)) }));
       }
       case "worktree.create": {
         const root = projectRoot(needCwd(params, method));
@@ -303,9 +311,14 @@ export class EngineServer {
         const root = projectRoot(needCwd(params, method));
         const path = resolvePath(needString(params, "path", method));
         for (const s of this.sessions.values()) {
-          if (s.summary.cwd.toLowerCase() === path.toLowerCase()) throw new Error("a session runs in that worktree; move or close it first");
+          if (isWithinRoot(path, s.summary.cwd)) throw new Error("a session runs in that worktree; move or close it first");
         }
-        return removeNamedWorktree(root, path);
+        return removeNamedWorktree({
+          workspace: root,
+          projectId: resolveProject(root).id,
+          path,
+          ...(this.opts.worktreesRoot !== undefined ? { root: this.opts.worktreesRoot } : {}),
+        });
       }
       case "subscribe":
         return this.subscribe(client, params);
@@ -314,17 +327,36 @@ export class EngineServer {
     }
   }
 
-  private async start(params: Record<string, unknown>, ledgerPathOverride?: string): Promise<SessionSummary> {
+  /** The ledger `id` is in: a live session's own, else the one a session in `cwd` writes. */
+  private ledgerOf(cwd: string, id: string): string {
+    for (const s of this.sessions.values()) if (s.summary.ledgerSessionId === id) return s.ledgerPath;
+    return ledgerFor(cwd);
+  }
+
+  private async trustOf(cwd: string, trust: boolean): Promise<ChildStartParams["trustSource"]> {
+    try {
+      return this.opts.trust ? await this.opts.trust(cwd, trust) : (await ensureWorkspaceTrust({ workspace: cwd, trustWorkspace: trust, interactive: false })).source;
+    } catch (err) {
+      if (err instanceof WorkspaceTrustError) throw new Error(`untrusted workspace: ${err.message}. Start it with trust: true to trust it for this session.`);
+      throw err;
+    }
+  }
+
+  private async start(params: Record<string, unknown>, ledgerPathOverride?: string, trusted?: ChildStartParams["trustSource"]): Promise<SessionSummary> {
     if (this.stopping) throw new Error("the server is stopping");
     if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("session.start needs cwd");
     const cwd = resolvePath(params.cwd);
+    const resume = typeof params.resume === "string" && params.resume !== "" && params.fork !== true ? params.resume : undefined;
+    if (resume !== undefined) {
+      const open = [...this.sessions.values()].find((s) => s.summary.ledgerSessionId === resume);
+      if (open !== undefined || this.resuming.has(resume)) throw new Error(`session ${resume} is already open${open !== undefined ? ` (${open.summary.id})` : ""}`);
+      this.resuming.add(resume);
+    }
     let trustSource: ChildStartParams["trustSource"];
     try {
-      trustSource = this.opts.trust
-        ? await this.opts.trust(cwd, params.trust === true)
-        : (await ensureWorkspaceTrust({ workspace: cwd, trustWorkspace: params.trust === true, interactive: false })).source;
+      trustSource = trusted ?? (await this.trustOf(cwd, params.trust === true));
     } catch (err) {
-      if (err instanceof WorkspaceTrustError) throw new Error(`untrusted workspace: ${err.message}. Start it with trust: true to trust it for this session.`);
+      if (resume !== undefined) this.resuming.delete(resume);
       throw err;
     }
     const id = randomUUID();
@@ -351,11 +383,13 @@ export class EngineServer {
       origin: typeof params.origin === "string" ? params.origin : "tui",
       ledgerSessionId: null,
     };
+    const ledgerPath = ledgerPathOverride ?? ledgerFor(cwd);
     const live: LiveSession = {
       summary,
       child,
       events: [],
       exited: new Promise((resolve) => child.once("exit", () => resolve())),
+      ledgerPath,
       asides: new Map(),
     };
     this.sessions.set(id, live);
@@ -365,6 +399,7 @@ export class EngineServer {
       if (live.summary.status !== "closed") this.setStatus(live, "closed");
       for (const settle of live.asides.values()) settle({ kind: "aside", id: "", error: "the session ended" });
       live.asides.clear();
+      if (resume !== undefined) this.resuming.delete(resume);
       this.sessions.delete(id);
       this.checkIdle();
     });
@@ -373,7 +408,7 @@ export class EngineServer {
     const start: ChildStartParams = {
       cwd,
       trustSource,
-      ledgerPath: ledgerPathOverride ?? ledgerFor(cwd),
+      ledgerPath,
       ...(typeof params.resume === "string" && params.resume !== "" ? { resume: params.resume } : {}),
       ...(params.fork === true ? { fork: true } : {}),
       ...(typeof params.model === "string" ? { model: params.model } : {}),
@@ -389,6 +424,8 @@ export class EngineServer {
   private async ask(s: LiveSession, msg: (id: string) => ToChild): Promise<Extract<FromChild, { kind: "aside" | "options" }>> {
     const id = `a${++this.asideSeq}`;
     const reply = await new Promise<Extract<FromChild, { kind: "aside" | "options" }>>((resolve) => {
+      // A child already gone never answers, and its exit has already settled the calls it had.
+      if (!s.child.connected) return resolve({ kind: "aside", id, error: "the session ended" });
       s.asides.set(id, resolve);
       this.toChild(s, msg(id));
     });
@@ -412,7 +449,10 @@ export class EngineServer {
         this.emit(s, msg.data);
         return;
       case "status":
-        if (msg.ledgerSessionId !== undefined) s.summary.ledgerSessionId = msg.ledgerSessionId;
+        if (msg.ledgerSessionId !== undefined) {
+          s.summary.ledgerSessionId = msg.ledgerSessionId;
+          this.resuming.delete(msg.ledgerSessionId);
+        }
         if (msg.model !== undefined) s.summary.model = msg.model;
         this.setStatus(s, msg.status);
         return;

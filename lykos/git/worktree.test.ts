@@ -287,7 +287,7 @@ describe("worktrees a person names, for lykos-tui (P5 #42)", () => {
     assert.ok(listed.some((w) => w.branch === "lykos/feature" && !w.main), JSON.stringify(listed));
 
     writeFileSync(join(made.path, "a.txt"), "changed\n");
-    const removed = removeNamedWorktree(workspace, made.path);
+    const removed = removeNamedWorktree({ workspace, projectId: "proj", path: made.path, root });
     assert.equal(removed.removed, true, removed.note);
     assert.equal(removed.savedUncommitted, true);
     assert.equal(existsSync(made.path), false);
@@ -298,6 +298,24 @@ describe("worktrees a person names, for lykos-tui (P5 #42)", () => {
   it("refuses a name that cannot be a branch, and never removes the main checkout", () => {
     const workspace = repo();
     assert.throws(() => createNamedWorktree({ workspace, projectId: "proj", name: "../x", root: tmp() }), WorktreeError);
-    assert.throws(() => removeNamedWorktree(workspace, workspace), /own checkout/);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: workspace, root: tmp() }), /own checkout/);
+  });
+
+  it("refuses a detached worktree, one the person made, and one whose session is running", () => {
+    const workspace = repo();
+    const root = tmp();
+    const detached = join(root, "proj", "det");
+    git(workspace, "worktree", "add", "--detach", detached);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: detached, root }), /not made by Lykos/);
+    const theirs = join(tmp(), "theirs");
+    git(workspace, "worktree", "add", "-b", "theirs", theirs);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: theirs, root }), /not made by Lykos/);
+    assert.equal(existsSync(detached) && existsSync(theirs), true);
+    const made = createNamedWorktree({ workspace, projectId: "proj", name: "busy", root });
+    writeFileSync(join(root, "proj", "busy.lock"), `${process.pid}
+`);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: made.path, root }), /a session runs/);
+    rmSync(join(root, "proj", "busy.lock"));
+    assert.equal(removeNamedWorktree({ workspace, projectId: "proj", path: made.path, root }).removed, true);
   });
 });

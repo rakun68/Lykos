@@ -78,27 +78,26 @@ export function historyRows(cwd: string, opts: { all?: boolean; archived?: boole
     }));
 }
 
-function withProjectLedger<T>(cwd: string, fn: Parameters<typeof withLedgerSync<T>>[1]): T {
-  const path = ledgerFor(cwd);
+function withProjectLedger<T>(path: string, fn: Parameters<typeof withLedgerSync<T>>[1]): T {
   if (!existsSync(path)) throw new Error(`no ledger at ${path}: nothing has been recorded in this project yet`);
   return withLedgerSync(path, fn);
 }
 
 /** OpenCode `session.rename`: the ledger's brief, what `lykos session` lists as the name. */
-export function renameHistorySession(cwd: string, id: string, title: string): void {
+export function renameHistorySession(ledgerPath: string, id: string, title: string): void {
   const name = title.trim();
   if (name === "") throw new Error("a session's name cannot be empty");
-  if (!withProjectLedger(cwd, (l) => l.renameSession(id, name))) throw new Error(`no session ${id}`);
+  if (!withProjectLedger(ledgerPath, (l) => l.renameSession(id, name))) throw new Error(`no session ${id}`);
 }
 
 /** OpenCode `session.delete`, as an archive: the row and transcript stay; the TUI's list leaves it out. */
-export function archiveHistorySession(cwd: string, id: string): void {
-  if (!withProjectLedger(cwd, (l) => l.archiveSession(id))) throw new Error(`no session ${id}`);
+export function archiveHistorySession(ledgerPath: string, id: string): void {
+  if (!withProjectLedger(ledgerPath, (l) => l.archiveSession(id))) throw new Error(`no session ${id}`);
 }
 
-/** OpenCode `session.export`: P22's Markdown, as `lykos export` writes it. Written to `file` when one is named. */
-export function exportHistorySession(cwd: string, id: string, file?: string): { markdown: string; path?: string } {
-  const markdown = sessionMarkdown(ledgerFor(cwd), id);
+/** OpenCode `session.export`: P22's Markdown, as `lykos export` writes it. Written to `file`, under `cwd`, when one is named. */
+export function exportHistorySession(ledgerPath: string, cwd: string, id: string, file?: string): { markdown: string; path?: string } {
+  const markdown = sessionMarkdown(ledgerPath, id);
   if (file === undefined || file === "") return { markdown };
   const path = resolve(cwd, file);
   writeFileSync(path, markdown, "utf8");

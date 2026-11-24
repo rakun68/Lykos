@@ -363,6 +363,44 @@ describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
     }
   });
 
+  it("moves a session keeping its ledger, checks the target before closing it, and never resumes one ledger session twice", async () => {
+    const { server, key } = setup();
+    await server.listen();
+    const cwd = project();
+    const elsewhere = mkdtempSync(join(tmpdir(), "lykos-engine-elsewhere-"));
+    try {
+      const c = await connectEngine(server.address, key);
+      // Every event from the subscribe on, so none is missed between a reply and a wait.
+      const seen: Event[] = [];
+      c.onEvent((e) => seen.push(e));
+      await c.request("subscribe");
+      const ledgerOf = async (id: string): Promise<string> => {
+        for (let i = 0; i < 300; i += 1) {
+          const said = seen.find((e) => e.session === id && e.data.type === "system");
+          if (said !== undefined) return (said.data as { text: string }).text.replace(/^ledger /, "");
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        throw new Error(`no ledger said by ${id}`);
+      };
+      const first = await c.request<SessionSummary>("session.start", { cwd, resume: "s1" });
+      const ledger = await ledgerOf(first.id);
+      assert.equal(ledger, join(cwd, ".lykos", "ledger.db"));
+      await assert.rejects(c.request("session.start", { cwd, resume: "s1" }), /already open/, "one ledger session runs in one child");
+      await assert.rejects(c.request("session.move", { session: first.id, cwd: join(cwd, "nope") }), /not a directory/);
+      assert.equal((await c.request<SessionSummary[]>("sessions.list", {})).find((s) => s.id === first.id)?.status, "idle", "a bad target leaves it running");
+      // cd outside the project, then move again: the ledger stays the project's.
+      const moved = await c.request<SessionSummary>("session.move", { session: first.id, cwd: elsewhere });
+      assert.equal(await ledgerOf(moved.id), ledger);
+      const back = await c.request<SessionSummary>("session.move", { session: moved.id, cwd });
+      assert.equal(await ledgerOf(back.id), ledger);
+      c.close();
+    } finally {
+      await server.stop("test");
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it("creates, lists and removes a worktree; its work stays on its branch", async () => {
     const dir = mkdtempSync(join(tmpdir(), "lykos-engine-wt-"));
     const address = engineAddress(dir);

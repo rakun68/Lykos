@@ -53,7 +53,7 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `server.shutdown` | | `{stopping: true}`; every connection is closed, every session child told to close |
 | `server.disconnect` | | `{closed}`: closes every connection except this one (tests drive reconnection with it) |
 | `sessions.list` | | `SessionSummary[]` |
-| `session.start` | `{cwd, model?, mode?, autoApprove?, trust?, origin?, resume?, fork?}` | `SessionSummary`. An untrusted workspace is refused unless `trust: true`. `resume` (a ledger session id) continues it as `lykos resume` does, `fork` as `lykos resume --fork`; a preflight that needs agreement asks it as a `question` request |
+| `session.start` | `{cwd, model?, mode?, autoApprove?, trust?, origin?, resume?, fork?}` | `SessionSummary`. An untrusted workspace is refused unless `trust: true`. `resume` (a ledger session id) continues it as `lykos resume` does, `fork` as `lykos resume --fork`; a preflight that needs agreement asks it as a `question` request. A resume of a ledger session already open, or being opened, is refused |
 | `session.prompt` | `{session, text}` | `{ok: true}` |
 | `session.interrupt` | `{session}` | `{ok: true}` |
 | `session.answer` | `{session, requestId, answer}` | `{ok: true}`: answers an approval or a question |
@@ -65,10 +65,10 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `session.rename` | `{cwd, ledgerSessionId, title}` | `{ok: true}`: the ledger's brief, and a live session's `title` |
 | `session.archive` | `{cwd, ledgerSessionId}` | `{ok: true}`: OpenCode's delete, as an archive. A live session is closed first. `sessions.archived_utc` is set; the row and transcript stay, `lykos session --all` lists it, and a resume clears it |
 | `session.export` | `{cwd, ledgerSessionId, file?}` | `{markdown, path?}`: `lykos export`'s Markdown, written to `file` (relative to `cwd`) when one is named |
-| `session.move` | `{session, cwd}` | `SessionSummary` of the session continued in `cwd`: the live one is closed and resumed there, same ledger session. Refused while a turn runs or a request is open |
+| `session.move` | `{session, cwd}` | `SessionSummary` of the session continued in `cwd`: the live one is closed and resumed there, same ledger session, writing the ledger it started with. Refused while a turn runs or a request is open, and, before the session closes, when `cwd` is not a directory or not trusted |
 | `worktree.list` | `{cwd}` | `[{path, branch, head, main, sessions}]`: the repository's worktrees, the main checkout first; `sessions` when a live session runs in it |
 | `worktree.create` | `{cwd, name}` | `{path, branch, head, main}`: a worktree at `~/.lykos/worktrees/<project id>/<name>` on the branch `lykos/<name>` |
-| `worktree.remove` | `{cwd, path}` | `{removed, savedUncommitted, saved?, note?}`: uncommitted work is committed onto the branch and ignored files the sessions wrote are archived beside it, then the worktree is removed. The branch stays. Refused for the main checkout and while a session runs there |
+| `worktree.remove` | `{cwd, path}` | `{removed, savedUncommitted, saved?, note?}`: uncommitted work is committed onto the branch and ignored files the sessions wrote are archived beside it, then the worktree is removed. The branch stays. Only a worktree Lykos made is removed: under `~/.lykos/worktrees/<project id>/` on a `lykos/` branch. Refused for the main checkout, a detached or other worktree, and while a session runs there or in a directory under it, here or in another process (its lock is held) |
 | `subscribe` | `{sessions?, after?: {<id>: seq}}` | `{sessions: SessionSummary[]}`, then the replay |
 
 ### 2.3 Events
