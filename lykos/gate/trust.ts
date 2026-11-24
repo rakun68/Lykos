@@ -6,8 +6,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { resolveProject } from "../session/identity.js";
+import { dirname, join, resolve } from "node:path";
+import { listProjects, resolveProject } from "../session/identity.js";
 
 export type TrustSource = "stored" | "flag" | "prompt";
 
@@ -76,6 +76,22 @@ export interface EnsureTrustOptions {
 export interface TrustDecision {
   projectId: string;
   source: TrustSource;
+}
+
+/**
+ * Whether a project registered at exactly this path is in the trust store, read without git (P5 #52). A path
+ * proves no identity, so this only spares `lykos` a question: a session start still checks the identity.
+ */
+export function trustedAtPath(workspace: string, opts?: { trustPath?: string; registryPath?: string }): boolean {
+  try {
+    const key = (p: string): string => (process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p));
+    const trust = readTrust(opts?.trustPath ?? defaultTrustPath());
+    return listProjects(opts?.registryPath !== undefined ? { registryPath: opts.registryPath } : {}).some(
+      (p) => key(p.root_path) === key(workspace) && Boolean(trust.projects[p.id]),
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Check whether a workspace is trusted without prompting. */

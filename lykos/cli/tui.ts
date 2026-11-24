@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
+import { ensureWorkspaceTrust, trustedAtPath, WorkspaceTrustError } from "../gate/trust.js";
 import { stderrWrite } from "../tui/io-mode.js";
 
 /** The package's root: two levels above `lykos/cli/` and `dist/cli/` alike. */
@@ -53,17 +53,22 @@ export async function runTui(cwd: string): Promise<number> {
     return 1;
   }
   // The trust question is asked here, on the terminal, as the old TUI asks it: the TUI has no trust dialog.
-  let trustOnce: boolean;
-  try {
-    // Trust not read from the store holds for this run: the flag, or a yes in a workspace with no git identity,
-    // which `resolveProject` cannot find again in the server's process.
-    trustOnce = (await ensureWorkspaceTrust({ workspace: cwd, interactive: Boolean(process.stdin.isTTY) })).source !== "stored";
-  } catch (err) {
-    stderrWrite(`lykos: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}\n`);
-    return 1;
-  } finally {
-    // The prompt left stdin reading: the TUI owns the terminal now.
-    process.stdin.pause();
+  let trustOnce = false;
+  // A trusted project at this path starts at once: resolving its identity costs two git processes, and the
+  // server checks it anyway when the first session starts.
+  if (!trustedAtPath(cwd)) {
+    try {
+      // Trust not read from the store holds for this run: the flag, or a yes in a workspace with no git identity,
+      // which `resolveProject` cannot find again in the server's process.
+      trustOnce = (await ensureWorkspaceTrust({ workspace: cwd, interactive: Boolean(process.stdin.isTTY) })).source !== "stored";
+    } catch (err) {
+      stderrWrite(`lykos: refused — ${err instanceof WorkspaceTrustError ? err.message : String(err)}
+`);
+      return 1;
+    } finally {
+      // The prompt left stdin reading: the TUI owns the terminal now.
+      process.stdin.pause();
+    }
   }
   const launch = tuiLaunch(binary, cwd, trustOnce);
   return new Promise((resolve) => {

@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { trustedAtPath } from "../gate/trust.js";
 import { findTui, tuiLaunch, vendoredTui } from "./tui.js";
 
 interface InstallResult {
@@ -59,6 +60,18 @@ describe("P5 #52: lykos opens lykos-tui", () => {
     writeFileSync(join(root, "target", "release", "lykos-tui"), "");
     assert.equal(findTui({}, root, "linux"), join(root, "target", "release", "lykos-tui"), "a source build wins over the fetched one");
     assert.equal(findTui({ LYKOS_TUI_BIN: "/x/tui" }, root, "linux"), "/x/tui");
+  });
+
+  it("knows a trusted project by its registered path without git, and nothing else", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lykos-tui-trust-"));
+    const registryPath = join(dir, "projects.json");
+    const trustPath = join(dir, "trust.json");
+    const row = (id: string, root_path: string) => ({ id, root_path, git_remote: null, first_commit: null, name: "p", created_utc: "2026-01-01T00:00:00Z", last_seen_utc: "2026-01-01T00:00:00Z" });
+    writeFileSync(registryPath, JSON.stringify({ version: 1, projects: [row("a", join(dir, "trusted")), row("b", join(dir, "other"))] }));
+    writeFileSync(trustPath, JSON.stringify({ version: 1, projects: { a: { trustedUtc: "2026-01-01T00:00:00Z" } } }));
+    assert.equal(trustedAtPath(join(dir, "trusted"), { registryPath, trustPath }), true);
+    assert.equal(trustedAtPath(join(dir, "other"), { registryPath, trustPath }), false, "registered, not trusted");
+    assert.equal(trustedAtPath(join(dir, "elsewhere"), { registryPath, trustPath }), false, "not registered");
   });
 
   it("starts the TUI in the cwd, with this Node as its server command unless one is set", () => {
