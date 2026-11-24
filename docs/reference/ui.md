@@ -196,7 +196,7 @@ deletes), `/stash pop`.
 | `Alt+D`, `Ctrl+Delete`; `Ctrl+W`, `Ctrl+Backspace`, `Alt+Backspace` | Delete a word forward; back |
 | `Ctrl+K`, `Ctrl+U`, `Ctrl+Shift+D` | Delete to the line end, to the line start, the line |
 | `Ctrl+X` (with a selection), `Ctrl+V` | Cut, paste what was cut or copied |
-| `Ctrl+Z`, `Ctrl+-`; `Ctrl+Y`, `Ctrl+.`, `Ctrl+Shift+Z` | Undo; redo (200 steps, at most 16 MiB) |
+| `Ctrl+Z` (Windows), `Ctrl+-`; `Ctrl+Y`, `Ctrl+.`, `Ctrl+Shift+Z` | Undo; redo (200 steps, at most 16 MiB) |
 | Click, drag, double click | Place the cursor, select, select a word |
 | `PageUp`, `PageDown`, `Ctrl+Alt+B`, `Ctrl+Alt+F`, mouse wheel | Scroll the transcript a page |
 | `Ctrl+Alt+Y`, `Ctrl+Alt+E`; `Ctrl+Alt+U`, `Ctrl+Alt+D` | Scroll a line; half a page |
@@ -234,7 +234,7 @@ group and the layer that set it.
 Where the keybinds differ from OpenCode on purpose:
 
 - Lykos's defaults are this table's: `app.exit` has no `<leader>q` (that is the queue), and the
-  input actions keep the readline keys of section 2.1 (`Ctrl+A` line start, `Ctrl+Z` undo).
+  input actions keep the readline keys of section 2.1 (`Ctrl+A` line start, `Ctrl+Z` undo on Windows, where it does not suspend).
 - A value is a string or a list of strings; OpenCode's key stroke objects are not read.
 - The palette has no category headers and no suggested section, and leaves out the palette itself.
 - OpenCode's help dialog only points at the palette; Lykos's lists every key.

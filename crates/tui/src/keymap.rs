@@ -204,7 +204,8 @@ pub const DEFS: &[Def] = &[
     def("input.delete.to.line.start", "ctrl+u", "Delete to start of line in input", "Input"),
     def("input.backspace", "backspace,shift+backspace", "Backspace in input", "Input"),
     def("input.delete", "ctrl+d,delete,shift+delete", "Delete character in input", "Input"),
-    def("input.undo", "ctrl+-,ctrl+_,super+z,ctrl+z", "Undo in input", "Input"),
+    // The old TUI's ctrl+z undoes where it does not suspend (P5 #48): on Windows.
+    def("input.undo", if cfg!(windows) { "ctrl+-,ctrl+_,super+z,ctrl+z" } else { "ctrl+-,ctrl+_,super+z" }, "Undo in input", "Input"),
     def("input.redo", "ctrl+.,super+shift+z,ctrl+y,ctrl+shift+z", "Redo in input", "Input"),
     def("input.word.forward", "alt+f,alt+right,ctrl+right", "Move word forward in input", "Input"),
     def("input.word.backward", "alt+b,alt+left,ctrl+left", "Move word backward in input", "Input"),

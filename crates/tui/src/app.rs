@@ -2506,8 +2506,9 @@ mod tests {
         press(&mut app, ctrl('a'));
         press(&mut app, ctrl('k'));
         assert_eq!(app.editor.text(), "a\n", "ctrl+a is the line's start, ctrl+k deletes to its end");
-        press(&mut app, ctrl('z'));
-        assert_eq!(app.editor.text(), "a\n漢", "the old TUI's ctrl+z undoes");
+        // The old TUI's ctrl+z undoes on Windows; elsewhere it suspends, as OpenCode's does.
+        press(&mut app, if cfg!(windows) { ctrl('z') } else { ctrl('-') });
+        assert_eq!(app.editor.text(), "a\n漢", "undo");
         press(&mut app, ctrl('y'));
         assert_eq!(app.editor.text(), "a\n");
         typed(&mut app, "one two");
