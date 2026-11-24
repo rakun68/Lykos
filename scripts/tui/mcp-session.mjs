@@ -81,6 +81,14 @@ try {
     await call("send_keys", { sessionId: id, keys: "Escape" });
     await call("send_keys", { sessionId: id, keys: "Backspace" });
   });
+  await step("/connect before any session lists every provider from the engine server", async () => {
+    await call("send_text", { sessionId: id, text: "/connect" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Add a custom provider");
+    await waitText("API key · ");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
   await step("a typed prompt is sent with Enter and answered", async () => {
     await call("send_text", { sessionId: id, text: "hello through the mcp" });
     await waitText("hello through the mcp");
@@ -110,6 +118,27 @@ try {
     await call("wait_for_idle", { sessionId: id, timeout: 3000 });
     const s = await screen();
     if (!s.includes("hello through the mcp")) throw new Error("the transcript is gone");
+  });
+  await step("a setting in the palette changes in place and the palette stays", async () => {
+    await call("send_keys", { sessionId: id, keys: "Ctrl+P" });
+    await call("send_text", { sessionId: id, text: "verbosity" });
+    await waitText("Verbosity: ");
+    const before = (await screen()).match(/Verbosity: (\w+)/)[1];
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    const after = (await screen()).match(/Verbosity: (\w+)/)?.[1];
+    if (!after || after === before) throw new Error(`verbosity ${before} -> ${after}`);
+    await call("send_keys", { sessionId: id, keys: "Left" });
+    await waitText(`Verbosity: ${before}`);
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
+  await step("skills are one palette row that opens their own list", async () => {
+    await call("send_keys", { sessionId: id, keys: "Ctrl+P" });
+    await call("send_text", { sessionId: id, text: "skills" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Search skills");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
   });
   await step("/help lists the keys", async () => {
     await call("send_text", { sessionId: id, text: "/help" });

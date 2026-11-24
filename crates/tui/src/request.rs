@@ -46,7 +46,8 @@ fn kind(r: &RequestData) -> &str {
 impl App {
     /// The request the session waits on, if any.
     pub fn request(&self) -> Option<&RequestData> {
-        self.current()?.requests.first()
+        // A question the TUI asked for itself comes first: it is what was just chosen.
+        self.asking.as_ref().map(|a| &a.request).or_else(|| self.current()?.requests.first())
     }
 
     /// The prompt state for the request shown, reset when another one comes.
@@ -65,6 +66,9 @@ impl App {
             self.editor.reset();
         }
         self.req = Ui::default();
+        if self.asking.as_ref().is_some_and(|a| a.request.request_id == r.request_id) {
+            return self.form_answer(answer);
+        }
         let Some(session) = self.session.clone() else { return Vec::new() };
         vec![Action::Answer { session, request_id: r.request_id.clone(), answer }]
     }

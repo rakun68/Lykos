@@ -50,6 +50,10 @@ impl Verbosity {
             Verbosity::High => Verbosity::Low,
         }
     }
+
+    pub fn prev(self) -> Verbosity {
+        self.next().next()
+    }
 }
 
 /// What the transcript toggles set.

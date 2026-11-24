@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import { aclIsOwnerOnly, engineAddress, readOrCreateKey } from "./address.js";
 import { connectEngine, type EngineConnection } from "./client.js";
 import { EngineServer } from "./server.js";
-import { PROTOCOL_VERSION, type Event, type KeybindsResult, type SessionOptions, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type Event, type KeybindsResult, type ProvidersResult, type SessionOptions, type SessionSummary } from "./protocol.js";
 import { WorkspaceTrustError } from "../gate/trust.js";
 import { Ledger } from "../ledger/ledger.js";
 
@@ -224,6 +224,38 @@ describe("engine server", () => {
       await assert.rejects(a.request("config.keybinds", { cwd: work }), /tui\.keybinds\.app\.exit must be/);
       a.close();
     } finally {
+      await server.stop("test");
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("lists every provider, adds a custom one and stores a key, with no session open", async () => {
+    const { server, key, dir } = setup();
+    const work = mkdtempSync(join(tmpdir(), "lykos-providers-"));
+    const before = process.env.LYKOS_CREDENTIALS_DB;
+    process.env.LYKOS_CREDENTIALS_DB = join(dir, "credentials.db");
+    await server.listen();
+    try {
+      const a = await connectEngine(server.address, key);
+      const list = async () => (await a.request<ProvidersResult>("providers.list", { cwd: work })).providers;
+      const first = await list();
+      assert.ok(first.length > 30, `${first.length} providers`);
+      assert.equal(first.find((p) => p.name === "anthropic")?.login, "oauth");
+      assert.equal(first.find((p) => p.name === "groq")?.login, "api_key");
+
+      const added = await a.request<{ path: string }>("provider.add", { cwd: work, scope: "project", id: "local", api: "openai-completions", baseUrl: "http://localhost:11434/v1", models: "qwen3:8b" });
+      assert.equal(added.path, join(work, ".lykos", "config.yaml"));
+      await assert.rejects(a.request("provider.add", { cwd: work, scope: "project", id: "groq", api: "openai-completions", baseUrl: "http://x", models: "m" }), /already exists/);
+
+      const stored = await a.request<{ message: string }>("credential.add", { provider: "local", key: "sk-SERVER-SECRET" });
+      assert.match(stored.message, /logged in to local as key#1/);
+      assert.ok(!stored.message.includes("sk-SERVER-SECRET"));
+      const local = (await list()).find((p) => p.name === "local");
+      assert.deepEqual([local?.configured, local?.reason], [true, "1 credential in the pool"]);
+      a.close();
+    } finally {
+      if (before === undefined) delete process.env.LYKOS_CREDENTIALS_DB;
+      else process.env.LYKOS_CREDENTIALS_DB = before;
       await server.stop("test");
       rmSync(work, { recursive: true, force: true });
     }

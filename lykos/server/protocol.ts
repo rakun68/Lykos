@@ -8,6 +8,7 @@ import type { KeybindSetting } from "../config/keybinds.js";
 import type { CacheGaugeEntry } from "../surface/cache-gauge.js";
 import type { Alert, OutcomeView, TokenCounters } from "../surface/types.js";
 import type { ContextBreakdown } from "../session/context-breakdown.js";
+import type { ProviderEntry } from "../config/provider-catalog.js";
 export type { ModelOption, ProviderOption, SessionOptions, SpecialistOption } from "../session/session-options.js";
 
 /** Bumped on any change a client of the previous version would misread. A client of another version is refused. */
@@ -42,6 +43,8 @@ export interface Welcome {
   protocol: number;
   server: string;
   pid: number;
+  /** The server's code changed on disk since it started: it serves an older build until every client has gone. */
+  stale?: boolean;
 }
 
 export interface Refused {
@@ -77,6 +80,12 @@ export type Method =
   | "session.aside"
   /** `lykos-tui`'s key bindings for a workspace, each with the layer that set it (P5 #39). */
   | "config.keybinds"
+  /** Every provider `/connect` offers, `{ cwd }`: a `ProvidersResult`. Needs no session. */
+  | "providers.list"
+  /** A custom provider into a config file, `{ cwd, scope: "global" | "project", id, api, baseUrl, models }`: `{ path }`. */
+  | "provider.add"
+  /** An API key into a provider's credential pool, `{ provider, key }`: `{ message }`. The key is never sent back. */
+  | "credential.add"
   | "session.options"
   /** P5 #42: the ledger's sessions for the session list, and which are live here. */
   | "sessions.history"
@@ -225,6 +234,10 @@ export interface CommandInfo {
 }
 
 /** What `config.keybinds` answers: only what a config layer sets; the client holds the defaults. */
+export interface ProvidersResult {
+  providers: ProviderEntry[];
+}
+
 export interface KeybindsResult {
   keybinds: Record<string, KeybindSetting>;
   /** #58 item 9: `tui.colors`, each role from the last layer that sets it. */

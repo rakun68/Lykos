@@ -6,6 +6,7 @@ mod composer;
 mod diff;
 mod diffview;
 mod editor;
+mod form;
 mod history;
 mod keymap;
 mod menu;
@@ -46,6 +47,8 @@ enum Msg {
     Input(TermEvent),
     Server(Update),
     Connected,
+    /// The engine server runs an older build than the one on disk.
+    Stale,
     ConnectFailed(String),
     Started(String),
     /// A request failed; for a prompt, its text, to put back.
@@ -346,6 +349,10 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             Vec::new()
         }
         Msg::Server(Update::Reconnected) | Msg::Connected => app.connected(),
+        Msg::Stale => {
+            app.stale_server();
+            Vec::new()
+        }
         Msg::ConnectFailed(m) => {
             app.link = Link::Failed(format!("cannot reach the engine server: {m}"));
             Vec::new()
@@ -528,6 +535,9 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
         }
     });
     let _ = tx.send(Msg::Connected);
+    if client.welcome.stale {
+        let _ = tx.send(Msg::Stale);
+    }
     let keybinds = client.request("config.keybinds", json!({ "cwd": args.cwd })).map_err(|e| e.to_string());
     let _ = tx.send(Msg::Keybinds(keybinds));
     for action in actions {

@@ -15,11 +15,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, rmSync, statSync, type WriteStream } from "node:fs";
+import { homedir } from "node:os";
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tuiColors, tuiKeybinds } from "../config/keybinds.js";
 import { sessionDefaults } from "../session/session-options.js";
-import { loadConfig } from "../config/load.js";
+import { globalConfigPath, loadConfig, projectConfigPath } from "../config/load.js";
+import { providerCatalog } from "../config/provider-catalog.js";
+import { baseUrlProblem, CUSTOM_PROVIDER_APIS, modelIds, providerIdProblem, writeProviderToConfig } from "../config/provider-add.js";
+import { BUILTIN_PROVIDERS, PI_NATIVE_PROVIDERS } from "../config/provider-table.js";
+import { defaultCredentialDbPath } from "../credentials/db.js";
+import { addToPool } from "../credentials/login-flow.js";
+import { poolSummary, summaryPoolSizes } from "../credentials/presence.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
 import { isWithinRoot } from "../gate/approval.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
@@ -31,7 +39,7 @@ import { archiveHistorySession, exportHistorySession, historyRows, ledgerFor, pr
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
 import type { DelegatedWatch } from "./watch.js";
-import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type EventData, type SessionOptions, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type ProvidersResult, type EventData, type SessionOptions, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
 import { LineReader, send, serverHandshake } from "./wire.js";
 
 export interface EngineServerOptions {
@@ -79,6 +87,16 @@ interface Client {
 const CHILD_EXIT_GRACE_MS = 10_000;
 /** How long a server waits for its first client: the client that started it allows 20 s for it to listen. */
 const FIRST_CLIENT_MS = 30_000;
+
+/** When this module's file was last written: a rebuild changes it under a server that keeps running the old one. */
+function builtAt(): number {
+  try {
+    return statSync(fileURLToPath(import.meta.url)).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+const STARTED_BUILD = builtAt();
 
 export class EngineServer {
   readonly address: EngineAddress;
@@ -139,7 +157,7 @@ export class EngineServer {
   private async accept(socket: Socket): Promise<void> {
     socket.on("error", () => {});
     const reader = new LineReader(socket);
-    const hs = await serverHandshake(socket, reader, this.key, `lykos ${process.pid}`);
+    const hs = await serverHandshake(socket, reader, this.key, `lykos ${process.pid}`, builtAt() !== STARTED_BUILD);
     if (!hs.ok) {
       this.log(`refused a client: ${hs.reason}`);
       socket.end();
@@ -175,6 +193,11 @@ export class EngineServer {
       response = { id, error: { message: err instanceof Error ? err.message : String(err) } };
     }
     send(client.socket, response);
+  }
+
+  /** `loadConfig`'s `globalDir`, when this server was given one. */
+  private globalOpt(): { globalDir?: string } {
+    return this.opts.globalDir !== undefined ? { globalDir: this.opts.globalDir } : {};
   }
 
   private session(params: Record<string, unknown>): LiveSession {
@@ -217,10 +240,38 @@ export class EngineServer {
         this.toChild(this.session(params), { kind: "answer", requestId: params.requestId, answer: params.answer });
         return { ok: true };
       }
+      case "providers.list": {
+        if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("providers.list needs cwd");
+        const { resolved } = loadConfig({ cwd: resolvePath(params.cwd), ...this.globalOpt() });
+        const poolSizes = summaryPoolSizes(poolSummary(defaultCredentialDbPath()));
+        return { providers: providerCatalog({ providers: resolved.providers, env: process.env, poolSizes }) } satisfies ProvidersResult;
+      }
+      case "provider.add": {
+        const { cwd, scope, id, api, baseUrl, models } = params;
+        if (typeof cwd !== "string" || cwd === "" || (scope !== "global" && scope !== "project")) throw new Error("provider.add needs cwd and scope");
+        if (typeof id !== "string" || typeof api !== "string" || typeof baseUrl !== "string" || typeof models !== "string") throw new Error("provider.add needs id, api, baseUrl and models");
+        const root = resolvePath(cwd);
+        const { resolved } = loadConfig({ cwd: root, ...this.globalOpt() });
+        const taken = [...Object.keys(BUILTIN_PROVIDERS), ...PI_NATIVE_PROVIDERS, ...Object.keys(resolved.providers)];
+        const problem =
+          providerIdProblem(id, taken) ??
+          (CUSTOM_PROVIDER_APIS.some((a) => a.value === api) ? undefined : `"${api}" is not one of the API kinds offered`) ??
+          baseUrlProblem(baseUrl) ??
+          (modelIds(models).length === 0 ? "a provider needs at least one model id" : undefined);
+        if (problem !== undefined) throw new Error(problem);
+        const path = scope === "global" ? globalConfigPath(this.opts.globalDir ?? join(homedir(), ".lykos")) : projectConfigPath(root);
+        writeProviderToConfig(path, { id, api, baseUrl, models: modelIds(models) });
+        return { path };
+      }
+      case "credential.add": {
+        const { provider, key } = params;
+        if (typeof provider !== "string" || provider === "" || typeof key !== "string" || key.trim() === "") throw new Error("credential.add needs provider and key");
+        return { message: addToPool(defaultCredentialDbPath(), provider, { type: "api_key", key: key.trim() }) };
+      }
       case "config.keybinds": {
         if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("config.keybinds needs cwd");
         const cwd = resolvePath(params.cwd);
-        const { layers } = loadConfig({ cwd, ...(this.opts.globalDir !== undefined ? { globalDir: this.opts.globalDir } : {}) });
+        const { layers } = loadConfig({ cwd, ...this.globalOpt() });
         // A config the default specialist cannot load leaves the defaults out; the session reports its own.
         let defaults;
         try {

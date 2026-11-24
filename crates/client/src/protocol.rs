@@ -151,6 +151,22 @@ pub struct SpecialistOption {
     pub description: String,
 }
 
+/// `providers.list`'s rows: every provider `/connect` offers, with or without a session.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderEntry {
+    pub name: String,
+    /// "oauth" (a browser sign-in) or "api_key".
+    pub login: String,
+    /// It has a credential, its environment variable or a declared source already.
+    pub configured: bool,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProvidersResult {
+    pub providers: Vec<ProviderEntry>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub name: String,
@@ -385,4 +401,7 @@ pub struct Welcome {
     pub protocol: u32,
     pub server: String,
     pub pid: u32,
+    /// The server's code changed on disk since it started: it still runs the older build.
+    #[serde(default)]
+    pub stale: bool,
 }

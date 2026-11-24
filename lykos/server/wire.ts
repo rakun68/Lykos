@@ -104,7 +104,7 @@ const HANDSHAKE_MS = 5000;
 export type ServerHandshake = { ok: true; client: string } | { ok: false; reason: string };
 
 /** The server's half: the client says hello, the server proves the key first, the client proves it back. */
-export async function serverHandshake(socket: Socket, reader: LineReader, key: Buffer, serverName: string): Promise<ServerHandshake> {
+export async function serverHandshake(socket: Socket, reader: LineReader, key: Buffer, serverName: string, stale = false): Promise<ServerHandshake> {
   const hello = await reader.next(HANDSHAKE_MS);
   if (!isObject(hello) || hello.type !== "hello" || typeof hello.nonce !== "string") return { ok: false, reason: "no hello" };
   if (hello.protocol !== PROTOCOL_VERSION) {
@@ -127,7 +127,7 @@ export async function serverHandshake(socket: Socket, reader: LineReader, key: B
     send(socket, refused);
     return { ok: false, reason: refused.message };
   }
-  const welcome: Welcome = { type: "welcome", protocol: PROTOCOL_VERSION, server: serverName, pid: process.pid };
+  const welcome: Welcome = { type: "welcome", protocol: PROTOCOL_VERSION, server: serverName, pid: process.pid, ...(stale ? { stale } : {}) };
   send(socket, welcome);
   return { ok: true, client: typeof hello.client === "string" ? hello.client : "unknown" };
 }

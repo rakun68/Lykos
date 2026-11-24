@@ -525,14 +525,18 @@ struct Line {
     heading: bool,
     /// Pieces in their own colours, drawn in place of `left` and `right`.
     runs: Vec<(String, Style)>,
+    /// A setting's value, drawn right after `left` in its own colour.
+    value: Option<(String, Style)>,
+    /// The second row of an item: selected with the row before it.
+    with_prev: bool,
 }
 
 fn line(text: impl Into<String>, style: Style) -> Line {
-    Line { left: text.into(), right: String::new(), style, right_style: style, heading: false, runs: Vec::new() }
+    Line { left: text.into(), right: String::new(), style, right_style: style, heading: false, runs: Vec::new(), value: None, with_prev: false }
 }
 
 fn pair(left: impl Into<String>, right: impl Into<String>, style: Style, right_style: Style) -> Line {
-    Line { left: left.into(), right: right.into(), style, right_style, heading: false, runs: Vec::new() }
+    Line { left: left.into(), right: right.into(), style, right_style, heading: false, runs: Vec::new(), value: None, with_prev: false }
 }
 
 fn runs(runs: Vec<(String, Style)>) -> Line {
@@ -558,9 +562,9 @@ fn dialog(app: &App, buf: &mut Buffer) {
     let Some(d) = &app.dialog else { return };
     let (w, h) = (buf.width, buf.height);
     theme::dim(buf);
-    let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. } | Dialog::Help { .. } | Dialog::Output { .. }) { 100 } else { 72 });
+    let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. } | Dialog::Help { .. } | Dialog::Output { .. } | Dialog::Skills { .. }) { 100 } else { 72 });
     let inner = dw.saturating_sub(4) as usize;
-    let searching = matches!(d, Dialog::Palette { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. });
+    let searching = matches!(d, Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. });
     let search_h: u16 = if searching && h >= 14 { 3 } else { 0 };
     let room = h.saturating_sub(6 + search_h) as usize;
     let k = |id: &str| app.keymap.first(id);
@@ -587,21 +591,49 @@ fn dialog(app: &App, buf: &mut Buffer) {
             let mut at = None;
             let mut group = "";
             for (i, r) in rows.iter().enumerate() {
-                // Grouped while nothing is searched; a search ranks across the groups.
+                // Grouped while nothing is searched, a blank row between groups; a search ranks across them.
                 if query.is_empty() && r.group != group {
+                    if !lines.is_empty() {
+                        lines.push(Line { heading: true, ..line("", theme::text()) });
+                    }
                     lines.push(heading(r.group));
                     group = r.group;
                 }
                 if i == *selected {
                     at = Some(lines.len());
                 }
-                lines.push(pair(&r.title, keys_with_layer(r.keys.clone(), &r.source), theme::text(), keyed));
+                let mut l = pair(&r.title, keys_with_layer(r.keys.clone(), &r.source), theme::text(), keyed);
+                if let Some(v) = &r.value {
+                    l.left.push_str(": ");
+                    l.value = Some((v.clone(), Style::fg(c().accent).bold()));
+                }
+                lines.push(l);
             }
             if lines.is_empty() {
                 lines.push(line("No matching commands", theme::muted()));
             }
             search = Some(("Search commands", query.clone()));
-            ("Commands".into(), lines, at, format!("{} run · {close}", k("dialog.select.submit")))
+            let on_setting = rows.get(*selected).is_some_and(|r| r.value.is_some());
+            let run = if on_setting { "change · ←→ value" } else { "run" };
+            ("Commands".into(), lines, at, format!("{} {run} · {close}", k("dialog.select.submit")))
+        }
+        Dialog::Skills { query, selected } => {
+            // Two rows a skill: its name, then as much of its description as one row holds, cut with an ellipsis.
+            let mut lines = Vec::new();
+            let mut at = None;
+            for (i, s) in app.skills(query).iter().enumerate() {
+                if i == *selected {
+                    at = Some(lines.len());
+                }
+                lines.push(line(s.name.clone(), theme::text().bold()));
+                let text = s.description.split_whitespace().collect::<Vec<_>>().join(" ");
+                lines.push(Line { with_prev: true, ..line(ellipsis(&text, inner.saturating_sub(4)), theme::muted()) });
+            }
+            if lines.is_empty() {
+                lines.push(line(if query.is_empty() { "No skills: open a session first" } else { "No matching skills" }, theme::muted()));
+            }
+            search = Some(("Search skills", query.clone()));
+            ("Skills".into(), lines, at, format!("{} use · {close}", k("dialog.select.submit")))
         }
         Dialog::Help { scroll } => {
             let mut rows = vec![
@@ -635,7 +667,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
                 List::Efforts => ("Select thinking effort", "This model has no effort levels, or no session is open", String::new()),
                 List::Agents => ("Select specialist", "No specialists: open a session first", String::new()),
                 List::Themes { .. } => ("Themes", "", String::new()),
-                List::Providers => ("Connect a provider", "No providers: open a session first", String::new()),
+                List::Providers => ("Connect a provider", "Loading providers…", String::new()),
             };
             if lines.is_empty() {
                 lines.push(line(empty, theme::muted()));
@@ -820,9 +852,15 @@ fn dialog(app: &App, buf: &mut Buffer) {
     let width = (inner as u16).saturating_sub(u16::from(bar));
     for (i, l) in lines.iter().enumerate().skip(skip).take(body as usize) {
         let ly = top + (i - skip) as u16;
-        let (style, right_style) = if selected == Some(i) {
+        let on = selected == Some(i) || (l.with_prev && i > 0 && selected == Some(i - 1));
+        // A group's heading on a band of its own, so groups stand apart.
+        let band = l.heading && !l.left.is_empty();
+        let (style, right_style) = if on {
             buf.fill(x + 1, ly, dw.saturating_sub(2 + u16::from(bar)), 1, Style::default().on(c().accent));
             (Style::fg(c().surface).on(c().accent), Style::fg(c().surface).on(c().accent))
+        } else if band {
+            buf.fill(x + 1, ly, dw.saturating_sub(2 + u16::from(bar)), 1, Style::default().on(c().overlay));
+            (l.style.on(c().overlay), l.right_style.on(c().overlay))
         } else {
             (l.style.on(c().surface), l.right_style.on(c().surface))
         };
@@ -835,7 +873,11 @@ fn dialog(app: &App, buf: &mut Buffer) {
         }
         let rw = (l.right.width() as u16).min(width);
         let lw = if rw == 0 { width } else { width.saturating_sub(rw + 2) };
-        buf.text(x + 2, ly, lw, &l.left, style);
+        let end = buf.text(x + 2, ly, lw, &l.left, style);
+        if let Some((v, vs)) = &l.value {
+            let vs = if on { style.bold() } else { vs.on(c().surface) };
+            buf.text(end, ly, (x + 2 + lw).saturating_sub(end), v, vs);
+        }
         if rw > 0 {
             buf.text(x + 2 + width - rw, ly, rw, &l.right, right_style);
         }
@@ -869,7 +911,9 @@ fn select_lines(rows: &[ListRow], selected: usize) -> (Vec<Line>, Option<usize>)
         }
         let mark = if r.current { "● " } else { "  " };
         let right = if r.favorite { format!("{} *", r.detail) } else { r.detail.clone() };
-        lines.push(pair(format!("{mark}{}", r.title), right, theme::text(), theme::muted()));
+        // The row in use (a configured provider, the model chosen) in the accent colour, to tell it apart.
+        let title = if r.current { Style::fg(c().accent) } else { theme::text() };
+        lines.push(pair(format!("{mark}{}", r.title), right, title, theme::muted()));
     }
     (lines, at)
 }
@@ -1512,4 +1556,23 @@ mod tests {
         assert_eq!(group(0), "0");
         assert_eq!(group(1234567), "1,234,567");
     }
+}
+
+/// The text cut to `max` columns, with an ellipsis where it was cut.
+fn ellipsis(text: &str, max: usize) -> String {
+    if text.width() <= max {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let mut w = 1;
+    for ch in text.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > max {
+            break;
+        }
+        w += cw;
+        out.push(ch);
+    }
+    out.push('…');
+    out
 }

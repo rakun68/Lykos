@@ -231,9 +231,15 @@ runs: `Ctrl+C` copies a selection, else clears the prompt, else asks for a secon
 
 `Ctrl+P` opens the palette over the dimmed screen: a search box, then every action of the App, Session, Agent,
 System, Prompt and Input groups and every slash command in a Commands group, each under its group's heading, with its
-keys in their own colour and, where it is not a default, the layer that set it. A scroll bar shows where the view is
-in a longer list. Typing filters it by title, group and id (the title weighted twice) across the groups; `Enter` runs
-the selected row. `/help` lists every key of every group and the layer that set it.
+keys in their own colour and, where it is not a default, the layer that set it. Each heading sits on a band of the
+overlay colour, with a blank row before it. A scroll bar shows where the view is in a longer list. Typing filters it
+by title, group and id (the title weighted twice) across the groups; `Enter` runs the selected row. A setting
+(verbosity, thinking, tool call grouping, scrollbar, animations, diff wrapping, sidebar, terminal pane, terminal title)
+is drawn `Name: value`, the value in the accent colour; `Enter` and `Right` change it to the next value, `Left` to the
+previous, and the palette stays open. Skills are one `Skills` row with their count: it opens a list of its own, two
+rows a skill (its name, then its description cut to one row with `…`), searched by name and description; `Enter`
+puts the skill in the prompt. A palette search finds commands, not skills. `/help` lists every key of every group and
+the layer that set it.
 
 **Colours (#58).** `tui.colors` in any config layer sets a role over every theme; the last layer to name a role wins,
 and a value that is not `#rrggbb` or `#rgb` is named in a notice:
@@ -267,14 +273,19 @@ tools, memory files, skills, messages) with its tokens and items, and free space
 characters a token; messages are the measured total less the head when the provider has reported one. `/status`
 shows the head estimate as the context bar until a request measures it, never `unknown`.
 
-**Login.** `/connect` on a provider with OAuth sends `/login <name>`; any other asks for its API key in a request
-dialog whose answer is drawn as `•` and is never echoed in the conversation or the event log.
+**Login.** `/connect` lists every provider Lykos supports, from the engine server's `providers.list`, with or
+without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser` (OAuth) or
+`API key` and why; a provider already configured (a credential in its pool, its environment variable, or a declared
+source) is drawn in the accent colour. A provider with OAuth sends `/login <name>`, starting a session when none is
+open; any other has its API key asked for by the TUI, in the request dialog, drawn as `•`, and stored by the server's
+`credential.add` without a session. An engine server older than its build on disk (it outlives TUI windows) says so in
+a notice: close every lykos window to restart it.
 
-**Custom providers.** The `/connect` list opens on `Add a custom provider…`, which sends `/provider add`. The
-session asks, one dialog each: the provider's name, its API (`openai-completions`, `openai-responses`,
+**Custom providers.** The `/connect` list opens on `Add a custom provider…`. The TUI asks, one dialog each, with or
+without a session, and the server's `provider.add` writes it: the provider's name, its API (`openai-completions`, `openai-responses`,
 `anthropic-messages`, `google-generative-ai`), its base URL, its model ids, and whether to save it to the global or
 the project `config.yaml`. It appends the declaration to that file's `providers:` block, leaving the rest of the file
-as it was, then asks for the key as `/login <name> --api-key` does. A new session uses it, as `<name>/<model>`. A
+as it was, then asks for the key. A new session uses it, as `<name>/<model>`. A
 name in use, a URL that is not http or https, or no model id stops it with the reason, and nothing is written.
 `/provider add` on the line surface asks the same questions as lines.
 
@@ -290,7 +301,7 @@ Where the keybinds differ from OpenCode on purpose:
 - Lykos's defaults are this table's: `app.exit` has no `<leader>q` (that is the queue), and the
   input actions keep the readline keys of section 2.1 (`Ctrl+A` line start, `Ctrl+Z` undo on Windows, where it does not suspend).
 - A value is a string or a list of strings; OpenCode's key stroke objects are not read.
-- The palette has no category headers and no suggested section, and leaves out the palette itself.
+- The palette has no suggested section, and leaves out the palette itself.
 - OpenCode's help dialog only points at the palette; Lykos's lists every key.
 - The keys inside the images list (`Left`, `Right`), the aside dialog (`j`, `k`, `q`), the history
   search and the answer digits are fixed.
@@ -308,7 +319,7 @@ command, so it takes effect on the next request.
 | `Ctrl+T` | `/effort` | Next thinking effort, wrapping; `/effort` lists them. Sends `/effort level` |
 | `Ctrl+X A`, `Shift+Tab` | `/agents`, `/specialist` | The primary specialists; `Shift+Tab` the next. Sends `/specialist name` |
 | | `/themes` | The themes, previewed under the cursor; `Esc` puts back the one open before |
-| | `/connect`, `/login` | The providers and whether Lykos reaches each; a browser sign-in sends `/login name`, an API key points to `lykos login name --api-key` |
+| | `/connect`, `/login` | The providers and whether Lykos reaches each; a browser sign-in sends `/login name`, an API key is asked for in the TUI |
 | `Ctrl+X S` | `/status` | Engine server, session, model, effort, specialist, theme, MCP servers |
 | | `/mcps` | MCP servers |
 | | `/debug` | Version, OS, terminal, session id, model; `c` copies |

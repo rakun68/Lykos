@@ -120,15 +120,20 @@ function enabledCount(dbPath: string, provider: string): number {
 }
 
 /** Upsert into the Lykos db and report the one success line. */
-function storeCredential(surface: LoginSurface, provider: string, credential: Credential): void {
-  const db = openCredentialDb(surface.dbPath, { create: true })!;
+/** Adds `credential` to `provider`'s pool, or updates the row it matches; the line that says which. */
+export function addToPool(dbPath: string, provider: string, credential: Credential): string {
+  const db = openCredentialDb(dbPath, { create: true })!;
   try {
     const { row, inserted } = upsertCredential(db, provider, credential);
     const n = listEnabled(db, provider).length;
-    surface.out(`${inserted ? "logged in to" : "updated"} ${provider} as ${row.label} (${n} credential(s) in pool)`);
+    return `${inserted ? "logged in to" : "updated"} ${provider} as ${row.label} (${n} credential(s) in pool)`;
   } finally {
     db.close();
   }
+}
+
+function storeCredential(surface: LoginSurface, provider: string, credential: Credential): void {
+  surface.out(addToPool(surface.dbPath, provider, credential));
 }
 
 /** An in-memory store for Pi's login flow: whatever Pi persists lands here and nowhere else. */

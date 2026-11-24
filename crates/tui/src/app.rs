@@ -73,6 +73,12 @@ pub enum Then {
     Quiet,
     /// `session.job.logs`, for the output view of this job (P5 #48).
     JobLog(String),
+    /// `providers.list`, for `/connect`.
+    Providers,
+    /// `provider.add`: the provider's name, whose key is asked next.
+    ProviderAdded(String),
+    /// `credential.add`.
+    KeyStored,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -127,6 +133,8 @@ pub enum Dialog {
     Context { data: Option<lykos_client::ContextBreakdown>, scroll: usize },
     /// OpenCode `command.palette.show`: every action, searched as typed.
     Palette { query: String, selected: usize },
+    /// The session's skills, two rows each so a description can be read; searched as typed.
+    Skills { query: String, selected: usize },
     /// Every key, and the layer that set it.
     Help { scroll: usize },
     /// OpenCode's select dialogs for models, variants, agents, themes and providers.
@@ -327,6 +335,12 @@ pub struct App {
     reporting: Option<(String, Instant)>,
     /// From the start until the engine server's settings arrive: the loading screen shows instead of the TUI.
     pub loading: bool,
+    /// A question the TUI asks for itself (`form.rs`), shown in the request dialog before a session's.
+    pub asking: Option<crate::form::Asking>,
+    /// How many it has asked: the next one's id.
+    pub asked: u64,
+    /// `providers.list`'s answer: every provider `/connect` offers, with or without a session.
+    pub providers: Option<Vec<lykos_client::ProviderEntry>>,
     /// The session tabs as last drawn: each one's columns on the top row, and its session.
     pub tab_hits: RefCell<Vec<(u16, u16, String)>>,
 }
@@ -342,9 +356,14 @@ pub struct PaletteRow {
     /// The config layer that set its keys.
     pub source: String,
     pub slash: Option<menu::Entry>,
+    /// A setting's value, shown after its name in its own colour: Enter and the arrows change it in place.
+    pub value: Option<String>,
     /// What a search matches beyond the title.
     search: String,
 }
+
+/// The palette's one row for every skill: it opens their own list.
+pub const SKILLS_ROW: &str = "palette.skills";
 
 /// The slash commands' group in the palette, and the groups' order.
 pub const SLASH_GROUP: &str = "Commands";
@@ -441,6 +460,9 @@ impl App {
             exit_armed: None,
             reporting: None,
             loading: false,
+            asking: None,
+            asked: 0,
+            providers: None,
             tab_hits: RefCell::new(Vec::new()),
         }
     }
@@ -927,19 +949,29 @@ impl App {
     }
 
     /// A live session to send a command to, and a refresh of the lists for it.
-    fn live(&self) -> Option<String> {
+    pub(crate) fn live(&self) -> Option<String> {
         self.session.clone().filter(|_| self.link == Link::Ready && matches!(self.status(), Some(s) if s != SessionStatus::Starting && s != SessionStatus::Closed))
     }
 
     /// Opens a list on the row in use, and asks the session for fresh lists.
     fn open_list(&mut self, list: List) -> Vec<Action> {
-        let selected = self.list_rows(&list, "").iter().position(|r| r.current).unwrap_or(0);
+        // The provider list opens on its first row, "Add a custom provider…"; its marks are the configured ones.
+        let providers = matches!(list, List::Providers);
+        let selected = if providers { 0 } else { self.list_rows(&list, "").iter().position(|r| r.current).unwrap_or(0) };
         let refresh = !matches!(list, List::Themes { .. });
         self.dialog = Some(Dialog::List { list, query: String::new(), selected });
+        if providers {
+            return vec![self.providers_call()];
+        }
         match self.live() {
             Some(session) if refresh => vec![Action::Options { session }],
             _ => Vec::new(),
         }
+    }
+
+    /// The engine server runs an older build than the one on disk: what it serves misses what was built since.
+    pub fn stale_server(&mut self) {
+        self.notice = Some("The engine server runs an older build: close every lykos window to restart it".into());
     }
 
     /// A session command a list runs, sent as if typed: it takes effect on the next request.
@@ -1010,13 +1042,16 @@ impl App {
                 .map(|o| o.specialists.iter().map(|s| row(s.name.clone(), s.name.clone(), s.description.clone(), "", s.name == o.specialist, false)).collect())
                 .unwrap_or_default(),
             List::Themes { initial } => theme::PALETTES.iter().map(|p| row(p.name.into(), p.name.into(), if p.light() { "light".into() } else { "dark".into() }, "", p.name == *initial, false)).collect(),
-            List::Providers => o
-                .map(|o| {
-                    // `/provider add` asks for an endpoint of one's own, then its key.
-                    let custom = row(CUSTOM_PROVIDER.into(), "Add a custom provider…".into(), "your own endpoint".into(), "", false, false);
-                    std::iter::once(custom).chain(o.providers.iter().map(|p| row(p.name.clone(), p.name.clone(), format!("{} · {}", p.reach, p.reason), "", false, false))).collect()
-                })
-                .unwrap_or_default(),
+            List::Providers => {
+                // "Add a custom provider…" asks for an endpoint of one's own, then its key. The rest come from the
+                // server, so the list is whole before any session opens; a configured provider is marked.
+                let custom = row(CUSTOM_PROVIDER.into(), "Add a custom provider…".into(), "your own endpoint".into(), "", false, false);
+                let rest = self.providers.iter().flatten().map(|p| {
+                    let how = if p.login == "oauth" { "browser" } else { "API key" };
+                    row(p.name.clone(), p.name.clone(), format!("{how} · {}", p.reason), "", p.configured, false)
+                });
+                std::iter::once(custom).chain(rest).collect()
+            }
         };
         if query.is_empty() || matches!(list, List::Models) {
             return rows;
@@ -1209,6 +1244,10 @@ impl App {
                 if matches!(then, Then::Started { .. }) {
                     self.starting = false;
                 }
+                if matches!(then, Then::ProviderAdded(_) | Then::KeyStored) {
+                    self.toast(ToastKind::Error, e);
+                    return Vec::new();
+                }
                 self.notice = Some(e);
                 // The list already left out what was archived: a failure shows it again.
                 if let Then::Refresh { all } = then {
@@ -1233,6 +1272,12 @@ impl App {
                 return self.started(v["id"].as_str().unwrap_or_default().to_string());
             }
             Then::Notice(text) => self.toast(ToastKind::Info, text.into()),
+            Then::Providers => match serde_json::from_value::<lykos_client::ProvidersResult>(v) {
+                Ok(p) => self.providers = Some(p.providers),
+                Err(e) => self.notice = Some(format!("the provider list: {e}")),
+            },
+            Then::ProviderAdded(id) => self.on_provider_added(&id, v["path"].as_str().unwrap_or_default()),
+            Then::KeyStored => return self.on_key_stored(v["message"].as_str().unwrap_or_default()),
             Then::Refresh { all } => return vec![self.history_call(all, Then::History)],
             Then::Exported => self.toast(ToastKind::Success, format!("Exported to {}", v["path"].as_str().unwrap_or_default())),
             Then::Worktrees => match serde_json::from_value(v) {
@@ -1605,14 +1650,25 @@ impl App {
 
     /// `/login` signs in to an OAuth provider, or asks for an API key in a request whose answer is masked.
     fn connect(&mut self, name: &str) -> Vec<Action> {
-        if name == CUSTOM_PROVIDER {
-            self.dialog = None;
-            return self.command("/provider add".into());
-        }
-        let oauth = self.options.as_ref().and_then(|o| o.providers.iter().find(|p| p.name == name)).is_some_and(|p| p.auth.contains("oauth"));
-        // An API key is asked for in a request the prompt box masks.
         self.dialog = None;
-        self.command(if oauth { format!("/login {name}") } else { format!("/login {name} --api-key") })
+        if name == CUSTOM_PROVIDER {
+            self.ask_custom();
+            return Vec::new();
+        }
+        let oauth = self.providers.iter().flatten().find(|p| p.name == name).is_some_and(|p| p.login == "oauth");
+        if !oauth {
+            // Asked here, masked, and stored by the server: no session needed.
+            self.ask_key(name);
+            return Vec::new();
+        }
+        // A browser sign-in runs in a session, which shows its link; with none open, one starts for it.
+        let text = format!("/login {name}");
+        if self.live().is_some() {
+            return self.command(text);
+        }
+        self.reporting = Some(("/login".into(), Instant::now()));
+        self.queue.push(text);
+        self.flush()
     }
 
     /// `local.tsx` `model.cycle` and `cycleFavorite`: the next model of the list after the one in use, wrapping.
@@ -1737,6 +1793,7 @@ impl App {
             let line: String = text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|c| !c.is_control()).collect();
             match dialog {
                 Dialog::Palette { query, selected }
+                | Dialog::Skills { query, selected }
                 | Dialog::List { query, selected, .. }
                 | Dialog::Timeline { query, selected }
                 | Dialog::Sessions { query, selected, confirm: None, .. } => {
@@ -2130,6 +2187,9 @@ impl App {
         if let Dialog::Palette { query, selected } = dialog {
             return self.palette_key(key, &ids, query, selected, now, page);
         }
+        if let Dialog::Skills { query, selected } = dialog {
+            return self.skills_key(key, &ids, query, selected, page);
+        }
         match dialog {
             Dialog::List { list, query, selected } => return self.list_key(key, &ids, list, query, selected, page),
             Dialog::Sessions { query, selected, all, confirm } => return self.sessions_key(key, &ids, query, selected, all, confirm, page),
@@ -2145,7 +2205,7 @@ impl App {
         let step = |sel: usize, n: usize, up: bool| if n == 0 { 0 } else if up { (sel + n - 1) % n } else { (sel + 1) % n };
         let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
-            Dialog::Palette { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
+            Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
             Dialog::Output { .. } => {
                 if has("dialog.select.submit") {
                     self.dialog = None;
@@ -2280,25 +2340,38 @@ impl App {
     /// `PALETTE_GROUPS` order; a search ranks them all.
     pub fn palette(&self, query: &str) -> Vec<PaletteRow> {
         // `command-palette.tsx` leaves the palette's own action out.
-        let actions = keymap::DEFS.iter().filter(|d| keymap::in_palette(d.group) && d.id != "command.palette.show").map(|d| PaletteRow {
-            id: d.id,
-            title: self.title(d),
-            group: d.group,
-            keys: self.keymap.keys(d.id),
-            source: self.keymap.source(d.id).to_string(),
-            slash: None,
-            search: format!("{} {}", d.group, d.id),
+        let actions = keymap::DEFS.iter().filter(|d| keymap::in_palette(d.group) && d.id != "command.palette.show").map(|d| {
+            let (title, value) = match self.setting(d.id) {
+                Some((name, value)) => (name.to_string(), Some(value)),
+                None => (self.title(d), None),
+            };
+            PaletteRow { id: d.id, title, group: d.group, keys: self.keymap.keys(d.id), source: self.keymap.source(d.id).to_string(), slash: None, value, search: format!("{} {}", d.group, d.id) }
         });
-        let commands = menu::all_commands(self.current().map_or(&[][..], |s| &s.commands)).into_iter().map(|e| PaletteRow {
+        // Skills are one row: they have a list and a search of their own.
+        let session = self.current().map_or(&[][..], |s| &s.commands);
+        let not_skills: Vec<lykos_client::CommandInfo> = session.iter().filter(|c| c.source != "skill").cloned().collect();
+        let skills = session.len() - not_skills.len();
+        let skills_row = PaletteRow {
+            id: SKILLS_ROW,
+            title: "Skills".into(),
+            group: SLASH_GROUP,
+            keys: if skills > 0 { skills.to_string() } else { String::new() },
+            source: "default".into(),
+            slash: None,
+            value: None,
+            search: "skills".into(),
+        };
+        let commands = menu::all_commands(&not_skills).into_iter().map(|e| PaletteRow {
             id: "",
             title: first_line(&e.detail).to_string(),
             group: SLASH_GROUP,
             keys: e.label.clone(),
             source: "default".into(),
             search: e.label.clone(),
+            value: None,
             slash: Some(e),
         });
-        let rows = actions.chain(commands);
+        let rows = actions.chain(std::iter::once(skills_row)).chain(commands);
         if query.is_empty() {
             let mut all: Vec<PaletteRow> = rows.collect();
             all.sort_by_key(|r| PALETTE_GROUPS.iter().position(|g| *g == r.group));
@@ -2321,9 +2394,28 @@ impl App {
         if has("dialog.close") {
             self.dialog = None;
             return Vec::new();
-        } else if has("dialog.select.submit") {
+        } else if has("dialog.select.submit") || matches!(key.code, KeyCode::Left | KeyCode::Right) {
             let Some(row) = self.palette(&query).into_iter().nth(selected) else { return Vec::new() };
+            // A setting changes in place and the palette stays: Enter and right go to the next value, left back.
+            if row.value.is_some() {
+                if key.code == KeyCode::Left && row.id == "session.verbosity.cycle" {
+                    self.prefs.verbosity = self.prefs.verbosity.prev();
+                    self.prefs.save();
+                } else {
+                    self.run(row.id, now, page);
+                }
+                self.dialog = Some(Dialog::Palette { query, selected });
+                return Vec::new();
+            }
+            if !has("dialog.select.submit") {
+                self.dialog = Some(Dialog::Palette { query, selected });
+                return Vec::new();
+            }
             self.dialog = None;
+            if row.id == SKILLS_ROW {
+                self.dialog = Some(Dialog::Skills { query: String::new(), selected: 0 });
+                return Vec::new();
+            }
             if let Some(e) = row.slash {
                 return self.run_command(e);
             }
@@ -2355,6 +2447,78 @@ impl App {
             }
         }
         self.dialog = Some(Dialog::Palette { query, selected });
+        Vec::new()
+    }
+
+    /// A setting the palette shows as `Name: value`, and its value now.
+    pub fn setting(&self, id: &str) -> Option<(&'static str, String)> {
+        let p = &self.prefs;
+        let on = |b: bool| if b { "on" } else { "off" }.to_string();
+        let shown = |b: bool| if b { "shown" } else { "hidden" }.to_string();
+        Some(match id {
+            "session.verbosity.cycle" => ("Verbosity", p.verbosity.name().to_string()),
+            "session.toggle.thinking" => ("Thinking", if p.show_thinking { "expanded" } else { "collapsed" }.to_string()),
+            "session.toggle.exploration_grouping" => ("Tool calls", if p.grouping { "grouped" } else { "one by one" }.to_string()),
+            "session.toggle.scrollbar" => ("Scrollbar", shown(p.scrollbar)),
+            "app.toggle.animations" => ("Animations", on(p.animations)),
+            "app.toggle.diffwrap" => ("Diff wrapping", on(p.diff_wrap)),
+            "session.sidebar.toggle" => ("Sidebar", shown(crate::sidebar::place(self, self.side.width.get()).is_some())),
+            "terminal.toggle" => ("Terminal pane", shown(self.terminal_shown())),
+            "terminal.title.toggle" => ("Terminal title", on(p.terminal_title)),
+            _ => return None,
+        })
+    }
+
+    /// The session's skills for a query, by name then description.
+    pub fn skills(&self, query: &str) -> Vec<lykos_client::CommandInfo> {
+        let all = self.current().map_or(&[][..], |s| &s.commands).iter().filter(|c| c.source == "skill").cloned();
+        if query.is_empty() {
+            return all.collect();
+        }
+        let mut scored: Vec<(u32, lykos_client::CommandInfo)> = all
+            .filter_map(|c| {
+                let s = [menu::score(query, c.name.trim_start_matches('/')).map(|s| s * 2), menu::score(query, &c.description)];
+                s.iter().any(Option::is_some).then(|| (s.iter().flatten().sum(), c))
+            })
+            .collect();
+        scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+        scored.into_iter().map(|(_, c)| c).collect()
+    }
+
+    fn skills_key(&mut self, key: &KeyEvent, ids: &[&str], mut query: String, mut selected: usize, page: usize) -> Vec<Action> {
+        let has = |id: &str| ids.contains(&id);
+        let rows = self.skills(&query);
+        let n = rows.len();
+        if has("dialog.close") {
+            self.dialog = None;
+            return Vec::new();
+        } else if has("dialog.select.submit") {
+            let Some(c) = rows.into_iter().nth(selected) else { return Vec::new() };
+            self.dialog = None;
+            // A skill takes what follows it, so it goes to the prompt to be finished there.
+            return self.run_command(menu::Entry { label: c.name.clone(), detail: c.description, pick: Pick::Command(c.name), bare: false });
+        } else if has("dialog.select.home") {
+            selected = 0;
+        } else if has("dialog.select.end") {
+            selected = n.saturating_sub(1);
+        } else if has("dialog.select.prev") {
+            selected = if n == 0 { 0 } else { (selected + n - 1) % n };
+        } else if has("dialog.select.next") {
+            selected = if n == 0 { 0 } else { (selected + 1) % n };
+        } else if has("dialog.select.page_up") {
+            selected = selected.saturating_sub(page / 2);
+        } else if has("dialog.select.page_down") {
+            selected = (selected + page / 2).min(n.saturating_sub(1));
+        } else if key.code == KeyCode::Backspace {
+            query.pop();
+            selected = 0;
+        } else if let KeyCode::Char(c) = key.code {
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+                query.push(c);
+                selected = 0;
+            }
+        }
+        self.dialog = Some(Dialog::Skills { query, selected });
         Vec::new()
     }
 
@@ -3253,13 +3417,74 @@ mod tests {
         typed(&mut app, "/effort low");
         app.menu = None;
         assert_eq!(sent(&press(&mut app, key(KeyCode::Enter))), ["/effort low"]);
-        // A provider with a browser sign-in signs in from here; an API key is asked for here too, masked.
+        // A provider with a browser sign-in signs in from the session; an API key is asked for by the TUI, masked.
+        let entry = |name: &str, login: &str, configured: bool| lykos_client::ProviderEntry { name: name.into(), login: login.into(), configured, reason: String::new() };
+        app.providers = Some(vec![entry("anthropic", "oauth", true), entry("openai", "api_key", false)]);
         assert_eq!(sent(&app.connect("anthropic")), ["/login anthropic"]);
-        assert_eq!(sent(&app.connect("openai")), ["/login openai --api-key"]);
-        // The list opens on "Add a custom provider…", which asks for one in the session's dialogs.
-        let first = app.list_rows(&List::Providers, "").into_iter().next().map(|r| r.value);
-        assert_eq!(first.as_deref(), Some(CUSTOM_PROVIDER));
-        assert_eq!(sent(&app.connect(CUSTOM_PROVIDER)), ["/provider add"]);
+        assert!(app.connect("openai").is_empty());
+        assert!(matches!(&app.asking, Some(crate::form::Asking { form: crate::form::Form::Key { provider }, .. }) if provider == "openai"));
+        assert!(app.request().is_some_and(|r| r.secret), "the key is masked");
+        // The list opens on "Add a custom provider…"; a configured provider is marked current.
+        let rows = app.list_rows(&List::Providers, "");
+        assert_eq!(rows[0].value, CUSTOM_PROVIDER);
+        assert!(rows.iter().any(|r| r.value == "anthropic" && r.current));
+        assert!(rows.iter().any(|r| r.value == "openai" && !r.current));
+        assert!(app.connect(CUSTOM_PROVIDER).is_empty());
+        assert!(matches!(&app.asking, Some(crate::form::Asking { form: crate::form::Form::Custom { .. }, .. })));
+    }
+
+    #[test]
+    fn connect_asks_for_a_key_and_a_custom_provider_with_no_session_open() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        assert!(app.live().is_none());
+        app.ask_key("openai");
+        assert_eq!(app.request().map(|r| r.title.as_str()), Some("openai API key"));
+        let out = app.form_answer("sk-test".into());
+        assert!(matches!(&out[..], [Action::Call { method: "credential.add", .. }]));
+        assert!(app.request().is_none());
+        app.ask_custom();
+        for answer in ["local", "openai-completions", "http://localhost:11434/v1"] {
+            assert!(app.form_answer(answer.into()).is_empty(), "the next question");
+        }
+        assert_eq!(app.request().map(|r| r.title.as_str()), Some("Models"));
+        assert!(app.form_answer("a, b".into()).is_empty());
+        let out = app.form_answer("global".into());
+        assert!(matches!(&out[..], [Action::Call { method: "provider.add", params, .. }] if params["id"] == "local" && params["models"] == "a, b"));
+        app.ask_key("x");
+        assert!(app.form_answer("  ".into()).is_empty() && app.request().is_none(), "empty gives up");
+    }
+
+    #[test]
+    fn the_palette_changes_a_setting_in_place_and_keeps_skills_in_their_own_list() {
+        let mut app = idle();
+        let commands = vec![CommandInfo { name: "/skill:tdd".into(), description: "tests first".into(), source: "skill".into() }];
+        app.on_event(&Event { event: "commands".into(), session: "s1".into(), seq: 2, data: EventData::Commands { commands } });
+        let rows = app.palette("");
+        let at = rows.iter().position(|r| r.id == "session.verbosity.cycle").unwrap();
+        assert_eq!(rows[at].value.as_deref(), Some(app.prefs.verbosity.name()));
+        let before = app.prefs.verbosity;
+        app.dialog = Some(Dialog::Palette { query: String::new(), selected: at });
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.prefs.verbosity, before.next());
+        assert!(matches!(app.dialog, Some(Dialog::Palette { selected, .. }) if selected == at), "the palette stays");
+        press(&mut app, key(KeyCode::Left));
+        assert_eq!(app.prefs.verbosity, before);
+        press(&mut app, key(KeyCode::Right));
+        assert_eq!(app.prefs.verbosity, before.next());
+        app.prefs.verbosity = before;
+        // Skills are one row, and a search finds commands only.
+        assert!(app.palette("tdd").iter().all(|r| r.slash.as_ref().is_none_or(|e| e.label != "/skill:tdd")));
+        let at = app.palette("").iter().position(|r| r.id == SKILLS_ROW).unwrap();
+        assert_eq!(app.palette("")[at].keys, "1");
+        app.dialog = Some(Dialog::Palette { query: String::new(), selected: at });
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.dialog, Some(Dialog::Skills { .. })));
+        typed(&mut app, "first");
+        assert_eq!(app.skills("first").len(), 1, "the description is searched");
+        press(&mut app, key(KeyCode::Enter));
+        assert!(app.dialog.is_none());
+        assert!(app.editor.text().starts_with("/skill:tdd"));
     }
 
     #[test]
