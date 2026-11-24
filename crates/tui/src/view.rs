@@ -4,7 +4,7 @@
 use std::rc::Rc;
 
 use lykos_client::{Item, Session, SessionStatus};
-use lykos_term::{Attr, Buffer, Cell, Style};
+use lykos_term::{Attr, Buffer, Cell, Scroll, Style};
 
 use crate::app::{App, Dialog, Frame, Info, InputArea, Link, List, Row as ListRow};
 use crate::editor::{Chip, Editor};
@@ -85,6 +85,9 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         let bar = app.prefs.scrollbar;
         let text_w = inner_w.saturating_sub(2 + u16::from(bar));
         let opened = app.opened.get(&session.summary.id);
+        let before = app.frame.get();
+        // The last frame's layout lets go of the settled run, so the cache can grow it in place.
+        app.laid.replace(None);
         let mut lay = transcript::layout(&app.layout_cache, session, app.look(), text_w as usize, app.tick, opened);
         // What is not the session's: its start, and the prompts waiting for the turn.
         let mut tail = Block { first: usize::MAX, ..Block::default() };
@@ -95,9 +98,7 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
             tail.rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
         }
         if !tail.rows.is_empty() {
-            lay.starts.push(lay.total);
-            lay.total += tail.rows.len();
-            lay.blocks.push(Rc::new(tail));
+            lay.push(tail);
         }
         let total = lay.total;
         let view_h = box_h.saturating_sub(2) as usize;
@@ -142,7 +143,12 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
                 buf.set(sx, 1 + i as u16, Cell { ch: if on { '┃' } else { '│' }, style: Style::fg(if on { c().muted } else { c().overlay }) });
             }
         }
-        app.frame.set(Some(Frame { x, y: 1, width: text_w, height: view_h as u16, top: start }));
+        let now = Frame { x, y: 1, width: text_w, height: view_h as u16, top: start };
+        // Scrolled in the same box: the terminal moves the rows and writes only those that came in.
+        if let Some(b) = before.filter(|b| Frame { top: start, ..*b } == now && b.top != start) {
+            buf.scroll = Some(Scroll { top: now.y, rows: now.height, by: (start as i64 - b.top as i64).clamp(-(view_h as i64), view_h as i64) as i32 });
+        }
+        app.frame.set(Some(now));
         app.laid.replace(Some(Rc::new(lay)));
         if scroll > 0 {
             let label = " Jump to latest ↓ (ctrl+alt+g) ";

@@ -8,5 +8,5 @@
 mod buffer;
 mod terminal;
 
-pub use buffer::{Attr, Buffer, Cell, Color, Style};
+pub use buffer::{Attr, Buffer, Cell, Color, Scroll, Style};
 pub use terminal::{resume, suspend, Terminal, TerminalGuard};

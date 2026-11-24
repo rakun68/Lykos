@@ -29,7 +29,7 @@ impl Mini {
         let lay = transcript::layout(&app.layout_cache, s, app.look(), width, app.tick, None);
         let (mut print, mut live) = (Vec::new(), Vec::new());
         let mut printing = true;
-        for b in &lay.blocks {
+        for (_, b) in lay.blocks() {
             if b.last < self.items {
                 continue;
             }

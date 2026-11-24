@@ -501,6 +501,31 @@ fn bench(app: &mut App, term: &mut Terminal<io::Stdout>) {
         origin: "tui".into(),
         ledger_session_id: None,
     };
+    // `BENCH_SCROLL=<messages>`: a finished transcript that long, then each frame scrolls it `BENCH_ROWS` rows (three,
+    // a wheel step), up for a hundred frames and down for a hundred (P5 #44, `scripts/tui/scroll-measure.mjs`).
+    if let Some(messages) = std::env::var("BENCH_SCROLL").ok().and_then(|v| v.parse::<usize>().ok()) {
+        let mut summary = summary;
+        summary.status = SessionStatus::Idle;
+        push(app, EventData::SessionStatus { session: summary });
+        for i in 0..messages / 2 {
+            push(app, EventData::MessageUser { text: format!("Question {i}: where does the time go in frame {i}?") });
+            push(app, EventData::MessageDelta { text: format!("Answer {i}: the frame is drawn into a buffer of cells, diffed against the last one, and written once.") });
+            push(app, EventData::MessageEnd);
+        }
+        let mut times = Vec::with_capacity(frames);
+        let rows = std::env::var("BENCH_ROWS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+        for i in 0..frames {
+            app.on_scroll(i % 200 < 100, rows);
+            let t = Instant::now();
+            let _ = term.draw(|b| view::draw(app, b));
+            times.push(t.elapsed().as_micros());
+        }
+        if let Ok(path) = std::env::var("BENCH_OUT") {
+            let text: Vec<String> = times.iter().map(|t| t.to_string()).collect();
+            let _ = std::fs::write(path, text.join("\n"));
+        }
+        return;
+    }
     push(app, EventData::SessionStatus { session: summary });
     push(app, EventData::MessageUser { text: "Explain the renderer and show where each frame's time goes.".into() });
     let words = ["the", "frame", "is", "drawn", "into", "a", "buffer", "of", "cells,", "diffed", "against", "the", "last,", "and", "written", "once."];

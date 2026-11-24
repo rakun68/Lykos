@@ -74,15 +74,26 @@ pub struct Buffer {
     pub width: u16,
     pub height: u16,
     pub cells: Vec<Cell>,
+    /// A hint from the painter: rows `top..top + rows` show what the frame before showed `by` rows lower (up when
+    /// positive). The terminal scrolls them in place and writes only what then differs.
+    pub scroll: Option<Scroll>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scroll {
+    pub top: u16,
+    pub rows: u16,
+    pub by: i32,
 }
 
 impl Buffer {
     pub fn new(width: u16, height: u16) -> Buffer {
-        Buffer { width, height, cells: vec![Cell::default(); width as usize * height as usize] }
+        Buffer { width, height, cells: vec![Cell::default(); width as usize * height as usize], scroll: None }
     }
 
     pub fn clear(&mut self) {
         self.cells.fill(Cell::default());
+        self.scroll = None;
     }
 
     #[inline]

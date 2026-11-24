@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::buffer::{Attr, Buffer, Cell, Color, Style};
+use crate::buffer::{Attr, Buffer, Cell, Color, Scroll, Style};
 
 /// The screen: the frame on it, and the bytes of the next one. One `write` per frame.
 ///
@@ -174,6 +174,9 @@ impl<W: Write> Terminal<W> {
         } else if self.full {
             self.bytes.extend_from_slice(b"\x1b[0m\x1b[2J");
         }
+        if let Some(s) = self.back.scroll.filter(|_| !self.full) {
+            scroll(&mut self.front, s, origin, &mut self.bytes);
+        }
         let changed = diff(&self.front, &self.back, self.full, origin, &mut self.bytes);
         if !changed && cursor == self.cursor && !self.full {
             return Ok(0);
@@ -193,6 +196,32 @@ impl<W: Write> Terminal<W> {
 
     pub fn writer(&mut self) -> &mut W {
         &mut self.out
+    }
+}
+
+/// Scrolls the screen's rows `s.top..s.top + s.rows` by `s.by` inside a scroll region (DECSTBM, then SU or SD),
+/// and `front` with them: the rows that came in are blank, as the terminal leaves them.
+fn scroll(front: &mut Buffer, s: Scroll, origin: u16, out: &mut Vec<u8>) {
+    let n = s.by.unsigned_abs() as usize;
+    let (top, rows, w) = (s.top as usize, s.rows as usize, front.width as usize);
+    if n == 0 || n >= rows || top + rows > front.height as usize {
+        return;
+    }
+    out.extend_from_slice(b"\x1b[0m\x1b[");
+    push_num(out, (top + origin as usize + 1) as u32);
+    out.push(b';');
+    push_num(out, (top + rows + origin as usize) as u32);
+    out.extend_from_slice(b"r\x1b[");
+    push_num(out, n as u32);
+    out.push(if s.by > 0 { b'S' } else { b'T' });
+    out.extend_from_slice(b"\x1b[r");
+    let region = &mut front.cells[top * w..(top + rows) * w];
+    if s.by > 0 {
+        region.rotate_left(n * w);
+        region[(rows - n) * w..].fill(Cell::default());
+    } else {
+        region.rotate_right(n * w);
+        region[..n * w].fill(Cell::default());
     }
 }
 
@@ -227,13 +256,16 @@ fn diff(front: &Buffer, back: &Buffer, full: bool, origin: u16, out: &mut Vec<u8
         if !full && b_row == f_row {
             continue;
         }
-        for x in 0..w {
+        let mut x = 0;
+        while x < w {
             let cell = &b_row[x];
             if cell.ch == '\0' {
+                x += 1;
                 continue;
             }
             let wide = x + 1 < w && b_row[x + 1].ch == '\0';
             if !full && *cell == f_row[x] && !(wide && b_row[x + 1] != f_row[x + 1]) {
+                x += 1;
                 continue;
             }
             changed = true;
@@ -247,6 +279,7 @@ fn diff(front: &Buffer, back: &Buffer, full: bool, origin: u16, out: &mut Vec<u8
             }
             push_char(out, cell);
             at = Some((x16 + if wide { 2 } else { 1 }, y));
+            x += 1;
         }
     }
     if changed {
@@ -446,6 +479,28 @@ mod tests {
         t.set_footer(1);
         hello(&mut t, "ab");
         assert!(String::from_utf8(std::mem::take(t.writer())).unwrap().contains("\x1b[3;1H\x1b[0mab"), "a shorter one stays under the rows");
+    }
+
+    #[test]
+    fn a_scroll_hint_moves_the_rows_in_place_and_writes_only_the_new_one() {
+        let lines = ["a", "b", "c", "d"];
+        let mut t = Terminal::new(Vec::new(), 4, 4);
+        let frame = |t: &mut Terminal<Vec<u8>>, from: usize, by: Option<i32>| {
+            t.draw(|b| {
+                for y in 0..3 {
+                    b.text(0, y, 4, lines[from + y as usize], Style::default());
+                }
+                b.scroll = by.map(|by| Scroll { top: 0, rows: 3, by });
+                None
+            })
+            .unwrap();
+            String::from_utf8(std::mem::take(t.writer())).unwrap()
+        };
+        frame(&mut t, 0, None);
+        let s = frame(&mut t, 1, Some(1));
+        assert_eq!(s, "\x1b[?2026h\x1b[?25l\x1b[0m\x1b[1;3r\x1b[1S\x1b[r\x1b[3;1H\x1b[0md\x1b[0m\x1b[?2026l", "{s:?}");
+        let s = frame(&mut t, 0, Some(-1));
+        assert!(s.contains("\x1b[1T") && s.contains("\x1b[1;1H\x1b[0ma") && !s.contains('b'), "{s:?}");
     }
 
     #[test]

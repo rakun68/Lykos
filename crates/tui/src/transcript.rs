@@ -141,10 +141,10 @@ fn path(item: &Item, look: Look) -> Vec<Kind> {
 }
 
 /// `groupEntries`: adjacent items whose paths share a prefix share those groups.
-fn nodes(items: &[Item], look: Look) -> Vec<Node> {
+fn nodes(items: &[Item], from: usize, look: Look) -> Vec<Node> {
     let mut top: Vec<Node> = Vec::new();
     let mut open: Vec<Kind> = Vec::new();
-    for (i, item) in items.iter().enumerate() {
+    for (i, item) in items.iter().enumerate().skip(from) {
         let p = path(item, look);
         let keep = open.iter().zip(&p).take_while(|(a, b)| a == b).count();
         open.truncate(keep);
@@ -447,33 +447,78 @@ pub struct Block {
     pub done: bool,
 }
 
-/// The transcript as laid out for one frame: its blocks in order and where each starts.
+/// Blocks in order, and the row each starts on.
+#[derive(Clone, Debug, Default)]
+pub struct Part {
+    blocks: Vec<Rc<Block>>,
+    starts: Vec<usize>,
+}
+
+impl Part {
+    fn push(&mut self, block: Rc<Block>, start: usize) {
+        self.blocks.push(block);
+        self.starts.push(start);
+    }
+}
+
+/// The transcript as laid out for one frame: the settled blocks, shared with the cache from frame to frame so a
+/// long session is not walked again, then the rest.
 #[derive(Debug, Default)]
 pub struct Layout {
-    pub blocks: Vec<Rc<Block>>,
-    /// Each block's first row.
-    pub starts: Vec<usize>,
+    head: Rc<Part>,
+    tail: Part,
     pub total: usize,
 }
 
 impl Layout {
+    /// The block row `i` is in, and the row it starts on.
+    fn locate(&self, i: usize) -> Option<(&Block, usize)> {
+        let part = if self.tail.starts.first().is_some_and(|&s| i >= s) { &self.tail } else { &*self.head };
+        let b = part.starts.partition_point(|&s| s <= i).checked_sub(1)?;
+        Some((&part.blocks[b], part.starts[b]))
+    }
+
     /// The row `i`.
     pub fn row(&self, i: usize) -> Option<&Row> {
-        let b = self.starts.partition_point(|&s| s <= i).checked_sub(1)?;
-        self.blocks[b].rows.get(i - self.starts[b])
+        let (b, start) = self.locate(i)?;
+        b.rows.get(i - start)
     }
 
     /// The first row of the block that starts with item `item`, when it stands alone (a prompt or an answer).
     pub fn item_row(&self, item: usize) -> Option<usize> {
-        let b = self.blocks.binary_search_by_key(&item, |b| b.first).ok()?;
-        self.blocks[b].leaf.then_some(self.starts[b])
+        [&*self.head, &self.tail].into_iter().find_map(|p| {
+            let b = p.blocks.binary_search_by_key(&item, |b| b.first).ok()?;
+            p.blocks[b].leaf.then_some(p.starts[b])
+        })
     }
 
     /// The group whose line is row `i`.
     pub fn head_at(&self, i: usize) -> Option<GroupId> {
-        let b = self.starts.partition_point(|&s| s <= i).checked_sub(1)?;
-        let at = i - self.starts[b];
-        self.blocks[b].heads.iter().find(|(r, _)| *r == at).map(|(_, id)| *id)
+        let (b, start) = self.locate(i)?;
+        b.heads.iter().find(|(r, _)| *r == i - start).map(|(_, id)| *id)
+    }
+
+    /// Every block, with the row it starts on.
+    pub fn blocks(&self) -> impl Iterator<Item = (usize, &Block)> {
+        let (h, t): (&Part, &Part) = (&self.head, &self.tail);
+        h.starts.iter().copied().zip(h.blocks.iter().map(|b| &**b)).chain(t.starts.iter().copied().zip(t.blocks.iter().map(|b| &**b)))
+    }
+
+    /// A block after the session's own: what the screen adds under them.
+    pub fn push(&mut self, block: Block) {
+        let n = block.rows.len();
+        self.tail.push(Rc::new(block), self.total);
+        self.total += n;
+    }
+
+    #[cfg(test)]
+    fn block(&self, k: usize) -> (&Rc<Block>, usize) {
+        let h = self.head.blocks.len();
+        if k < h {
+            (&self.head.blocks[k], self.head.starts[k])
+        } else {
+            (&self.tail.blocks[k - h], self.tail.starts[k - h])
+        }
     }
 }
 
@@ -486,12 +531,17 @@ struct Key {
     theme: &'static str,
 }
 
-/// The kept blocks, by first item: the last item and the opened groups they were laid out with.
+/// The kept blocks, by first item: the last item and the opened groups they were laid out with. And the settled
+/// run from the first item, as the last layout had it: the items it holds and its rows.
 #[derive(Debug, Default)]
 pub struct Cache {
     key: Key,
+    opened: u64,
     items: usize,
     blocks: HashMap<usize, (usize, u64, Rc<Block>)>,
+    head: Rc<Part>,
+    head_items: usize,
+    head_rows: usize,
 }
 
 /// A hash of which groups in `node` are open: a click lays the block out again.
@@ -511,15 +561,22 @@ pub fn layout(cache: &RefCell<Cache>, session: &Session, look: Look, width: usiz
     let running = matches!(session.summary.status, SessionStatus::Running | SessionStatus::Waiting | SessionStatus::Starting);
     let ctx = Ctx { items, running, look, width, tick, opened };
     let mut cache = cache.borrow_mut();
-    let key = Key { session: session.summary.id.clone(), width, look: Some(look), theme: c().name };
+    let opened_hash = opened.map_or(0, |o| o.iter().fold(17u64, |h, ((i, k), on)| h.wrapping_mul(1_000_003) ^ ((*i as u64) << 3 | (*k as u64) << 1 | u64::from(*on))));
+    let same = cache.key.session == session.summary.id && cache.key.width == width && cache.key.look == Some(look) && cache.key.theme == c().name;
     // A session rebuilt shorter (an undo) has new items where the kept ones were.
-    if cache.key != key || items.len() < cache.items {
-        cache.key = key;
+    if !same || items.len() < cache.items {
+        cache.key = Key { session: session.summary.id.clone(), width, look: Some(look), theme: c().name };
         cache.blocks.clear();
     }
+    // A click lays the settled run out again, from the kept blocks.
+    if !same || items.len() < cache.items || cache.opened != opened_hash {
+        cache.opened = opened_hash;
+        (cache.head, cache.head_items, cache.head_rows) = (Rc::default(), 0, 0);
+    }
     cache.items = items.len();
-    let mut out = Layout::default();
-    for node in nodes(items, look) {
+    let mut head = std::mem::take(&mut cache.head);
+    let (mut tail, mut total, mut growing) = (Part::default(), cache.head_rows, true);
+    for node in nodes(items, cache.head_items, look) {
         let (first, last) = (node.first(), node.last());
         let sig = opened_sig(&ctx, &node);
         let quiet = !(first..=last).any(|i| ctx.active(i));
@@ -538,11 +595,19 @@ pub fn layout(cache: &RefCell<Cache>, session: &Session, look: Look, width: usiz
             }
             b
         });
-        out.starts.push(out.total);
-        out.total += block.rows.len();
-        out.blocks.push(block);
+        let n = block.rows.len();
+        // The run from the first item grows while each block is settled; the first that is not ends it.
+        if growing && settled {
+            Rc::make_mut(&mut head).push(block, total);
+            (cache.head_items, cache.head_rows) = (last + 1, total + n);
+        } else {
+            growing = false;
+            tail.push(block, total);
+        }
+        total += n;
     }
-    out
+    cache.head = head.clone();
+    Layout { head, tail, total }
 }
 
 #[cfg(test)]
@@ -621,8 +686,30 @@ mod tests {
         let s = session(items, SessionStatus::Running);
         let a = layout(&cache, &s, look, 60, 0, None);
         let b = layout(&cache, &s, look, 60, 0, None);
-        assert!(Rc::ptr_eq(&a.blocks[1], &b.blocks[1]), "a finished run is laid out once");
-        assert!(!Rc::ptr_eq(&a.blocks[2], &b.blocks[2]), "the last item may still stream");
-        assert_eq!(a.item_row(2), Some(a.starts[2]));
+        assert!(Rc::ptr_eq(a.block(1).0, b.block(1).0), "a finished run is laid out once");
+        assert!(!Rc::ptr_eq(a.block(2).0, b.block(2).0), "the last item may still stream");
+        assert_eq!(a.item_row(2), Some(a.block(2).1));
+        drop((a, b));
+        assert_eq!(cache.borrow().head_items, 2, "the settled run holds the prompt and the run");
+        // A click on a group in the settled run lays it out again.
+        let s = session(vec![Item::User("go".into()), tool("bash", ToolState::Ok), Item::Assistant("ok".into())], SessionStatus::Idle);
+        let opened = BTreeMap::from([((1, Kind::Activity), true)]);
+        assert!(text(&layout(&cache, &s, look, 60, 0, Some(&opened))).contains(&"$ bash x".to_string()));
+        assert!(!text(&layout(&cache, &s, look, 60, 0, None)).contains(&"$ bash x".to_string()));
+    }
+
+    #[test]
+    fn a_long_session_lays_out_only_what_is_new() {
+        let mut items = Vec::new();
+        for i in 0..10_000 {
+            items.push(if i % 2 == 0 { Item::User(format!("q{i}")) } else { Item::Assistant(format!("a{i}")) });
+        }
+        let s = session(items, SessionStatus::Idle);
+        let cache = RefCell::new(Cache::default());
+        let first = layout(&cache, &s, Look::default(), 60, 0, None);
+        let again = layout(&cache, &s, Look::default(), 60, 0, None);
+        assert!(Rc::ptr_eq(&first.head, &again.head), "the settled run is shared, not walked");
+        assert_eq!((first.total, again.total), (again.total, first.blocks().count() * 3), "a blank, the text, a blank");
+        assert_eq!(again.row(again.total - 2).map(|r| r.text.as_str()), Some("a9999"));
     }
 }

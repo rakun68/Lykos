@@ -352,11 +352,9 @@ impl App {
     /// The prompts and answers the message keys move between, and the layout row each starts on.
     fn messages(&self, user_only: bool) -> Vec<(usize, usize)> {
         let (Some(s), Some(lay)) = (self.current(), self.laid.borrow().clone()) else { return Vec::new() };
-        lay.blocks
-            .iter()
-            .zip(&lay.starts)
-            .filter(|(b, _)| b.leaf)
-            .filter_map(|(b, &y)| match s.items.get(b.first)? {
+        lay.blocks()
+            .filter(|(_, b)| b.leaf)
+            .filter_map(|(y, b)| match s.items.get(b.first)? {
                 Item::User(t) | Item::Followup(t) if !t.trim().is_empty() => Some((b.first, y)),
                 Item::Assistant(t) if !user_only && !t.trim().is_empty() => Some((b.first, y)),
                 _ => None,
