@@ -618,6 +618,12 @@ fn dialog(app: &App, buf: &mut Buffer) {
                         row("Specialist", app.specialist_now().unwrap_or_else(unknown)),
                         row("Theme", theme::c().name.to_string()),
                     ];
+                    // The context window as the prompt box shows it, with the tokens behind the percent.
+                    let tokens = usage.context_tokens.map(|t| format!(" · {} tokens", group(t.round() as u64))).unwrap_or_default();
+                    rows.push(match context_bar(app) {
+                        Some((cells, pct, colour)) => pair("Context", format!("{cells} {pct}{tokens}"), theme::text(), Style::fg(colour)),
+                        None => row("Context", "unknown".into()),
+                    });
                     rows.extend(no_mcp);
                     ("Status".into(), rows, None, close.clone())
                 }
@@ -1246,6 +1252,10 @@ mod tests {
         for want in ["Fix it", "On it.", "read src/main.rs", "claude-opus · high", "12,345 tokens · 6% used", "esc interrupt", "▰▱▱▱▱▱▱▱▱▱ 6%"] {
             assert!(s.contains(want), "missing {want:?} in\n{s}");
         }
+        app.dialog = Some(Dialog::Info { info: Info::Status });
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("▰▱▱▱▱▱▱▱▱▱ 6% · 12,345 tokens"), "status shows the context bar\n{s}");
     }
 
     #[test]

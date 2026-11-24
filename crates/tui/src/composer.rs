@@ -222,7 +222,14 @@ impl App {
                         out.push(Action::Interrupt { session });
                     }
                 }
-                Tab::Terminals => {}
+                // Lykos's own: closes the selected terminal, ending its shell.
+                Tab::Terminals => {
+                    let term = rows.get(comp.selected).and_then(|r| r.key.parse::<usize>().ok()).and_then(|i| self.terms.list.get(i));
+                    if let Some(id) = term.map(|t| t.id) {
+                        self.terms.exited(id);
+                        comp.selected = comp.selected.min(self.terms.list.len());
+                    }
+                }
             },
             _ if self.keymap.is_leader(key) => return None,
             KeyCode::Char(_) | KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::Backspace => {}
@@ -332,6 +339,10 @@ pub fn draw(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16) {
         }
         Tab::Subagents if rows.get(comp.selected).is_some_and(|r| r.status == "Running") => hints.push(("interrupt", "ctrl+d".into())),
         Tab::Scripts if selected => hints.push(("cancel", "ctrl+d".into())),
+        Tab::Terminals if rows.get(comp.selected).is_some_and(|r| r.key != "new") => {
+            hints.push(("show", "enter".into()));
+            hints.push(("close", "ctrl+d".into()));
+        }
         _ => {}
     }
     if list.len() > 1 {

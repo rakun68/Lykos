@@ -433,7 +433,9 @@ describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
         }
         throw new Error(`no ledger said by ${id}`);
       };
+      await c.request("session.rename", { cwd, ledgerSessionId: "s1", title: "the parser" });
       const first = await c.request<SessionSummary>("session.start", { cwd, resume: "s1" });
+      assert.equal(first.title, "the parser", "a resumed session keeps its title, so its tab is named");
       const ledger = await ledgerOf(first.id);
       assert.equal(ledger, join(cwd, ".lykos", "ledger.db"));
       await assert.rejects(c.request("session.start", { cwd, resume: "s1" }), /already open/, "one ledger session runs in one child");

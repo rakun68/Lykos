@@ -26,6 +26,7 @@ pub enum Local {
     Themes,
     Connect,
     Status,
+    Usage,
     Mcps,
     Debug,
     /// A session action (`keymap::DEFS`), P5 #42.
@@ -67,6 +68,9 @@ pub fn bare(name: &str) -> Option<Local> {
         "/resume" => Some(Local::Run("session.list")),
         "/new" => Some(Local::Run("session.new")),
         "/rename" => Some(Local::Run("session.rename")),
+        // Reports the engine prints into the chat open as dialogs here: `/context` is `/status`'s alias.
+        "/context" => Some(Local::Status),
+        "/usage" => Some(Local::Usage),
         _ => None,
     }
 }

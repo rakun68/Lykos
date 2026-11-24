@@ -2451,6 +2451,7 @@ impl App {
             Local::Themes => return self.open_list(List::Themes { initial: theme::c().name }),
             Local::Connect => return self.open_list(List::Providers),
             Local::Status => self.dialog = Some(Dialog::Info { info: Info::Status }),
+            Local::Usage => self.dialog = Some(Dialog::Info { info: Info::Usage }),
             Local::Mcps => self.dialog = Some(Dialog::Info { info: Info::Mcp }),
             Local::Debug => self.dialog = Some(Dialog::Info { info: Info::Debug }),
             Local::Run(id) => return self.run_session(id).unwrap_or_default(),
@@ -3585,5 +3586,33 @@ two
         } else {
             assert_eq!(app.run("terminal.suspend", Instant::now(), 10), None, "no suspend on Windows");
         }
+    }
+
+    #[test]
+    fn ctrl_d_in_the_terminals_tab_closes_the_selected_terminal() {
+        let mut app = idle();
+        let sink: crate::terminal::Sink = std::sync::Arc::new(|_, _| {});
+        let id = app.terms.next_id();
+        let t = crate::terminal::Term::spawn(id, &std::env::temp_dir().display().to_string(), 80, 24, sink).expect("a shell starts");
+        app.terms.add(t);
+        app.terms.focused = false;
+        app.run("terminal.select", Instant::now(), 10);
+        press(&mut app, ctrl('d'));
+        assert!(app.terms.is_empty(), "closed");
+        assert_eq!(app.terms.visible, None);
+    }
+
+    #[test]
+    fn context_is_status_and_usage_opens_its_dialog() {
+        let mut app = idle();
+        typed(&mut app, "/context");
+        press(&mut app, key(KeyCode::Esc));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.dialog, Some(Dialog::Info { info: Info::Status })));
+        app.dialog = None;
+        typed(&mut app, "/usage");
+        press(&mut app, key(KeyCode::Esc));
+        press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.dialog, Some(Dialog::Info { info: Info::Usage })));
     }
 }

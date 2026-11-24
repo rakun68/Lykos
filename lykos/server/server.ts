@@ -423,7 +423,8 @@ export class EngineServer {
       cwd,
       status: "starting",
       model: typeof params.model === "string" ? params.model : "",
-      title: null,
+      // A resumed session keeps the title its history row has, so its tab is not "New session".
+      title: resume === undefined ? null : resumedTitle(cwd, resume),
       startedAt: new Date().toISOString(),
       origin: typeof params.origin === "string" ? params.origin : "tui",
       ledgerSessionId: null,
@@ -645,6 +646,14 @@ export class EngineServer {
       this.resolveExited(reason);
     })();
     return this.stopping;
+  }
+}
+/** The title of the ledger session `id` resumes, or null when its history has none or cannot be read. */
+function resumedTitle(cwd: string, id: string): string | null {
+  try {
+    return historyRows(projectRoot(cwd)).find((r) => r.id === id)?.title ?? null;
+  } catch {
+    return null;
   }
 }
 
