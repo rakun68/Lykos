@@ -3,7 +3,7 @@
 // a queued prompt waits for the turn; /btw answers aside; stash and history recall; sessions and tabs (#42);
 // an approval and a question are answered and /diff shows the workspace's change (#46); the composer lists a
 // background job, shows its output and kills it, ctrl+b moves a running shell call to the background, and the
-// terminal pane runs a shell (#48); ctrl+c quits.
+// terminal pane runs a shell (#48); ctrl+c quits. suspend-test.mjs checks ctrl+z on Linux.
 //
 //   cargo build --release -p lykos-tui && node scripts/tui/tui-test.mjs [binary]
 import assert from "node:assert/strict";
@@ -76,7 +76,7 @@ try {
   await step("a tool call folds into its activity line at low verbosity", () => s.screen().includes("+ 1 read"));
   // 100 columns is narrow: the sidebar opens over the session and esc closes it (#46).
   await key("ctrl+x", "b");
-  await step("leader b opens the sidebar over the session", () => s.screen().includes("Context") && s.screen().includes("6% used\n"));
+  await step("leader b opens the sidebar over the session", () => s.screen().includes("Context") && / {2}6% used *$/m.test(s.screen()));
   await key("esc");
   await step("esc closes it", () => !s.screen().includes("Context"));
   // The palette's verbosity entry: low, medium, high, and back to low.
