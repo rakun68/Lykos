@@ -25,7 +25,8 @@ import { globalConfigPath, loadConfig, projectConfigPath } from "../config/load.
 import { providerCatalog } from "../config/provider-catalog.js";
 import { baseUrlProblem, CUSTOM_PROVIDER_APIS, modelIds, providerIdProblem, writeProviderToConfig } from "../config/provider-add.js";
 import { BUILTIN_PROVIDERS, PI_NATIVE_PROVIDERS } from "../config/provider-table.js";
-import { defaultCredentialDbPath } from "../credentials/db.js";
+import { defaultCredentialDbPath, openCredentialDb } from "../credentials/db.js";
+import { disableCredential, listEnabled } from "../credentials/pool.js";
 import { addToPool } from "../credentials/login-flow.js";
 import { poolSummary, summaryPoolSizes } from "../credentials/presence.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
@@ -240,6 +241,14 @@ export class EngineServer {
         this.toChild(this.session(params), { kind: "answer", requestId: params.requestId, answer: params.answer });
         return { ok: true };
       }
+      case "skills.list": {
+        // What a session here would offer, for the TUI's skill list before one starts.
+        if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("skills.list needs cwd");
+        const cwd = resolvePath(params.cwd);
+        const { resolved } = loadConfig({ cwd, ...this.globalOpt() });
+        const { listSkills } = await import("../session/skills.js");
+        return { skills: await listSkills(cwd, resolved.skills) };
+      }
       case "providers.list": {
         if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("providers.list needs cwd");
         const { resolved } = loadConfig({ cwd: resolvePath(params.cwd), ...this.globalOpt() });
@@ -267,6 +276,32 @@ export class EngineServer {
         const { provider, key } = params;
         if (typeof provider !== "string" || provider === "" || typeof key !== "string" || key.trim() === "") throw new Error("credential.add needs provider and key");
         return { message: addToPool(defaultCredentialDbPath(), provider, { type: "api_key", key: key.trim() }) };
+      }
+      case "credentials.list": {
+        // A provider's enabled credentials, never their secrets.
+        const { provider } = params;
+        if (typeof provider !== "string" || provider === "") throw new Error("credentials.list needs provider");
+        const db = openCredentialDb(defaultCredentialDbPath(), { create: false });
+        if (db === undefined) return { credentials: [] };
+        try {
+          return { credentials: listEnabled(db, provider).map((r) => ({ id: r.id, type: r.type, label: r.label, createdAt: r.createdAt })) };
+        } finally {
+          db.close();
+        }
+      }
+      case "credential.remove": {
+        // As `lykos logout`: the row is disabled, never deleted.
+        const { provider, id } = params;
+        if (typeof provider !== "string" || typeof id !== "number") throw new Error("credential.remove needs provider and id");
+        const db = openCredentialDb(defaultCredentialDbPath(), { create: false });
+        if (db === undefined) throw new Error(`no credentials stored for ${provider}`);
+        try {
+          const row = listEnabled(db, provider).find((r) => r.id === id);
+          if (row === undefined || !disableCredential(db, id, "logout")) throw new Error(`${provider} has no credential ${id}`);
+          return { message: `logged out ${row.label} from ${provider}` };
+        } finally {
+          db.close();
+        }
       }
       case "config.keybinds": {
         if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("config.keybinds needs cwd");

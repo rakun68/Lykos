@@ -167,6 +167,36 @@ pub struct ProvidersResult {
     pub providers: Vec<ProviderEntry>,
 }
 
+/// `credentials.list`'s rows: a provider's enabled credentials, never their secrets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CredentialEntry {
+    pub id: i64,
+    /// "api_key" or "oauth".
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub label: String,
+    /// Milliseconds since the epoch.
+    #[serde(rename = "createdAt")]
+    pub created_at: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CredentialsResult {
+    pub credentials: Vec<CredentialEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillsResult {
+    pub skills: Vec<NamedSkill>,
+}
+
+/// `skills.list`'s rows: what `/skill:name` runs, and what it is for.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NamedSkill {
+    pub name: String,
+    pub description: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProviderOption {
     pub name: String,

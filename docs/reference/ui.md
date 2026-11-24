@@ -241,7 +241,11 @@ is drawn `Name: value`, the value in the accent colour; `Enter` and `Right` chan
 previous, and the palette stays open. Skills are one `Skills` row with their count: it opens a wider list of its
 own, the name on the left and the description on the right over two rows, cut with `…` past them, searched by name
 and description; `Enter`
-puts the skill in the prompt. A palette search finds commands, not skills. `/help` lists every key of every group and
+puts the skill in the prompt. With no session, or before one has listed its skills, the engine server's `skills.list`
+runs Pi's loader as a session boots it: `~/.lykos/pi-host/skills`, `.lykos/skills`, and in a trusted project
+`.pi/skills` and `.agents/skills` up to the git root, and `~/.agents/skills`; a specialist's roster narrows it in a
+session. `~/.claude/skills` is not read. A palette search finds commands, not skills. A slash command that does what an action does is that action's row,
+its name shown on the right when no key is bound (`Connect a provider` · `/connect`). `/help` lists every key of every group and
 the layer that set it.
 
 **Colours (#58).** `tui.colors` in any config layer sets a role over every theme; the last layer to name a role wins,
@@ -279,7 +283,10 @@ shows the head estimate as the context bar until a request measures it, never `u
 **Login.** `/connect` lists every provider Lykos supports, from the engine server's `providers.list`, with or
 without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser` (OAuth) or
 `API key` and why; a provider already configured (a credential in its pool, its environment variable, or a declared
-source) is drawn in the accent colour. A provider with OAuth sends `/login <name>`, starting a session when none is
+source) is drawn in the accent colour. A configured provider opens its accounts: each credential in its pool by label, kind and date added, `d` twice to
+remove one (disabled as `lykos logout` does, never deleted, by the server's `credential.remove`), and a last row to add
+another; `Esc` goes back to the list. One configured only by its environment variable says so. An unconfigured
+provider with OAuth sends `/login <name>`, starting a session when none is
 open; any other has its API key asked for in a popup of its own, drawn as `•`, and stored by the server's
 `credential.add` without a session. An engine server older than its build on disk, or one that answers `unknown
 method`, says so in a notice. It outlives TUI windows while it has sessions; `Restart the engine server` in the palette
@@ -413,6 +420,9 @@ The transcript (#44) follows OpenCode's `routes/session/grouping/` and `message-
   only adjacent thoughts (while thinking is hidden) and adjacent reads and searches (while grouping
   is on); high opens those groups. A click on a group's line opens or closes it.
 - **Thinking:** hidden by default; shown, each thought is muted italic text under a `Thought` line.
+- **The turn's word:** while the model works, a word from `BUSY_WORDS` (`transcript.rs`: `Prowling`, `Noodling`,
+  `Hornswoggling`…) stands where `Thinking` would, the same one a turn in the transcript and beside the spinner in
+  the footer (`⠋ Prowling… esc interrupt`).
 - **Selection:** a drag in the transcript selects rows (shown reversed). `Ctrl+C` copies it; off
   Windows, letting go copies it, as OpenCode does. `/copy` and `<leader>y` copy the last answer.
 - **Scrollbar:** off by default; on, a one-column bar at the transcript's right edge.

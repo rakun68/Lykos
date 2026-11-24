@@ -649,10 +649,51 @@ fn dialog(app: &App, buf: &mut Buffer) {
                 lines.push(Line { with_prev: true, ..runs(vec![(" ".repeat(nw + 2), theme::text()), (second, theme::muted())]) });
             }
             if lines.is_empty() {
-                lines.push(line(if query.is_empty() { "No skills: open a session first" } else { "No matching skills" }, theme::muted()));
+                let empty = if app.skills_loading() {
+                    "Loading skills…"
+                } else if query.is_empty() {
+                    "No skills in ~/.lykos/pi-host/skills, .lykos/skills, .pi/skills or .agents/skills"
+                } else {
+                    "No matching skills"
+                };
+                lines.push(line(empty, theme::muted()));
             }
             search = Some(("Search skills", query.clone()));
             ("Skills".into(), lines, at, format!("{} use · {close}", k("dialog.select.submit")))
+        }
+        Dialog::Accounts { provider, selected, confirm } => {
+            let entry = app.providers.iter().flatten().find(|p| &p.name == provider);
+            let oauth = entry.is_some_and(|p| p.login == "oauth");
+            let mut lines = Vec::new();
+            let mut at = None;
+            match &app.accounts {
+                None => lines.push(line("Loading accounts…", theme::muted())),
+                Some(accounts) => {
+                    for (i, a) in accounts.iter().enumerate() {
+                        if i == *selected {
+                            at = Some(lines.len());
+                        }
+                        let kind = if a.kind == "oauth" { "browser sign-in" } else { "API key" };
+                        let right = if *confirm == Some(a.id) {
+                            "d again to remove".to_string()
+                        } else {
+                            format!("{kind} · added {}", crate::app::utc_date((a.created_at / 1000.0) as i64))
+                        };
+                        let rs = if *confirm == Some(a.id) { Style::fg(c().love) } else { theme::muted() };
+                        lines.push(pair(a.label.clone(), right, theme::text(), rs));
+                    }
+                    if accounts.is_empty() {
+                        // Configured with no credential in the pool: an environment variable or a declared source.
+                        let why = entry.map_or(String::new(), |p| p.reason.clone());
+                        lines.push(Line { heading: true, ..line(format!("No stored credential: {why}"), theme::muted()) });
+                    }
+                    if *selected == accounts.len() {
+                        at = Some(lines.len());
+                    }
+                    lines.push(line(if oauth { "+ Sign in with a browser" } else { "+ Add an API key" }, Style::fg(c().accent)));
+                }
+            }
+            (format!("{provider} accounts"), lines, at, format!("{} add · d remove · {} back", k("dialog.select.submit"), k("dialog.close")))
         }
         Dialog::Provider(f) => {
             let key_only = f.provider.is_some();
@@ -1179,6 +1220,9 @@ pub(crate) fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u1
         }
         Link::Ready if app.running() => {
             let mut col = buf.text(x + 1, y, left_w, &spinner(app).to_string(), Style::fg(c().accent));
+            // The turn's word, as the transcript shows it.
+            let turn = app.current().map_or(0, |s| crate::transcript::turn_of(&s.items, s.items.len().saturating_sub(1)));
+            col = buf.text(col + 1, y, left_w, &format!("{}…", crate::transcript::busy_word(turn)), Style::fg(c().accent));
             col = buf.text(col + 1, y, left_w, "esc", if app.armed.is_some() { Style::fg(c().gold) } else { theme::text() });
             let rest = if app.armed.is_some() { " again to interrupt" } else { " interrupt" };
             buf.text(col, y, left_w, rest, if app.armed.is_some() { Style::fg(c().gold) } else { theme::muted() });
@@ -1559,6 +1603,8 @@ mod tests {
         app.prefs.verbosity = crate::transcript::Verbosity::High;
         draw(&app, &mut buf);
         let s = screen(&buf);
+        let word = format!("{}…", crate::transcript::busy_word(1));
+        assert!(s.contains(&format!("{word} esc interrupt")), "the turn's word beside the spinner: {s}");
         for want in ["Fix it", "On it.", "read src/main.rs", "claude-opus · high", "12,345 tokens · 6% used", "esc interrupt", "▰▱▱▱▱▱▱▱▱▱ 6%"] {
             assert!(s.contains(want), "missing {want:?} in\n{s}");
         }

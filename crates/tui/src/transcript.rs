@@ -21,6 +21,26 @@ use crate::wrap::wrap;
 
 pub const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/// What shows in place of "Thinking" while the model works: one word a turn, the same wherever it shows.
+pub const BUSY_WORDS: [&str; 48] = [
+    "Prowling", "Howling", "Sniffing around", "Circling", "Stalking the bug", "Padding about", "Tracking", "Den-building",
+    "Noodling", "Percolating", "Marinating", "Simmering", "Stewing", "Brewing", "Kneading", "Fermenting",
+    "Cogitating", "Ruminating", "Mulling", "Musing", "Woolgathering", "Daydreaming", "Philosophizing", "Chin-stroking",
+    "Tinkering", "Fiddling", "Puttering", "Whittling", "Wrangling", "Untangling", "Juggling", "Rummaging",
+    "Sleuthing", "Spelunking", "Scheming", "Conjuring", "Hatching", "Doodling", "Moseying", "Gallivanting",
+    "Dithering", "Lollygagging", "Bamboozling", "Hornswoggling", "Galumphing", "Discombobulating", "Kerfuffling", "Skedaddling",
+];
+
+/// The word for the `turn`-th prompt of a session.
+pub fn busy_word(turn: usize) -> &'static str {
+    BUSY_WORDS[turn.wrapping_mul(2_654_435_761) % BUSY_WORDS.len()]
+}
+
+/// Which prompt of the session item `i` answers: the user messages up to it.
+pub fn turn_of(items: &[Item], i: usize) -> usize {
+    items.iter().take(i + 1).filter(|x| matches!(x, Item::User(_))).count()
+}
+
 /// `session.verbosity`: low, medium or high, low by default (`grouping/session.ts` `defaultVerbosity`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Verbosity {
@@ -269,7 +289,7 @@ fn activity_label(ctx: &Ctx, ids: &[usize]) -> (String, bool) {
     }
     let running = match &ctx.items[busy.unwrap_or_default()] {
         Item::Tool { name, .. } => format!("Running {}…", if category(name) == "command" { "command" } else { name.as_str() }),
-        _ => "Thinking…".to_string(),
+        _ => format!("{}…", busy_word(turn_of(ctx.items, busy.unwrap_or_default()))),
     };
     (running, true)
 }
@@ -345,7 +365,8 @@ fn render(ctx: &Ctx, node: &Node, indent: u16, rows: &mut Vec<Row>, heads: &mut 
                     });
                     let done = closed || thoughts.iter().all(|&i| ctx.done(i));
                     let header = if !done {
-                        format!("{} {}", ctx.spinner(), latest.map_or("Thinking".to_string(), |t| format!("Thinking: {t}")))
+                        let word = busy_word(turn_of(ctx.items, thoughts[0]));
+                        format!("{} {}", ctx.spinner(), latest.map_or(format!("{word}…"), |t| format!("{word}: {t}")))
                     } else {
                         let mut h = format!("{} Thought", if open { '-' } else { '+' });
                         if let Some(t) = latest.filter(|_| !open) {
@@ -407,7 +428,7 @@ fn item_rows(ctx: &Ctx, i: usize, indent: u16, rows: &mut Vec<Row>) {
                 return;
             }
             let bar = Some(Style::fg(c().overlay));
-            let header = if ctx.done(i) { "Thought".to_string() } else { format!("{} Thinking", ctx.spinner()) };
+            let header = if ctx.done(i) { "Thought".to_string() } else { format!("{} {}…", ctx.spinner(), busy_word(turn_of(ctx.items, i))) };
             rows.push(Row { indent: indent + 2, text: header, style: Style::fg(c().gold), bar, bg: None });
             for line in wrap(text.trim(), w.saturating_sub(5)) {
                 rows.push(Row { indent: indent + 2, text: line, style: thought_style(), bar, bg: None });

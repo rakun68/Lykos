@@ -94,6 +94,14 @@ try {
     await waitText("Save to");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
+  await step("the skill list works before any session, from the engine server", async () => {
+    await call("send_keys", { sessionId: id, keys: "Ctrl+P" });
+    await call("send_text", { sessionId: id, text: "skills" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("No skills in|/skill:");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
   await step("a typed prompt is sent with Enter and answered", async () => {
     await call("send_text", { sessionId: id, text: "hello through the mcp" });
     await waitText("hello through the mcp");

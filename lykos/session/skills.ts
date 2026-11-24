@@ -374,3 +374,33 @@ export function listSkillFiles(cwd: string): string[] {
     return [];
   }
 }
+
+/** A skill as a list shows it: what `/skill:name` runs, and what it is for. */
+export interface ListedSkill {
+  name: string;
+  description: string;
+}
+
+/**
+ * Every skill a session started in `cwd` would offer, without starting one: Pi's own loader, given what `boot()`
+ * gives it (the pi-host agent directory, `.lykos/skills`, the cap), so it finds what a session finds in
+ * `~/.lykos/pi-host/skills`, `.pi/skills`, `.agents/skills` and `~/.agents/skills`. A specialist's roster narrows it
+ * further in a session. Pi is loaded here, not at startup.
+ */
+export async function listSkills(cwd: string, config?: SkillsConfig): Promise<ListedSkill[]> {
+  const policy = resolveSkillsPolicy(cwd, config);
+  if (!policy.enabled) return [];
+  const { DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  const { piHostDir } = await import("../config/pi-host.js");
+  const agentDir = piHostDir();
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager: SettingsManager.create(cwd, agentDir),
+    noExtensions: true,
+    ...(policy.paths.length > 0 ? { additionalSkillPaths: policy.paths } : {}),
+  });
+  await loader.reload();
+  const kept = capSkills(loader.getSkills().skills, policy.max).kept;
+  return kept.map((s) => ({ name: `/skill:${s.name}`, description: s.description })).sort((a, b) => a.name.localeCompare(b.name));
+}

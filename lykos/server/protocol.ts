@@ -86,6 +86,9 @@ export type Method =
   | "provider.add"
   /** An API key into a provider's credential pool, `{ provider, key }`: `{ message }`. The key is never sent back. */
   | "credential.add"
+  | "credentials.list"
+  | "skills.list"
+  | "credential.remove"
   | "session.options"
   /** P5 #42: the ledger's sessions for the session list, and which are live here. */
   | "sessions.history"

@@ -252,6 +252,21 @@ describe("engine server", () => {
       assert.ok(!stored.message.includes("sk-SERVER-SECRET"));
       const local = (await list()).find((p) => p.name === "local");
       assert.deepEqual([local?.configured, local?.reason], [true, "1 credential in the pool"]);
+
+      // The accounts: listed without secrets, removed as `lykos logout` does (disabled, never deleted).
+      const { credentials } = await a.request<{ credentials: { id: number; type: string; label: string }[] }>("credentials.list", { provider: "local" });
+      assert.deepEqual(credentials.map((c) => [c.type, c.label]), [["api_key", "key#1"]]);
+      assert.ok(!JSON.stringify(credentials).includes("sk-SERVER-SECRET"));
+      const removed = await a.request<{ message: string }>("credential.remove", { provider: "local", id: credentials[0]!.id });
+      assert.equal(removed.message, "logged out key#1 from local");
+      await assert.rejects(a.request("credential.remove", { provider: "local", id: credentials[0]!.id }), /has no credential/);
+      assert.equal((await list()).find((p) => p.name === "local")?.configured, false, "no credential left, and no key source declared");
+
+      // The skills a session here would offer, before one starts: `.lykos/skills` among Pi's own places.
+      mkdirSync(join(work, ".lykos", "skills", "fold-socks"), { recursive: true });
+      writeFileSync(join(work, ".lykos", "skills", "fold-socks", "SKILL.md"), ["---", "name: fold-socks", "description: Folds the socks.", "---", "Fold them.", ""].join("\n"));
+      const { skills } = await a.request<{ skills: { name: string; description: string }[] }>("skills.list", { cwd: work });
+      assert.deepEqual(skills.find((k) => k.name === "/skill:fold-socks"), { name: "/skill:fold-socks", description: "Folds the socks." });
       a.close();
     } finally {
       if (before === undefined) delete process.env.LYKOS_CREDENTIALS_DB;
