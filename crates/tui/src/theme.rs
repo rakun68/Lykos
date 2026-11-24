@@ -1,5 +1,5 @@
 //! The colours. Lykos's shipped palettes (`lykos/tui/theme/palettes.ts`, hex values checked there against
-//! rose-pine/neovim and catppuccin/palette), reduced to the roles this TUI draws with. One is current at a
+//! rose-pine/neovim and catppuccin/palette; gruvbox from morhetz/gruvbox), reduced to the roles this TUI draws with. One is current at a
 //! time: OpenCode's `theme.switch` picks it, `theme.switch_mode` moves to its light or dark pair. `tui.colors` in a
 //! config layer sets any role over every palette (#58 item 9); the palette in effect is resolved once, when either
 //! changes, so a frame reads a pointer and never a lookup.
@@ -64,10 +64,13 @@ const fn rose(name: &'static str, pair: &'static str, base: Option<Color>, r: [u
 }
 
 /// Sorted by name, as OpenCode's `dialog-theme-list.tsx` lists them.
-pub const PALETTES: [Palette; 6] = [
+pub const PALETTES: [Palette; 8] = [
     // Catppuccin: mantle, surface0, overlay0, subtext0, text, red, yellow, blue, mauve.
     rose("catppuccin-latte", "catppuccin-mocha", Some(hex(0xeff1f5)), [0xe6e9ef, 0xccd0da, 0x9ca0b0, 0x6c6f85, 0x4c4f69, 0xd20f39, 0xdf8e1d, 0x1e66f5, 0x8839ef]),
     rose("catppuccin-mocha", "catppuccin-latte", None, [0x181825, 0x313244, 0x6c7086, 0xa6adc8, 0xcdd6f4, 0xf38ba8, 0xf9e2af, 0x89b4fa, 0xcba6f7]),
+    // Gruvbox: bg0_h, bg1, gray, fg4, fg1, red, yellow, blue, orange; light: bg0_s, bg2 and the faded colours.
+    rose("gruvbox-dark", "gruvbox-light", None, [0x1d2021, 0x3c3836, 0x928374, 0xa89984, 0xebdbb2, 0xfb4934, 0xfabd2f, 0x83a598, 0xfe8019]),
+    rose("gruvbox-light", "gruvbox-dark", Some(hex(0xfbf1c7)), [0xf2e5bc, 0xd5c4a1, 0x928374, 0x7c6f64, 0x3c3836, 0x9d0006, 0xb57614, 0x076678, 0xaf3a03]),
     rose("rose-pine", "rose-pine-dawn", None, [0x1f1d2e, 0x26233a, 0x6e6a86, 0x908caa, 0xe0def4, 0xeb6f92, 0xf6c177, 0x31748f, 0xc4a7e7]),
     rose("rose-pine-dawn", "rose-pine-moon", Some(hex(0xfaf4ed)), [0xfffaf3, 0xf2e9e1, 0x9893a5, 0x797593, 0x464261, 0xb4637a, 0xea9d34, 0x286983, 0x907aa9]),
     rose("rose-pine-moon", "rose-pine-dawn", None, [0x2a273f, 0x393552, 0x6e6a86, 0x908caa, 0xe0def4, 0xeb6f92, 0xf6c177, 0x3e8fb0, 0xc4a7e7]),
@@ -76,7 +79,7 @@ pub const PALETTES: [Palette; 6] = [
 
 thread_local! {
     /// Per thread, so tests that switch it run side by side; the TUI draws on one thread.
-    static CURRENT: Cell<usize> = const { Cell::new(5) };
+    static CURRENT: Cell<usize> = const { Cell::new(7) };
     static OVERRIDES: RefCell<Vec<(usize, Color)>> = const { RefCell::new(Vec::new()) };
     /// Leaked once per theme or colour change (a few a session), so `c()` hands out a reference and copies nothing.
     static RESOLVED: Cell<Option<&'static Palette>> = const { Cell::new(None) };

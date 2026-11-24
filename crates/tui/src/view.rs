@@ -509,7 +509,7 @@ fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
     if n > shown.len() {
         let y = top + shown.len() as u16;
         let below = n - first - shown.len();
-        let count = format!("↑ {first} above · ↓ {below} below · {n} matches");
+        let count = format!("↑ {first}  ↓ {below}");
         buf.fill(x, y, width, 1, Style::default().on(c().overlay));
         buf.text(x + 1, y, width.saturating_sub(2), &count, theme::muted().on(c().overlay));
     }
@@ -618,22 +618,72 @@ fn dialog(app: &App, buf: &mut Buffer) {
             ("Commands".into(), lines, at, format!("{} {run} · {close}", k("dialog.select.submit")))
         }
         Dialog::Skills { query, selected } => {
-            // Two rows a skill: its name, then as much of its description as one row holds, cut with an ellipsis.
+            // Two rows a skill: its name on the left, its description on the right over two rows, cut with an
+            // ellipsis past them.
+            let skills = app.skills(query);
+            let nw = skills.iter().map(|s| s.name.width()).max().unwrap_or(0).min(inner / 3);
+            let dw = inner.saturating_sub(nw + 3).max(8);
             let mut lines = Vec::new();
             let mut at = None;
-            for (i, s) in app.skills(query).iter().enumerate() {
+            for (i, s) in skills.iter().enumerate() {
                 if i == *selected {
                     at = Some(lines.len());
                 }
-                lines.push(line(s.name.clone(), theme::text().bold()));
                 let text = s.description.split_whitespace().collect::<Vec<_>>().join(" ");
-                lines.push(Line { with_prev: true, ..line(ellipsis(&text, inner.saturating_sub(4)), theme::muted()) });
+                let rows = wrap(&text, dw);
+                let first = rows.first().cloned().unwrap_or_default();
+                let second = match rows.len() {
+                    0 | 1 => String::new(),
+                    2 => rows[1].clone(),
+                    _ => {
+                        let mut s = ellipsis(&rows[1], dw - 1);
+                        if !s.ends_with('…') {
+                            s.push('…');
+                        }
+                        s
+                    }
+                };
+                let name = ellipsis(&s.name, nw);
+                let pad = nw - name.width() + 2;
+                lines.push(runs(vec![(format!("{name}{}", " ".repeat(pad)), theme::text().bold()), (first, theme::muted())]));
+                lines.push(Line { with_prev: true, ..runs(vec![(" ".repeat(nw + 2), theme::text()), (second, theme::muted())]) });
             }
             if lines.is_empty() {
                 lines.push(line(if query.is_empty() { "No skills: open a session first" } else { "No matching skills" }, theme::muted()));
             }
             search = Some(("Search skills", query.clone()));
             ("Skills".into(), lines, at, format!("{} use · {close}", k("dialog.select.submit")))
+        }
+        Dialog::Provider(f) => {
+            let key_only = f.provider.is_some();
+            let mut lines = Vec::new();
+            for (i, field) in f.fields().iter().enumerate() {
+                let value = f.shown(*field);
+                let focused = i == f.focus;
+                let (shown, style) = if field.choice() {
+                    (format!("‹ {value} ›"), Style::fg(c().accent).bold())
+                } else if value.is_empty() {
+                    (field.placeholder(key_only).to_string(), theme::subtle())
+                } else {
+                    (value, theme::text())
+                };
+                let caret = if focused && !field.choice() { "▏" } else { "" };
+                let (shown, caret) = if focused && !field.choice() && f.shown(*field).is_empty() { (String::new(), format!("▏{shown}")) } else { (shown, caret.to_string()) };
+                lines.push(runs(vec![(format!("{:<10}", field.label()), theme::muted()), (shown, style), (caret, theme::subtle())]));
+            }
+            if f.busy {
+                lines.push(line("", theme::text()));
+                lines.push(line("Saving…", theme::muted()));
+            } else if let Some(e) = &f.error {
+                lines.push(line("", theme::text()));
+                lines.push(line(e.clone(), Style::fg(c().love)));
+            }
+            let keys = if key_only {
+                format!("{} save · {close}", k("dialog.select.submit"))
+            } else {
+                format!("↑↓ field · ←→ choice · {} next, save on the last · {close}", k("dialog.select.submit"))
+            };
+            (f.title(), lines, Some(f.focus), keys)
         }
         Dialog::Help { scroll } => {
             let mut rows = vec![
@@ -817,8 +867,14 @@ fn dialog(app: &App, buf: &mut Buffer) {
     };
     let search = search.filter(|_| search_h > 0);
     // A list longer than the dialog scrolls with its selection; the heading above the first row stays in view.
+    // The selection stays in the middle, except near either end.
     let skip = scrolled.map_or_else(
-        || selected.map_or(0, |s| if s == 1 && lines.first().is_some_and(|l| l.heading) { 0 } else { (s + 1).saturating_sub(room) }),
+        || {
+            selected.map_or(0, |s| {
+                let span = 1 + usize::from(lines.get(s + 1).is_some_and(|l| l.with_prev));
+                crate::menu::centered(s, span, lines.len(), room)
+            })
+        },
         |s| s.min(lines.len().saturating_sub(room)),
     );
     let body = (lines.len().min(room) as u16).max(1);
@@ -867,7 +923,8 @@ fn dialog(app: &App, buf: &mut Buffer) {
         if !l.runs.is_empty() {
             let mut col = x + 2;
             for (t, st) in &l.runs {
-                col = buf.text(col, ly, (x + 2 + width).saturating_sub(col), t, st.on(c().surface));
+                let st = if on { style } else { st.on(c().surface) };
+                col = buf.text(col, ly, (x + 2 + width).saturating_sub(col), t, st);
             }
             continue;
         }
@@ -892,7 +949,20 @@ fn dialog(app: &App, buf: &mut Buffer) {
             buf.set(sx, top + i as u16, Cell { ch: if on { '┃' } else { '│' }, style: Style::fg(if on { c().accent } else { c().overlay }).on(c().surface) });
         }
     }
-    buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), &keys, theme::muted().on(c().surface));
+    // How many items are above and below the view, where the list scrolls; a heading or a second row is no item.
+    let mut keys_w = dw.saturating_sub(4);
+    if bar && scrolled.is_none() {
+        let item = |l: &Line| !l.heading && !l.with_prev;
+        let above = lines[..skip].iter().filter(|l| item(l)).count();
+        let below = lines[(skip + body as usize).min(lines.len())..].iter().filter(|l| item(l)).count();
+        let count = format!("↑ {above}  ↓ {below}");
+        let cw = count.width() as u16;
+        if cw + 8 < dw {
+            buf.text(x + dw - 2 - cw, y + dh - 1, cw, &count, theme::muted().on(c().surface));
+            keys_w = keys_w.saturating_sub(cw + 2);
+        }
+    }
+    buf.text(x + 2, y + dh - 1, keys_w, &keys, theme::muted().on(c().surface));
 }
 
 /// A select dialog's rows (`dialog-select.tsx`): each category headed (a search shows none), the row in use
@@ -1406,9 +1476,51 @@ mod tests {
         let s = screen(&buf);
         assert!(s.contains("Press ctrl+p to see all available actions"), "{s}");
         assert!(s.contains("Leader") && s.contains("ctrl+x · default"), "{s}");
-        app.dialog = Some(Dialog::Help { scroll: 119 });
+        app.dialog = Some(Dialog::Help { scroll: 120 });
         draw(&app, &mut buf);
         assert!(screen(&buf).contains("Undo in input"), "scrolled to the input actions");
+    }
+
+    #[test]
+    fn skills_show_the_name_left_and_two_rows_of_description_and_a_long_list_counts_what_is_hidden() {
+        let mut app = app_with_session();
+        let long = "word ".repeat(80);
+        let commands: Vec<lykos_client::CommandInfo> = (0..30)
+            .map(|i| lykos_client::CommandInfo { name: format!("/skill:s{i:02}"), description: if i == 0 { long.clone() } else { "short".into() }, source: "skill".into() })
+            .collect();
+        app.on_event(&Event { event: "commands".into(), session: "s1".into(), seq: 6, data: EventData::Commands { commands } });
+        app.dialog = Some(Dialog::Skills { query: String::new(), selected: 0 });
+        let mut buf = Buffer::new(120, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        let rows: Vec<&str> = s.lines().filter(|l| l.contains("word")).collect();
+        assert_eq!(rows.len(), 2, "two rows of description: {s}");
+        assert!(rows[0].contains("/skill:s00") && rows[1].contains("word…"), "{s}");
+        assert!(s.contains("↑ 0  ↓ "), "{s}");
+        // The selection stays in the middle: twelve down, items are hidden above as well.
+        app.dialog = Some(Dialog::Skills { query: String::new(), selected: 12 });
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("/skill:s12") && !s.contains("↑ 0 ") && !s.contains("below"), "{s}");
+    }
+
+    #[test]
+    fn the_provider_popup_shows_every_field_with_the_key_masked() {
+        let mut app = App::new("C:/work".into());
+        app.connected();
+        app.ask_custom();
+        if let Some(Dialog::Provider(f)) = &mut app.dialog {
+            f.name = "local".into();
+            f.key = "secret".into();
+        }
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("Add a custom provider") && s.contains("Base URL") && s.contains("‹ OpenAI Chat Completions ›"), "{s}");
+        assert!(s.contains("••••••") && !s.contains("secret"), "{s}");
+        theme::set("gruvbox-dark");
+        assert_eq!(theme::c().pair, "gruvbox-light");
+        theme::set("sky");
     }
 
     #[test]

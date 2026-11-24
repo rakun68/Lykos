@@ -112,15 +112,21 @@ pub struct Menu {
 }
 
 impl Menu {
-    /// The first entry shown: the selection stays in the window of `LIMIT`.
+    /// The first entry shown: the selection stays in the middle of the window of `LIMIT`, except near either end.
     pub fn first(&self) -> usize {
-        (self.selected + 1).saturating_sub(LIMIT)
+        centered(self.selected, 1, self.entries.len(), LIMIT)
     }
 
     /// The rows it takes: the window, and a count row when there is more than fits.
     pub fn height(&self) -> usize {
         self.entries.len().min(LIMIT) + usize::from(self.entries.len() > LIMIT)
     }
+}
+
+/// The first of `room` rows shown out of `len`, keeping the item at `at` (`span` rows tall) in the middle, except
+/// near either end: what the completion and every dialog list scroll by.
+pub fn centered(at: usize, span: usize, len: usize, room: usize) -> usize {
+    at.saturating_sub(room.saturating_sub(span) / 2).min(len.saturating_sub(room))
 }
 
 /// Which completion the cursor is in, if any: the trigger, its offset, and the query.
@@ -228,7 +234,11 @@ mod tests {
         let mut m = Menu { trigger: Trigger::At, at: 0, entries: all, selected: 0 };
         assert_eq!((m.first(), m.height()), (0, LIMIT + 1));
         m.selected = 14;
-        assert_eq!(m.first(), 5, "the selection stays the window's last row");
+        assert_eq!(m.first(), 10, "the selection stays in the middle");
+        m.selected = 2;
+        assert_eq!(m.first(), 0, "near the top the window does not move");
+        m.selected = 29;
+        assert_eq!(m.first(), 20, "nor near the bottom");
         let got = commands("stash", &[]);
         assert_eq!(got[0].label, "/stash");
         assert!(got.iter().any(|e| e.label == "/stash pop"));

@@ -74,6 +74,7 @@ pub const DEFS: &[Def] = &[
     def("session.verbosity.cycle", "none", "Cycle transcript verbosity", "Session"),
     def("app.toggle.animations", "none", "Toggle animations", "App"),
     def("app.toggle.diffwrap", "none", "Toggle diff wrapping", "App"),
+    def("app.server.restart", "none", "Restart the engine server", "App"),
     // OpenCode's diff viewer (P5 #46); `gg` is the viewer's own, besides `diff.first`'s keys.
     def("diff.open", "none", "Open diff viewer", "Session"),
     def("diff.close", "escape,q", "Close diff viewer", "Diff"),

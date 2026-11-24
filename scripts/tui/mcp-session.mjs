@@ -76,7 +76,7 @@ try {
   });
   await step("a slash lists commands in a window with a count of the rest (#58 item 1)", async () => {
     await call("send_text", { sessionId: id, text: "/" });
-    await waitText("↓ [0-9]+ below");
+    await waitText("↑ [0-9]+  ↓ [0-9]+");
     await call("send_keys", { sessionId: id, keys: "Down" });
     await call("send_keys", { sessionId: id, keys: "Escape" });
     await call("send_keys", { sessionId: id, keys: "Backspace" });
@@ -87,6 +87,11 @@ try {
     await call("send_keys", { sessionId: id, keys: "Enter" });
     await waitText("Add a custom provider");
     await waitText("API key · ");
+  });
+  await step("its first row opens the custom provider popup, every field at once", async () => {
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Base URL");
+    await waitText("Save to");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
   await step("a typed prompt is sent with Enter and answered", async () => {

@@ -149,6 +149,8 @@ pub enum Dialog {
     Worktrees { selected: usize, confirm: Option<String> },
     /// A line typed: a session's new name, a worktree's name, a directory.
     Input { title: String, text: String, purpose: Purpose },
+    /// `/connect`'s popup: a provider's API key, or a custom provider and its key.
+    Provider(crate::form::ProviderForm),
     /// `dialog-shell-output.tsx`: a background job's output, its last 64 KiB, following the end while `scroll` is 0
     /// (rows up from the end). `offset` is where the next read starts.
     Output { job: String, command: String, text: String, offset: Option<u64>, scroll: usize, error: Option<String> },
@@ -336,9 +338,6 @@ pub struct App {
     /// From the start until the engine server's settings arrive: the loading screen shows instead of the TUI.
     pub loading: bool,
     /// A question the TUI asks for itself (`form.rs`), shown in the request dialog before a session's.
-    pub asking: Option<crate::form::Asking>,
-    /// How many it has asked: the next one's id.
-    pub asked: u64,
     /// `providers.list`'s answer: every provider `/connect` offers, with or without a session.
     pub providers: Option<Vec<lykos_client::ProviderEntry>>,
     /// The session tabs as last drawn: each one's columns on the top row, and its session.
@@ -460,8 +459,6 @@ impl App {
             exit_armed: None,
             reporting: None,
             loading: false,
-            asking: None,
-            asked: 0,
             providers: None,
             tab_hits: RefCell::new(Vec::new()),
         }
@@ -971,7 +968,20 @@ impl App {
 
     /// The engine server runs an older build than the one on disk: what it serves misses what was built since.
     pub fn stale_server(&mut self) {
-        self.notice = Some("The engine server runs an older build: close every lykos window to restart it".into());
+        self.notice = Some("The engine server runs an older build: ctrl+p, Restart the engine server".into());
+    }
+
+    /// Stops the engine server; the next request starts the one on disk, and this tab's session is resumed there.
+    /// Every session the server ran is closed, archived and resumable.
+    fn restart_server(&mut self) -> Vec<Action> {
+        self.resume = self.ledger_id();
+        if let Some(id) = self.session.take() {
+            self.tabs.close(&id);
+        }
+        self.notice = None;
+        self.providers = None;
+        self.toast(ToastKind::Info, "Restarting the engine server".into());
+        vec![Action::Call { method: "server.shutdown", params: json!({}), then: Then::Quiet }]
     }
 
     /// A session command a list runs, sent as if typed: it takes effect on the next request.
@@ -1244,8 +1254,16 @@ impl App {
                 if matches!(then, Then::Started { .. }) {
                     self.starting = false;
                 }
+                // A server older than this TUI does not know what was added since.
+                if e.contains("unknown method") {
+                    self.stale_server();
+                    if matches!(self.dialog, Some(Dialog::Provider(_))) {
+                        self.dialog = None;
+                    }
+                    return Vec::new();
+                }
                 if matches!(then, Then::ProviderAdded(_) | Then::KeyStored) {
-                    self.toast(ToastKind::Error, e);
+                    self.on_provider_error(e);
                     return Vec::new();
                 }
                 self.notice = Some(e);
@@ -1276,7 +1294,7 @@ impl App {
                 Ok(p) => self.providers = Some(p.providers),
                 Err(e) => self.notice = Some(format!("the provider list: {e}")),
             },
-            Then::ProviderAdded(id) => self.on_provider_added(&id, v["path"].as_str().unwrap_or_default()),
+            Then::ProviderAdded(id) => return self.on_provider_added(&id, v["path"].as_str().unwrap_or_default()),
             Then::KeyStored => return self.on_key_stored(v["message"].as_str().unwrap_or_default()),
             Then::Refresh { all } => return vec![self.history_call(all, Then::History)],
             Then::Exported => self.toast(ToastKind::Success, format!("Exported to {}", v["path"].as_str().unwrap_or_default())),
@@ -1801,6 +1819,7 @@ impl App {
                     *selected = 0;
                 }
                 Dialog::Input { text, .. } => text.push_str(&line),
+                Dialog::Provider(f) => f.paste(&line),
                 _ => {}
             }
             return Vec::new();
@@ -2104,6 +2123,7 @@ impl App {
             "agent.cycle" => return Some(self.cycle_specialist(1)),
             "agent.cycle.reverse" => return Some(self.cycle_specialist(-1)),
             "provider.connect" => return Some(self.open_list(List::Providers)),
+            "app.server.restart" => return Some(self.restart_server()),
             "lykos.mode" => return Some(self.command("/mode".into())),
             "lykos.permissions" => return Some(self.command("/permissions".into())),
             "lykos.output_style" => return Some(self.command("/output-style".into())),
@@ -2190,6 +2210,9 @@ impl App {
         if let Dialog::Skills { query, selected } = dialog {
             return self.skills_key(key, &ids, query, selected, page);
         }
+        if let Dialog::Provider(f) = dialog {
+            return self.provider_form_key(key, &ids, f);
+        }
         match dialog {
             Dialog::List { list, query, selected } => return self.list_key(key, &ids, list, query, selected, page),
             Dialog::Sessions { query, selected, all, confirm } => return self.sessions_key(key, &ids, query, selected, all, confirm, page),
@@ -2205,7 +2228,7 @@ impl App {
         let step = |sel: usize, n: usize, up: bool| if n == 0 { 0 } else if up { (sel + n - 1) % n } else { (sel + 1) % n };
         let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
-            Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
+            Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::Provider(_) | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
             Dialog::Output { .. } => {
                 if has("dialog.select.submit") {
                     self.dialog = None;
@@ -3422,15 +3445,14 @@ mod tests {
         app.providers = Some(vec![entry("anthropic", "oauth", true), entry("openai", "api_key", false)]);
         assert_eq!(sent(&app.connect("anthropic")), ["/login anthropic"]);
         assert!(app.connect("openai").is_empty());
-        assert!(matches!(&app.asking, Some(crate::form::Asking { form: crate::form::Form::Key { provider }, .. }) if provider == "openai"));
-        assert!(app.request().is_some_and(|r| r.secret), "the key is masked");
+        assert!(matches!(&app.dialog, Some(Dialog::Provider(f)) if f.provider.as_deref() == Some("openai")));
         // The list opens on "Add a custom provider…"; a configured provider is marked current.
         let rows = app.list_rows(&List::Providers, "");
         assert_eq!(rows[0].value, CUSTOM_PROVIDER);
         assert!(rows.iter().any(|r| r.value == "anthropic" && r.current));
         assert!(rows.iter().any(|r| r.value == "openai" && !r.current));
         assert!(app.connect(CUSTOM_PROVIDER).is_empty());
-        assert!(matches!(&app.asking, Some(crate::form::Asking { form: crate::form::Form::Custom { .. }, .. })));
+        assert!(matches!(&app.dialog, Some(Dialog::Provider(f)) if f.provider.is_none()));
     }
 
     #[test]
@@ -3438,21 +3460,47 @@ mod tests {
         let mut app = App::new("/w".into());
         app.connected();
         assert!(app.live().is_none());
+        let form = |app: &App| match &app.dialog {
+            Some(Dialog::Provider(f)) => f.clone(),
+            other => panic!("no provider popup: {other:?}"),
+        };
         app.ask_key("openai");
-        assert_eq!(app.request().map(|r| r.title.as_str()), Some("openai API key"));
-        let out = app.form_answer("sk-test".into());
-        assert!(matches!(&out[..], [Action::Call { method: "credential.add", .. }]));
-        assert!(app.request().is_none());
+        assert!(press(&mut app, key(KeyCode::Enter)).is_empty());
+        assert_eq!(form(&app).error.as_deref(), Some("API key is empty"));
+        typed(&mut app, "sk-test");
+        assert_eq!(form(&app).shown(crate::form::Field::Key), "•••••••", "masked");
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&out[..], [Action::Call { method: "credential.add", params, .. }] if params["key"] == "sk-test"));
+        app.on_key_stored("logged in");
+        assert!(app.dialog.is_none());
+        // A custom provider: every field in one popup, the key with it.
         app.ask_custom();
-        for answer in ["local", "openai-completions", "http://localhost:11434/v1"] {
-            assert!(app.form_answer(answer.into()).is_empty(), "the next question");
-        }
-        assert_eq!(app.request().map(|r| r.title.as_str()), Some("Models"));
-        assert!(app.form_answer("a, b".into()).is_empty());
-        let out = app.form_answer("global".into());
-        assert!(matches!(&out[..], [Action::Call { method: "provider.add", params, .. }] if params["id"] == "local" && params["models"] == "a, b"));
-        app.ask_key("x");
-        assert!(app.form_answer("  ".into()).is_empty() && app.request().is_none(), "empty gives up");
+        typed(&mut app, "local");
+        press(&mut app, key(KeyCode::Tab));
+        press(&mut app, key(KeyCode::Right));
+        assert_eq!(form(&app).api, 1, "right picks the next API");
+        press(&mut app, key(KeyCode::Left));
+        press(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "http://localhost:11434/v1");
+        press(&mut app, key(KeyCode::Down));
+        app.on_paste("a, b");
+        press(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "k1");
+        press(&mut app, key(KeyCode::Enter));
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&out[..], [Action::Call { method: "provider.add", params, .. }] if params["id"] == "local" && params["models"] == "a, b" && params["api"] == "openai-completions" && params["scope"] == "global"));
+        assert!(press(&mut app, key(KeyCode::Char('x'))).is_empty() && form(&app).models == "a, b", "busy: keys wait");
+        app.on_reply(Then::ProviderAdded("local".into()), Err("provider local is declared already".into()));
+        assert_eq!(form(&app).error.as_deref(), Some("provider local is declared already"), "the popup stays with the reason");
+        let out = press(&mut app, key(KeyCode::Enter));
+        let out = match &out[..] {
+            [Action::Call { then, .. }] => app.on_reply(then.clone(), Ok(json!({ "path": "/c/config.yaml" }))),
+            _ => panic!("{out:?}"),
+        };
+        assert!(matches!(&out[..], [Action::Call { method: "credential.add", params, .. }] if params["provider"] == "local" && params["key"] == "k1"));
+        // A server that does not know the method is older than this TUI.
+        app.on_reply(Then::KeyStored, Err("unknown method credential.add".into()));
+        assert!(app.dialog.is_none() && app.notice.as_deref().is_some_and(|n| n.contains("Restart the engine server")));
     }
 
     #[test]

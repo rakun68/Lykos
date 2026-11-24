@@ -232,12 +232,15 @@ runs: `Ctrl+C` copies a selection, else clears the prompt, else asks for a secon
 `Ctrl+P` opens the palette over the dimmed screen: a search box, then every action of the App, Session, Agent,
 System, Prompt and Input groups and every slash command in a Commands group, each under its group's heading, with its
 keys in their own colour and, where it is not a default, the layer that set it. Each heading sits on a band of the
-overlay colour, with a blank row before it. A scroll bar shows where the view is in a longer list. Typing filters it
+overlay colour, with a blank row before it. A scroll bar shows where the view is in a longer list, and the bottom row counts the items above and below it
+(`↑ 3  ↓ 25`); the selection stays in the middle of the view except near either end, in every dialog list and in the
+completion, whose count row reads the same. Typing filters it
 by title, group and id (the title weighted twice) across the groups; `Enter` runs the selected row. A setting
 (verbosity, thinking, tool call grouping, scrollbar, animations, diff wrapping, sidebar, terminal pane, terminal title)
 is drawn `Name: value`, the value in the accent colour; `Enter` and `Right` change it to the next value, `Left` to the
-previous, and the palette stays open. Skills are one `Skills` row with their count: it opens a list of its own, two
-rows a skill (its name, then its description cut to one row with `…`), searched by name and description; `Enter`
+previous, and the palette stays open. Skills are one `Skills` row with their count: it opens a wider list of its
+own, the name on the left and the description on the right over two rows, cut with `…` past them, searched by name
+and description; `Enter`
 puts the skill in the prompt. A palette search finds commands, not skills. `/help` lists every key of every group and
 the layer that set it.
 
@@ -277,15 +280,19 @@ shows the head estimate as the context bar until a request measures it, never `u
 without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser` (OAuth) or
 `API key` and why; a provider already configured (a credential in its pool, its environment variable, or a declared
 source) is drawn in the accent colour. A provider with OAuth sends `/login <name>`, starting a session when none is
-open; any other has its API key asked for by the TUI, in the request dialog, drawn as `•`, and stored by the server's
-`credential.add` without a session. An engine server older than its build on disk (it outlives TUI windows) says so in
-a notice: close every lykos window to restart it.
+open; any other has its API key asked for in a popup of its own, drawn as `•`, and stored by the server's
+`credential.add` without a session. An engine server older than its build on disk, or one that answers `unknown
+method`, says so in a notice. It outlives TUI windows while it has sessions; `Restart the engine server` in the palette
+stops it (its sessions are closed, archived and resumable), the next request starts the one on disk, and this tab's
+session is resumed there.
 
-**Custom providers.** The `/connect` list opens on `Add a custom provider…`. The TUI asks, one dialog each, with or
-without a session, and the server's `provider.add` writes it: the provider's name, its API (`openai-completions`, `openai-responses`,
+**Custom providers.** The `/connect` list opens on `Add a custom provider…`, a popup with every field at once, with
+or without a session: `↑`/`↓` or `Tab` move between fields, `←`/`→` change a choice, `Enter` goes to the next field
+and saves on the last; a missing field or the server's refusal shows under the fields and the popup stays. The
+server's `provider.add` writes it: the provider's name, its API (`openai-completions`, `openai-responses`,
 `anthropic-messages`, `google-generative-ai`), its base URL, its model ids, and whether to save it to the global or
 the project `config.yaml`. It appends the declaration to that file's `providers:` block, leaving the rest of the file
-as it was, then asks for the key. A new session uses it, as `<name>/<model>`. A
+as it was, then stores the key when one was typed (it is optional). A new session uses it, as `<name>/<model>`. A
 name in use, a URL that is not http or https, or no model id stops it with the reason, and nothing is written.
 `/provider add` on the line surface asks the same questions as lines.
 
@@ -326,8 +333,8 @@ command, so it takes effect on the next request.
 
 `model.cycle_favorite`, `variant.list`, `usage.show`, `theme.switch_mode` and the rest have no key
 by default; the palette runs them. With an argument, `/model`, `/effort`, `/specialist` and `/login`
-go to the session as before. Six themes: `sky` (the default), `rose-pine`, `rose-pine-moon`,
-`rose-pine-dawn`, `catppuccin-mocha`, `catppuccin-latte`; the mode switch goes to the other of a
+go to the session as before. Eight themes: `sky` (the default), `rose-pine`, `rose-pine-moon`,
+`rose-pine-dawn`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`; the mode switch goes to the other of a
 dark and light pair. The theme, the last 10 models (newest first) and the favorites are kept in
 `~/.lykos/tui/state.json` (or `$LYKOS_TUI_DIR`).
 
@@ -338,7 +345,7 @@ Where the lists differ from OpenCode on purpose:
 - Before a session exists the lists are empty: they come from the session's own runtime.
 - The model list shows no usage limits; the usage dialog shows Lykos's own cost and cache figures.
 - No variant list follows a model choice.
-- Six palettes, no `ansi16` or `mono`, and no `theme.mode.lock`; `ui.theme` in config is not read.
+- Eight palettes, no `ansi16` or `mono`, and no `theme.mode.lock`; `ui.theme` in config is not read.
 - A Lykos session connects to no MCP servers, so both dialogs say so.
 - An API key is never typed into the TUI.
 - The debug dialog has no date row.
