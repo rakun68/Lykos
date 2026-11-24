@@ -3,6 +3,7 @@
 //! request replies. It sleeps while nothing on screen moves and draws only after a change.
 mod app;
 mod diff;
+mod diffview;
 mod editor;
 mod history;
 mod keymap;
@@ -525,6 +526,44 @@ fn bench(app: &mut App, term: &mut Terminal<io::Stdout>) {
         if let Ok(path) = std::env::var("BENCH_OUT") {
             let text: Vec<String> = times.iter().map(|t| t.to_string()).collect();
             let _ = std::fs::write(path, text.join("\n"));
+        }
+        return;
+    }
+    // `BENCH_DIFF=<lines>`: the diff viewer full screen on one file's patch that many lines long, a change on each
+    // line; the first frame lays it out, then each frame scrolls it `BENCH_ROWS` rows, down for a hundred frames and
+    // up for a hundred (P5 #46, `scripts/tui/scroll-measure.mjs --diff`).
+    if let Some(lines) = std::env::var("BENCH_DIFF").ok().and_then(|v| v.parse::<usize>().ok()) {
+        let mut patch = format!("diff --git a/big.rs b/big.rs
+--- a/big.rs
++++ b/big.rs
+@@ -1,{0} +1,{0} @@
+", lines / 2);
+        for i in 0..lines / 2 {
+            patch.push_str(&format!("-    let value_{i} = compute(input, {i}); // the old line
++    let value_{i} = compute(input, {i} + 1); // the new line
+"));
+        }
+        app.open_diff();
+        app.on_reply(app::Then::Diff, Ok(serde_json::json!({ "base": "HEAD", "branch": "main", "files": [{ "file": "big.rs", "status": "modified", "additions": lines / 2, "deletions": lines / 2, "patch": patch }] })));
+        if let Some(v) = app.diff.as_mut() {
+            v.fullscreen = true;
+        }
+        let rows = std::env::var("BENCH_ROWS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+        let mut times = Vec::with_capacity(frames + 1);
+        for i in 0..=frames {
+            if i > 0 {
+                if let Some(v) = app.diff.as_mut() {
+                    v.scroll = if (i - 1) % 200 < 100 { v.scroll + rows } else { v.scroll.saturating_sub(rows) };
+                }
+            }
+            let t = Instant::now();
+            let _ = term.draw(|b| view::draw(app, b));
+            times.push(t.elapsed().as_micros());
+        }
+        if let Ok(path) = std::env::var("BENCH_OUT") {
+            let text: Vec<String> = times.iter().map(|t| t.to_string()).collect();
+            let _ = std::fs::write(path, text.join("
+"));
         }
         return;
     }

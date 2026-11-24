@@ -28,7 +28,7 @@ pub enum Local {
     Run(&'static str),
 }
 
-pub const LOCAL: [(Local, &str, &str); 20] = [
+pub const LOCAL: [(Local, &str, &str); 21] = [
     (Local::Btw, "/btw", "Ask a side question; the answer stays out of the conversation"),
     (Local::Editor, "/editor", "Open the prompt in your editor"),
     (Local::Images, "/images", "View the images attached to the prompt"),
@@ -50,6 +50,7 @@ pub const LOCAL: [(Local, &str, &str); 20] = [
     (Local::Run("session.timeline"), "/timeline", "Jump to message"),
     (Local::Run("session.move"), "/worktrees", "Manage workspaces"),
     (Local::Run("messages.copy"), "/copy", "Copy last assistant message"),
+    (Local::Run("diff.open"), "/diff", "Open diff viewer"),
 ];
 
 /// The session's own commands typed bare open their list; with an argument they go to the session.

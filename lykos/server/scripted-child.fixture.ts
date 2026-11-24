@@ -68,6 +68,19 @@ process.on("message", (msg: ToChild) => {
         send({ kind: "status", status: "waiting" });
         break;
       }
+      if (msg.text === "approve") {
+        // An edit's approval, as the gate's request reaches a client (P5 #46).
+        asked = "r2";
+        const patch = "--- notes.md\n+++ notes.md\n@@ -1,1 +1,2 @@\n # notes\n+a new line\n";
+        const options = [
+          { value: "y", label: "Allow once" },
+          { value: "a", label: "Always allow edit this session", note: "This will allow every edit for the rest of this session." },
+          { value: "n", label: "Deny" },
+        ];
+        send({ kind: "event", data: { type: "request", request: { requestId: asked, kind: "approval", title: "edit: notes.md", detail: "notes.md", patch, options } } });
+        send({ kind: "status", status: "waiting" });
+        break;
+      }
       if (msg.text === "tool") {
         // A tool call and the usage after it, as a real turn sends them (the TUI's end-to-end test, #37).
         send({ kind: "event", data: { type: "tool.start", toolId: "t1", name: "read", summary: "README.md", args: { path: "README.md" } } });

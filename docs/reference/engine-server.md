@@ -69,6 +69,7 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `worktree.list` | `{cwd}` | `[{path, branch, head, main, sessions}]`: the repository's worktrees, the main checkout first; `sessions` when a live session runs in it |
 | `worktree.create` | `{cwd, name}` | `{path, branch, head, main}`: a worktree at `~/.lykos/worktrees/<project id>/<name>` on the branch `lykos/<name>` |
 | `worktree.remove` | `{cwd, path}` | `{removed, savedUncommitted, saved?, note?}`: uncommitted work is committed onto the branch and ignored files the sessions wrote are archived beside it, then the worktree is removed. The branch stays. Only a worktree Lykos made is removed: under `~/.lykos/worktrees/<project id>/` on a `lykos/` branch. Refused for the main checkout, a detached or other worktree, and while a session runs there or in a directory under it, here or in another process (its lock is held) |
+| `vcs.diff` | `{cwd, mode}` | `{base?, branch?, files: [{file, status, additions, deletions, patch}]}`: the repository's changes, 12 lines of context. `branch` is everything since the merge base with the default branch (the remote's HEAD, else `init.defaultBranch`, else `main`, else `master`), untracked files included; `committed` only what is committed since it; `working` what is not committed, against `HEAD`. Before the first commit, the untracked files. A binary file, or an untracked one over 1 MiB, has an empty `patch` |
 | `subscribe` | `{sessions?, after?: {<id>: seq}}` | `{sessions: SessionSummary[]}`, then the replay |
 
 ### 2.3 Events

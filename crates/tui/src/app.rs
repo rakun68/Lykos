@@ -63,6 +63,8 @@ pub enum Then {
     Worktrees,
     /// A worktree created or removed: the list again.
     WorktreesChanged,
+    /// `vcs.diff`, for the diff viewer.
+    Diff,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -271,6 +273,8 @@ pub struct App {
     /// The approval or question prompt (P5 #46), and the diff an approval shows.
     pub req: crate::request::Ui,
     pub req_diff: RefCell<crate::request::Laid>,
+    /// The diff viewer, while open.
+    pub diff: Option<crate::diffview::Viewer>,
     pub laid: RefCell<Option<Rc<Layout>>>,
     pub frame: Cell<Option<Frame>>,
     /// Groups a click opened or closed, per session.
@@ -321,6 +325,7 @@ impl App {
             layout_cache: RefCell::new(Cache::default()),
             req: crate::request::Ui::default(),
             req_diff: RefCell::new(None),
+            diff: None,
             laid: RefCell::new(None),
             frame: Cell::new(None),
             opened: BTreeMap::new(),
@@ -936,6 +941,10 @@ impl App {
         let v = match result {
             Ok(v) => v,
             Err(e) => {
+                if then == Then::Diff {
+                    self.on_diff(Err(e));
+                    return Vec::new();
+                }
                 if matches!(then, Then::Started { .. }) {
                     self.starting = false;
                 }
@@ -970,6 +979,7 @@ impl App {
                 Err(e) => self.notice = Some(format!("the worktrees: {e}")),
             },
             Then::WorktreesChanged => return vec![self.worktrees_call()],
+            Then::Diff => self.on_diff(Ok(v)),
         }
         Vec::new()
     }
@@ -1018,6 +1028,9 @@ impl App {
     fn run_session(&mut self, id: &str) -> Option<Vec<Action>> {
         if let Some(out) = self.run_view(id) {
             return Some(out);
+        }
+        if id == "diff.open" {
+            return Some(self.open_diff());
         }
         let current = self.session.clone();
         let out = match id {
@@ -1448,6 +1461,7 @@ impl App {
     /// word and a triple click the whole prompt. The wheel scrolls the transcript.
     pub fn on_mouse(&mut self, m: MouseEvent, now: Instant) -> Vec<Action> {
         match m.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if self.diff_mouse(&m) => return Vec::new(),
             MouseEventKind::ScrollUp => {
                 self.on_scroll(true, 3);
                 return Vec::new();
@@ -1528,6 +1542,11 @@ impl App {
         if let Some(answer) = self.request_key(&key) {
             return answer;
         }
+        if self.diff.is_some() {
+            if let Some(out) = self.diff_key(&key) {
+                return out;
+            }
+        }
         if self.menu.is_some() {
             if let Some(out) = self.menu_key(&key) {
                 return out;
@@ -1557,7 +1576,7 @@ impl App {
         if let Some(out) = self.run_view(id) {
             return Some(out);
         }
-        if id.starts_with("session.") || id == "open.menu" {
+        if id.starts_with("session.") || id == "open.menu" || id == "diff.open" {
             if let Some(out) = self.run_session(id) {
                 return Some(out);
             }

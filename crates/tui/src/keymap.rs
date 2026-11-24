@@ -33,7 +33,7 @@ const fn def(id: &'static str, keys: &'static str, title: &'static str, group: &
 }
 
 /// The groups, in the order the palette and the help list them.
-pub const GROUPS: [&str; 8] = ["App", "Session", "Agent", "System", "Prompt", "Input", "Autocomplete", "Dialog"];
+pub const GROUPS: [&str; 10] = ["App", "Session", "Agent", "System", "Prompt", "Input", "Autocomplete", "Dialog", "Permission", "Diff"];
 
 /// What a group's actions are: run from anywhere, and so listed in the palette, or only inside a list or dialog.
 pub fn in_palette(group: &str) -> bool {
@@ -74,6 +74,28 @@ pub const DEFS: &[Def] = &[
     def("session.verbosity.cycle", "none", "Cycle transcript verbosity", "Session"),
     def("app.toggle.animations", "none", "Toggle animations", "App"),
     def("app.toggle.diffwrap", "none", "Toggle diff wrapping", "App"),
+    // OpenCode's diff viewer (P5 #46); `gg` is the viewer's own, besides `diff.first`'s keys.
+    def("diff.open", "none", "Open diff viewer", "Session"),
+    def("diff.close", "escape,q", "Close diff viewer", "Diff"),
+    def("diff.down", "j,down", "Move diff viewer down", "Diff"),
+    def("diff.up", "k,up", "Move diff viewer up", "Diff"),
+    def("diff.page.down", "pagedown,ctrl+f", "Page diff viewer down", "Diff"),
+    def("diff.page.up", "pageup,ctrl+b", "Page diff viewer up", "Diff"),
+    def("diff.half_page.down", "ctrl+d", "Scroll diff viewer down half a page", "Diff"),
+    def("diff.half_page.up", "ctrl+u", "Scroll diff viewer up half a page", "Diff"),
+    def("diff.first", "home", "Go to the start of the diff", "Diff"),
+    def("diff.last", "shift+g,end", "Go to the end of the diff", "Diff"),
+    def("diff.next_hunk", "]", "Jump to next diff hunk", "Diff"),
+    def("diff.previous_hunk", "[", "Jump to previous diff hunk", "Diff"),
+    def("diff.next_file", "n,alt+down", "Jump to next diff file", "Diff"),
+    def("diff.previous_file", "p,alt+up", "Jump to previous diff file", "Diff"),
+    def("diff.toggle_file_tree", "b", "Toggle diff viewer file tree", "Diff"),
+    def("diff.single_patch", "s", "Toggle single patch view", "Diff"),
+    def("diff.switch_source", "d", "Switch diff viewer source", "Diff"),
+    def("diff.toggle_view", "v", "Toggle diff viewer split or unified view", "Diff"),
+    def("diff.toggle_fullscreen", "f", "Toggle diff viewer full screen", "Diff"),
+    def("diff.mark_reviewed", "m", "Toggle selected diff file reviewed", "Diff"),
+    def("diff.help", "?,shift+?,shift+/", "Show more diff viewer shortcuts", "Diff"),
     def("session.queued_prompts", "<leader>q", "Manage queued prompts", "Session"),
     def("session.aside", "none", "Ask a side question", "Session"),
     // OpenCode's session and tab actions (P5 #42). The child and parent keys (down, right, left, up there) are

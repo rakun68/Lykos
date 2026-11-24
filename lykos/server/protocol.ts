@@ -85,6 +85,8 @@ export type Method =
   | "worktree.list"
   | "worktree.create"
   | "worktree.remove"
+  /** P5 #46: the workspace's changes for the diff viewer, `{ cwd, mode: "branch" | "committed" | "working" }`. */
+  | "vcs.diff"
   | "subscribe";
 
 // --- Events ------------------------------------------------------------------------------------------------------

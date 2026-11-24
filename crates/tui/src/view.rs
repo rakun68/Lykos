@@ -31,10 +31,35 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
         return None;
     }
     let pad = pad(w);
-    let cursor = match app.current() {
-        None => home(app, buf, pad),
-        Some(session) => session_screen(app, session, buf, pad),
+    let docked = crate::diffview::dock_width(app, w).is_some();
+    // A request waiting takes the keys, so a full-screen viewer steps aside for it.
+    let full = app.diff.is_some() && !docked && app.request().is_none();
+    let cursor = if full {
+        None
+    } else if docked {
+        // Docked, the session draws beside the viewer at the width it leaves.
+        let sw = crate::diffview::session_width(app, w);
+        let mut left = Buffer::new(sw, h);
+        let cursor = match app.current() {
+            None => home(app, &mut left, crate::view::pad(sw)),
+            Some(session) => session_screen(app, session, &mut left, crate::view::pad(sw)),
+        };
+        for y in 0..h {
+            for x in 0..sw {
+                buf.set(x, y, *left.get(x, y));
+            }
+        }
+        // The viewer has the keys; a request's typed answer keeps its cursor.
+        cursor.filter(|_| app.request().is_some())
+    } else {
+        match app.current() {
+            None => home(app, buf, pad),
+            Some(session) => session_screen(app, session, buf, pad),
+        }
     };
+    if docked || full {
+        crate::diffview::draw(app, buf);
+    }
     crate::request::draw_expanded(app, buf);
     if app.dialog.is_some() {
         dialog(app, buf);
@@ -45,6 +70,7 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
 
 /// The input's width at this screen width: what up and down move through.
 pub fn input_cols(app: &App, w: u16) -> usize {
+    let w = crate::diffview::session_width(app, w);
     let width = w.saturating_sub(2 * pad(w));
     input_width(if app.current().is_none() && !app.mini { width.min(75) } else { width })
 }

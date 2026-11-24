@@ -1,10 +1,11 @@
 // Drives the built TUI in a real pty against the real TypeScript engine server and its scripted session child
 // (P5 #37, #38): a prompt starts a session and its reply streams in; Esc twice interrupts; `/` and `@` complete;
 // a queued prompt waits for the turn; /btw answers aside; stash and history recall; sessions and tabs (#42);
-// ctrl+c quits.
+// an approval and a question are answered and /diff shows the workspace's change (#46); ctrl+c quits.
 //
 //   cargo build --release -p lykos-tui && node scripts/tui/tui-test.mjs [binary]
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -18,6 +19,11 @@ const engine = mkdtempSync(join(tmpdir(), "lykos-tui-engine-"));
 const work = mkdtempSync(join(tmpdir(), "lykos-tui-work-"));
 const state = mkdtempSync(join(tmpdir(), "lykos-tui-state-"));
 writeFileSync(join(work, "notes.md"), "# notes\n");
+const git = (...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: work, stdio: "ignore" });
+git("init", "-q", "-b", "main");
+git("add", "-A");
+git("commit", "-q", "-m", "first");
+writeFileSync(join(work, "notes.md"), "# notes\nchanged here\n");
 const env = {
   LYKOS_ENGINE_DIR: engine,
   LYKOS_TUI_DIR: state,
@@ -89,6 +95,22 @@ try {
   await step("a question shows with its options", () => s.screen().includes("which?") && s.screen().includes("1. a") && s.screen().includes("Type your own answer"));
   s.write("1");
   await step("an option's key answers it", () => !s.screen().includes("which?") && !s.screen().includes("esc interrupt"));
+  await submit("approve");
+  await step("an approval shows its diff, decisions and hints", () => s.screen().includes("△ Permission required") && s.screen().includes("+ a new line") && s.screen().includes(" Allow once ") && s.screen().includes("enter confirm"));
+  s.press("right");
+  await step("a standing decision says what it keeps allowing", () => s.screen().includes("This will allow every edit for the rest of this session."));
+  s.press("enter");
+  await step("enter answers it", () => !s.screen().includes("Permission required") && !s.screen().includes("esc interrupt"));
+  await type("/diff");
+  await s.idle(150);
+  s.press("enter");
+  await step("/diff opens the viewer on the change", () => s.screen().includes("All · vs main") && s.screen().includes("notes.md") && s.screen().includes("changed here"));
+  s.write("d");
+  await step("d switches to the branch commits", () => s.screen().includes("Committed · vs main") && s.screen().includes("No changes to show"));
+  s.write("d");
+  await step("d again, the uncommitted changes", () => s.screen().includes("Uncommitted · vs HEAD") && s.screen().includes("changed here"));
+  s.write("q");
+  await step("q closes it", () => !s.screen().includes("Uncommitted"));
   await type("/sk");
   await step("/ completes the session's commands", () => s.screen().includes("/skill:tdd"));
   s.press("tab");

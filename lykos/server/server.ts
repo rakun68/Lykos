@@ -20,6 +20,7 @@ import { defaultChildCommand, type ChildCommand } from "../delegate/session-proc
 import { isWithinRoot } from "../gate/approval.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
+import { workspaceDiff, type DiffMode } from "../git/diff.js";
 import { createNamedWorktree, listNamedWorktrees, removeNamedWorktree } from "../git/worktree.js";
 import { resolveProject } from "../session/identity.js";
 import { archiveHistorySession, exportHistorySession, historyRows, ledgerFor, projectRoot, renameHistorySession } from "./history.js";
@@ -319,6 +320,11 @@ export class EngineServer {
           path,
           ...(this.opts.worktreesRoot !== undefined ? { root: this.opts.worktreesRoot } : {}),
         });
+      }
+      case "vcs.diff": {
+        const mode = needString(params, "mode", method);
+        if (mode !== "branch" && mode !== "committed" && mode !== "working") throw new Error(`vcs.diff: unknown mode ${mode}`);
+        return workspaceDiff(needCwd(params, method), mode satisfies DiffMode);
       }
       case "subscribe":
         return this.subscribe(client, params);

@@ -215,6 +215,27 @@ pub struct Worktree {
     pub sessions: bool,
 }
 
+/// One file of `vcs.diff` (P5 #46).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileDiff {
+    pub file: String,
+    pub status: String,
+    pub additions: usize,
+    pub deletions: usize,
+    #[serde(default)]
+    pub patch: String,
+}
+
+/// `vcs.diff`: the workspace's changes against `base`, the merge base with `branch` or `HEAD`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceDiff {
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    pub files: Vec<FileDiff>,
+}
+
 /// One event; `seq` counts from 1 per session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {

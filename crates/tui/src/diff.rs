@@ -65,13 +65,6 @@ pub fn parse(patch: &str) -> Vec<Hunk> {
     hunks
 }
 
-/// Additions and deletions in a patch.
-pub fn counts(hunks: &[Hunk]) -> (usize, usize) {
-    let all = hunks.iter().flat_map(|h| &h.lines);
-    let add = all.clone().filter(|l| l.kind == Kind::Add).count();
-    (add, all.filter(|l| l.kind == Kind::Del).count())
-}
-
 /// One side of a row: its kind, its line number (0 on a wrapped line's continuation) and the text shown.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Half {
@@ -183,12 +176,19 @@ pub fn background(kind: Kind) -> (Style, Style) {
 fn paint_half(buf: &mut Buffer, x: u16, y: u16, width: u16, digits: usize, half: Option<&Half>) {
     let kind = half.map_or(Kind::Ctx, |h| h.kind);
     let (bg, gutter_bg) = background(kind);
-    buf.fill(x, y, width, 1, bg);
-    let g = gutter(digits) as u16;
-    buf.fill(x, y, g.min(width), 1, gutter_bg);
+    let g = (gutter(digits) as u16).min(width);
+    // Each cell once: the gutter, then the text's background (a frame paints every row it shows).
+    buf.fill(x, y, g, 1, gutter_bg);
+    buf.fill(x + g, y, width - g, 1, bg);
     let Some(h) = half else { return };
     if h.no > 0 {
-        buf.text(x + 1, y, g.saturating_sub(1).min(width), &format!("{:>digits$}", h.no), gutter_bg);
+        // The number right-aligned in `digits` columns, without a string.
+        let (mut n, mut col) = (h.no, x + digits as u16);
+        while n > 0 && col > x {
+            buf.set(col, y, Cell { ch: char::from(b'0' + (n % 10) as u8), style: gutter_bg });
+            n /= 10;
+            col -= 1;
+        }
     }
     let (sign, fg) = match kind {
         Kind::Add => ('+', c().pine),
@@ -233,7 +233,6 @@ mod tests {
         assert_eq!(h[0].lines.iter().map(|l| (l.kind, l.old, l.new)).collect::<Vec<_>>(), [(Kind::Ctx, 1, 1), (Kind::Del, 2, 0), (Kind::Add, 0, 2), (Kind::Ctx, 3, 3)]);
         assert_eq!(h[1].header, "@@ -10,2 +10,3 @@ fn f");
         assert_eq!(h[1].lines.iter().map(|l| l.new).collect::<Vec<_>>(), [10, 11, 12]);
-        assert_eq!(counts(&h), (2, 1));
     }
 
     #[test]

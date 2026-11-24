@@ -418,6 +418,13 @@ describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
       assert.deepEqual([removed.removed, removed.savedUncommitted], [true, true]);
       assert.equal(git(cwd, "show", "lykos/spike:a.txt"), "b");
       await assert.rejects(c.request("worktree.remove", { cwd, path: cwd }), /own checkout|not a worktree/);
+      // P5 #46: the diff viewer's changes.
+      writeFileSync(join(cwd, "a.txt"), "changed\n");
+      const diff = await c.request<{ base: string; files: { file: string; patch: string }[] }>("vcs.diff", { cwd, mode: "working" });
+      assert.equal(diff.base, "HEAD");
+      assert.deepEqual(diff.files.map((f) => f.file), ["a.txt"]);
+      assert.match(diff.files[0]!.patch, /^\+changed$/m);
+      await assert.rejects(c.request("vcs.diff", { cwd, mode: "nope" }), /unknown mode/);
       c.close();
     } finally {
       await server.stop("test");
