@@ -553,3 +553,33 @@ Speed (rule 10): `node scripts/tui/gate.mjs target/release/lykos-tui.exe --ready
 holds startup, keystroke latency, frame time, idle CPU, peak memory and binary size against
 `bench/tui-limits.json`. `node scripts/tui/tui-test.mjs` drives it end to end in a pty against the
 real server and the scripted session child.
+
+**The P5 demonstration (#56), 2026-11-24.** `node scripts/tui/compare.mjs --runs 5` measures each TUI in a
+real pty in this repository, with nothing sent to a model: startup from spawn to the input box on screen,
+keystroke to screen over 200 keystrokes, idle CPU over 3 s after typing settles, and the resident memory
+of the whole process tree the TUI starts (lykos-tui counts the `lykos` launcher and the engine server
+it starts). lykos-tui is started as a user starts it: `lykos`. One machine: Windows 10 19045, 8 logical
+processors; Linux is podman on WSL2 (kernel 6.18.58.1) on the same machine, 11.7 GiB given to the VM.
+
+| TUI | Platform | Startup p50 | Keystroke p50 / p95 | Idle CPU ms/s | Memory |
+| --- | --- | --- | --- | --- | --- |
+| lykos-tui | Windows | 268 ms | 15.56 / 16.17 ms | 0 | 206 MiB |
+| OpenCode 1.19.4 | Windows | 4109 ms | 15.68 / 31.73 ms | 4.5 | 607 MiB |
+| Claude Code 2.1.235 | Windows | 1059 ms | 15.63 / 16.24 ms | 1089.8 | 669 MiB |
+| Codex 0.171.0-alpha.13 (`--no-daemon`) | Windows | 108 ms | 47.75 / 278.91 ms | 0 | 453 MiB |
+| lykos-tui | Linux | 50 ms | 10.59 / 11.63 ms | 0 | 212 MiB |
+| OpenCode 1.19.6 | Linux | 3687 ms | 9.79 / 16.13 ms | 20.0 | 574 MiB |
+| Claude Code, Codex | Linux | unmeasured | unmeasured | unmeasured | unmeasured |
+
+Notes on method. On Windows every keystroke number near 15.6 ms is ConPTY's own cadence, not the TUI's.
+Codex draws its input box while it still says "loading", and accepts typing then (first echo at
+166 ms). Claude Code's idle CPU is its tree, which includes the MCP servers its configuration starts.
+OpenCode waits for the terminal's colour replies before its first frame; the harness answers them as
+a real terminal does. Claude Code and Codex were not installed in the Linux container: each needs a
+signed-in account to show its input box, and no credential was copied in.
+
+Result: lykos-tui uses the least memory and no idle CPU on both platforms, and has the lowest p95
+keystroke latency. It does not match or beat every other TUI on all four: Codex starts faster on
+Windows (108 ms against 268 ms, of which about 80 ms is Node starting the `lykos` launcher), and
+OpenCode's median keystroke is lower on Linux (9.79 ms against 10.59 ms). The person's session
+(demonstration 1) has not been run. P5 stays open.
