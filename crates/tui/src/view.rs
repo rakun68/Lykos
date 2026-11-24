@@ -707,7 +707,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
             ("Worktrees".into(), lines, at, keys)
         }
         Dialog::Input { title, text, .. } => (title.clone(), vec![line(format!("{text}▏"), theme::text())], None, format!("{} confirm · {close}", k("dialog.select.submit"))),
-        Dialog::Aside { question, answer, scroll } => {
+        Dialog::Aside { title, answer, scroll } => {
             let (text, style) = match answer {
                 Ok(a) => (a.as_str(), theme::text()),
                 Err(e) => (e.as_str(), Style::fg(c().love)),
@@ -715,7 +715,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
             let all = wrap(text, inner.max(1));
             let start = (*scroll).min(all.len().saturating_sub(room));
             let shown = all.into_iter().skip(start).take(room).map(|l| line(l, style)).collect();
-            (format!("/btw {}", first_line(question)), shown, None, format!("{} copy · ↑↓ scroll · {close}", k("aside.copy")))
+            (title.clone(), shown, None, format!("{} copy · ↑↓ scroll · {close}", k("aside.copy")))
         }
         // `dialog-shell-output.tsx`: the command as the title, the output's end, `Loading…` until the first read.
         Dialog::Output { command, text, offset, scroll, error, .. } => {

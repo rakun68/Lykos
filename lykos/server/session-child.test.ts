@@ -190,7 +190,8 @@ describe("a real session on the engine server", () => {
       await until((e) => e.data.type === "session.status" && e.data.session.status === "idle", "boot");
 
       await c.request("session.prompt", { session: s.id, text: "/context" });
-      await until(system(/^context /), "the context report");
+      // A command's answer is a report the TUI shows in a popup, not a line of the conversation (#58).
+      await until((e) => e.data.type === "report" && e.data.command === "context" && /^context /.test(e.data.text), "the context report");
 
       // Auto runs a write inside the workspace without asking, and the model is told the mode changed.
       await c.request("session.prompt", { session: s.id, text: "/mode auto" });

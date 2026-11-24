@@ -254,6 +254,13 @@ theme or colour change; a frame reads it through a reference.
 everything, three at most, each for 2.5 s, with a bar in its kind's colour: success, warning, error or info. Errors
 that need reading stay in the footer.
 
+**Command answers (#58).** What a session's slash command answers (`/session`, the lists of `/specialist` and
+`/output-style`, `/rewind`, `/compact`, `/mode`, `/model`) comes as a `report` event, not a line of the conversation:
+one short line is a toast (an error toast for `lykos:` refusals), more opens a popup titled with the command, and a
+second answer to the same command joins it. Only a command this TUI sent in the last minute opens one, so a replay or
+another client's command does not. `/context` is `/status`, with the context window as a bar; `/usage` opens Usage.
+The line surface prints them as before.
+
 Where the keybinds differ from OpenCode on purpose:
 
 - Lykos's defaults are this table's: `app.exit` has no `<leader>q` (that is the queue), and the

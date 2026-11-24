@@ -350,6 +350,8 @@ export interface AgentUi {
    * is why `text` is never optional.
    */
   writeSystem(text: string, parts?: readonly SystemPart[]): void;
+  /** A slash command's answer, for a surface that shows it apart from the conversation (a popup); else `writeSystem`. */
+  writeReport?(command: string, text: string): void;
   /** T124: display a queued follow-up without pretending it is a new turn. */
   writeFollowup?(text: string): void;
   writeHud(state: StandaloneSessionState, sessionId: string): ViewModel;

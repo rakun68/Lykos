@@ -110,7 +110,7 @@ impl Session {
                 self.jobs = jobs.clone();
                 self.foreground = foreground.clone();
             }
-            EventData::PromptSet { .. } | EventData::Unknown => {}
+            EventData::PromptSet { .. } | EventData::Report { .. } | EventData::Unknown => {}
         }
     }
 }

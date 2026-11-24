@@ -238,6 +238,9 @@ pub enum EventData {
     TurnEnd,
     #[serde(rename = "system")]
     System { text: String },
+    /// A slash command's answer, shown out of the conversation (#58 follow-up).
+    #[serde(rename = "report")]
+    Report { command: String, text: String },
     #[serde(rename = "usage")]
     Usage { usage: UsageData },
     #[serde(rename = "request")]

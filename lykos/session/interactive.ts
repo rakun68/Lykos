@@ -771,14 +771,19 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
   async function handleOwned(
     parsed: Exclude<ReturnType<typeof parseInteractiveInput>, { kind: "prompt" } | { kind: "empty" } | { kind: "continue" }>,
   ): Promise<"exit" | "ok"> {
+    // P5 #58: a command's answer goes where the surface shows answers; the line surface keeps it in the transcript.
+    const say = (text: string, parts?: readonly SystemPart[]): void => {
+      if (ui?.writeReport) ui.writeReport(parsed.kind, text);
+      else chrome(text, parts);
+    };
     switch (parsed.kind) {
       case "exit":
         return "exit";
       case "help":
-        chrome(S0_HELP);
+        say(S0_HELP);
         return "ok";
       case "session":
-        chrome(sessionInfo());
+        say(sessionInfo());
         return "ok";
       case "resume":
         // Ends this session cleanly and hands the picker back to the
@@ -794,9 +799,9 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         resumeRequested = true;
         if (parsed.sessionId !== undefined) {
           resumeSessionId = parsed.sessionId;
-          chrome(`leaving this session and reopening ${parsed.sessionId.slice(0, 8)} — it continues as itself`);
+          say(`leaving this session and reopening ${parsed.sessionId.slice(0, 8)} — it continues as itself`);
         } else {
-          chrome("leaving this session and opening the session browser");
+          say("leaving this session and opening the session browser");
         }
         return "exit";
       case "fork":
@@ -804,17 +809,17 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // way out, so the copy is of a session whose transcript and numbers are
         // complete, and the caller starts the fork as a new row.
         if (!session.isIdle) {
-          chrome("lykos: /fork cannot run while a turn is in flight");
+          say("lykos: /fork cannot run while a turn is in flight");
           return "ok";
         }
         forkRequested = true;
-        chrome("leaving this session and continuing in a fork of it — this one is kept as it is");
+        say("leaving this session and continuing in a fork of it — this one is kept as it is");
         return "exit";
       case "rename": {
         const wanted = parsed.name.trim();
         if (wanted.length === 0) {
           const current = humanName ?? derivedName;
-          chrome(
+          say(
             current === undefined
               ? "this session has no name yet — it gets one from the first thing you say, or type /rename <name>"
               : `this session is called "${current}" (${humanName !== undefined ? "you named it" : "derived from what you said first"})`,
@@ -823,21 +828,21 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         }
         humanName = wanted;
         opts.onRename?.(wanted);
-        chrome(`this session is now called "${wanted}"`);
+        say(`this session is now called "${wanted}"`);
         return "ok";
       }
       case "new-session":
         newRequested = true;
-        chrome("ending this session and starting a new session");
+        say("ending this session and starting a new session");
         return "exit";
       case "close-session":
         closeRequested = true;
-        chrome("closing this session");
+        say("closing this session");
         return "exit";
       case "copy": {
         const text = session.getLastAssistantText?.() ?? state.lastText;
         if (!text) {
-          chrome("lykos: no assistant message to copy");
+          say("lykos: no assistant message to copy");
           return "ok";
         }
         // Round thirteen, item 3: `/copy` now actually copies. It used to
@@ -848,7 +853,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // append-only surface, and any caller that passes none), printing
         // it remains the only thing that can be done and still is.
         if (opts.onCopyText) opts.onCopyText(text, "last answer");
-        else chrome(text);
+        else say(text);
         return "ok";
       }
       case "export": {
@@ -857,7 +862,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         try {
           markdown = sessionMarkdown(ledgerPath, session.sessionId);
         } catch (err) {
-          chrome(`lykos: cannot export this session: ${(err as Error).message}`);
+          say(`lykos: cannot export this session: ${(err as Error).message}`);
           return "ok";
         }
         if (parsed.file.length > 0) {
@@ -865,44 +870,44 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
           try {
             writeFileSync(path, markdown, "utf8");
           } catch (err) {
-            chrome(`lykos: cannot write ${path}: ${(err as Error).message}`);
+            say(`lykos: cannot write ${path}: ${(err as Error).message}`);
             return "ok";
           }
-          chrome(`exported this session to ${path}`);
+          say(`exported this session to ${path}`);
           return "ok";
         }
         // Printing a whole session into the transcript would help nobody, so with no clipboard the file form is named instead.
         if (!opts.onCopyText) {
-          chrome("lykos: no clipboard on this surface — /export <file> writes the session to a file");
+          say("lykos: no clipboard on this surface — /export <file> writes the session to a file");
           return "ok";
         }
         if (opts.onCopyText(markdown, "session as Markdown") === false) {
-          chrome("lykos: /export <file> writes the session to a file instead");
+          say("lykos: /export <file> writes the session to a file instead");
         }
         return "ok";
       }
       case "rewind": {
         // T263: the person's, never the agent's — there is no tool for it.
         if (!opts.rewind) {
-          chrome("lykos: /rewind is not available on this session");
+          say("lykos: /rewind is not available on this session");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: /rewind cannot run while a turn is in flight");
+          say("lykos: /rewind cannot run while a turn is in flight");
           return "ok";
         }
         const points = opts.rewind.points();
         if (points.length === 0) {
-          chrome("lykos: nothing to rewind yet — no prompt has been sent in this session");
+          say("lykos: nothing to rewind yet — no prompt has been sent in this session");
           return "ok";
         }
         const choice = await (opts.pickRewind ?? pickOnLines)(points);
         if (choice === undefined) {
-          chrome("rewind cancelled; nothing was changed");
+          say("rewind cancelled; nothing was changed");
           return "ok";
         }
         const report = await opts.rewind.rewind(session, choice.index, choice.restore, opts.recorder, choice.note);
-        chrome(report.lines.join("\n"));
+        say(report.lines.join("\n"));
         // T264: the conversation is the transcript's now; the session that continues it puts the prompt back.
         if (report.rebuild === true && report.inputText !== undefined) {
           rewindRebuild = { inputText: report.inputText };
@@ -915,16 +920,16 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       case "redo": {
         // P5 #42: the person's, as /rewind is.
         if (!opts.rewind) {
-          chrome(`lykos: /${parsed.kind} is not available on this session`);
+          say(`lykos: /${parsed.kind} is not available on this session`);
           return "ok";
         }
         if (!session.isIdle) {
-          chrome(`lykos: /${parsed.kind} cannot run while a turn is in flight`);
+          say(`lykos: /${parsed.kind} cannot run while a turn is in flight`);
           return "ok";
         }
         const report =
           parsed.kind === "undo" ? await opts.rewind.undo(session, opts.recorder) : await opts.rewind.redo(session, opts.recorder);
-        chrome(report.lines.join("\n"));
+        say(report.lines.join("\n"));
         if (report.rebuild === true) {
           rewindRebuild = { inputText: report.inputText ?? "" };
           return "exit";
@@ -936,23 +941,23 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         if (ui) ui.view.toolsCollapsed = !ui.view.toolsCollapsed;
         const collapsed = ui?.view.toolsCollapsed ?? true;
         opts.onExpandedChange?.(!collapsed);
-        chrome(collapsed ? "tool results collapsed" : "tool results expanded");
+        say(collapsed ? "tool results collapsed" : "tool results expanded");
         return "ok";
       }
       case "thinking":
         if (ui) ui.view.thinkingCollapsed = !ui.view.thinkingCollapsed;
-        chrome(ui?.view.thinkingCollapsed ? "thinking hidden" : "thinking shown");
+        say(ui?.view.thinkingCollapsed ? "thinking hidden" : "thinking shown");
         return "ok";
       case "compact": {
         if (!session.compact) {
-          chrome("lykos: compact is not available on this session");
+          say("lykos: compact is not available on this session");
           return "ok";
         }
         // T191: `/compact shake <text>` is refused here, before anything runs; the extension refuses it too
         // (a surface that is not this one), but its notice reaches nobody in this session.
         const asked = parseCompactArgs(parsed.hint);
         if ("error" in asked) {
-          chrome(asked.error);
+          say(asked.error);
           return "ok";
         }
         const seen = opts.compactionRecords?.().length ?? 0;
@@ -969,19 +974,19 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
             last.tokens_before !== null && last.tokens_after !== null
               ? `, about ${last.tokens_before} to ${last.tokens_after} tokens (an estimate)`
               : "";
-          chrome(
+          say(
             last.result === "ok"
               ? `compacted by ${last.method ?? asked.method}${figures}`
               : `lykos: /compact ${asked.method} did not compact (${last.result}${last.error !== undefined ? `: ${last.error}` : ""})`,
           );
         } else if (failure !== undefined) {
-          chrome(`lykos: compact: ${failure.message}`);
+          say(`lykos: compact: ${failure.message}`);
         }
         return "ok";
       }
       case "effort": {
         const report = setEffort(parsed.level);
-        chrome(report.text, report.parts);
+        say(report.text, report.parts);
         // 2026-09-02 round thirteen, item 4: "after I type the command
         // effort <level> and it switches effort, the bar should change
         // colour instantly... furthermore, no matter what effort i change,
@@ -1001,86 +1006,86 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         return "ok";
       }
       case "usage":
-        chrome(usageReport());
+        say(usageReport());
         return "ok";
       case "context":
-        chrome(contextReport());
+        say(contextReport());
         return "ok";
       case "specialist-list":
         if (!opts.listSpecialists) {
-          chrome("lykos: specialist listing is not available on this session");
+          say("lykos: specialist listing is not available on this session");
           return "ok";
         }
-        chrome(opts.listSpecialists());
+        say(opts.listSpecialists());
         return "ok";
       case "specialist-switch": {
         if (!opts.switchSpecialist) {
-          chrome("lykos: specialist switching is not available on this session");
+          say("lykos: specialist switching is not available on this session");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: specialist cannot change while a turn is in flight");
+          say("lykos: specialist cannot change while a turn is in flight");
           return "ok";
         }
         const outcome = await opts.switchSpecialist(parsed.name);
-        chrome(outcome.ok ? outcome.report : `lykos: specialist switch refused — ${outcome.message}`);
+        say(outcome.ok ? outcome.report : `lykos: specialist switch refused — ${outcome.message}`);
         return "ok";
       }
       case "output-style-list":
         if (!opts.listOutputStyles) {
-          chrome("lykos: output style listing is not available on this session");
+          say("lykos: output style listing is not available on this session");
           return "ok";
         }
-        chrome(opts.listOutputStyles());
+        say(opts.listOutputStyles());
         return "ok";
       case "output-style-switch": {
         if (!opts.switchOutputStyle) {
-          chrome("lykos: output style switching is not available on this session");
+          say("lykos: output style switching is not available on this session");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: output style cannot change while a turn is in flight");
+          say("lykos: output style cannot change while a turn is in flight");
           return "ok";
         }
         const outcome = await opts.switchOutputStyle(parsed.name);
-        chrome(outcome.ok ? outcome.report : `lykos: output style switch refused — ${outcome.message}`);
+        say(outcome.ok ? outcome.report : `lykos: output style switch refused — ${outcome.message}`);
         return "ok";
       }
       case "refuse-model":
         if (!opts.setModel) {
-          chrome("lykos: model switching is not available on this session");
+          say("lykos: model switching is not available on this session");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: model cannot change while a turn is in flight");
+          say("lykos: model cannot change while a turn is in flight");
           return "ok";
         }
         if (parsed.kind !== "refuse-model") return "ok";
         if (parsed.spec) {
           try {
             modelSpec = await opts.setModel(parsed.spec, parsed.persist === true);
-            chrome(`model is now ${modelSpec}`);
+            say(`model is now ${modelSpec}`);
           } catch (err) {
-            chrome(`lykos: model switch refused — ${err instanceof Error ? err.message : String(err)}`);
+            say(`lykos: model switch refused — ${err instanceof Error ? err.message : String(err)}`);
           }
         } else {
-          chrome(`current model is ${opts.currentModel?.() ?? modelSpec}; use /model <provider/model> to switch`);
+          say(`current model is ${opts.currentModel?.() ?? modelSpec}; use /model <provider/model> to switch`);
         }
         return "ok";
       case "mode": {
         if (parsed.mode.length === 0) {
           const current = opts.currentMode?.() ?? DEFAULT_INTERACTION_MODE;
-          chrome(`interaction mode is ${MODE_INFO[current].label} — ${MODE_INFO[current].description}`);
-          chrome(`  switch with /mode <${INTERACTION_MODES.join("|")}>`);
+          say(`interaction mode is ${MODE_INFO[current].label} — ${MODE_INFO[current].description}`);
+          say(`  switch with /mode <${INTERACTION_MODES.join("|")}>`);
           return "ok";
         }
         const parsedMode = parseInteractionMode(parsed.mode);
         if (!parsedMode.ok) {
-          chrome(`lykos: ${parsedMode.error}`);
+          say(`lykos: ${parsedMode.error}`);
           return "ok";
         }
         if (!opts.setMode) {
-          chrome("lykos: this session shape cannot change interaction mode");
+          say("lykos: this session shape cannot change interaction mode");
           return "ok";
         }
         opts.setMode(parsedMode.mode);
@@ -1096,7 +1101,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
           ...(liveMode !== undefined ? { liveMode } : {}),
           contained,
         });
-        chrome(res.report);
+        say(res.report);
         if (res.ok) {
           if (res.mode !== undefined) {
             opts.setMode?.(res.mode);
@@ -1107,15 +1112,15 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       }
       case "login": {
         if (!opts.login) {
-          chrome("lykos: /login is not available on this session");
+          say("lykos: /login is not available on this session");
           return "ok";
         }
         if (parsed.provider.length === 0) {
-          chrome("usage: /login <provider> [--api-key]");
+          say("usage: /login <provider> [--api-key]");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: /login cannot run while a turn is in flight");
+          say("lykos: /login cannot run while a turn is in flight");
           return "ok";
         }
         await opts.login(parsed.provider, parsed.apiKey, {
@@ -1134,10 +1139,10 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       }
       case "credential":
         if (!opts.credential) {
-          chrome("lykos: /credential is not available on this session");
+          say("lykos: /credential is not available on this session");
           return "ok";
         }
-        chrome(opts.credential(parsed.arg));
+        say(opts.credential(parsed.arg));
         return "ok";
       case "extension-command": {
         // The host catches whatever the extension throws and returns a
@@ -1146,10 +1151,10 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // visible, which is what a person typing a slash command would read
         // as the command being broken.
         if (!opts.runExtensionCommand) {
-          chrome(`lykos: /${parsed.command} is an extension command and this session shape has no extension host`);
+          say(`lykos: /${parsed.command} is an extension command and this session shape has no extension host`);
           return "ok";
         }
-        chrome(await opts.runExtensionCommand(parsed.command, parsed.args));
+        say(await opts.runExtensionCommand(parsed.command, parsed.args));
         return "ok";
       }
       case "skill":

@@ -177,6 +177,8 @@ export type EventData =
   | { type: "tool.end"; toolId: string; name: string; ok: boolean; preview?: string; diff?: DiffData }
   | { type: "turn.end" }
   | { type: "system"; text: string }
+  /** A slash command's answer: the TUI shows it in a popup (one line: a toast), out of the conversation. */
+  | { type: "report"; command: string; text: string }
   | { type: "usage"; usage: UsageData }
   | { type: "request"; request: RequestData }
   | { type: "request.resolved"; requestId: string; answer: string }

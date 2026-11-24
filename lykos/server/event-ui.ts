@@ -82,6 +82,9 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
     writeSystem(text) {
       hooks.emit({ type: "system", text });
     },
+    writeReport(command, text) {
+      hooks.emit({ type: "report", command, text });
+    },
     writeFollowup(text) {
       hooks.emit({ type: "message.followup", text });
     },

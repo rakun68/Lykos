@@ -119,7 +119,8 @@ pub enum Dialog {
     /// OpenCode `dialog-image-preview.tsx`: one image at a time, left and right move.
     Images { index: usize },
     /// OpenCode `feature-plugins/prompt/btw.tsx`'s answer dialog.
-    Aside { question: String, answer: Result<String, String>, scroll: usize },
+    /// A `/btw` answer, or a slash command's report: its title, the text, how far it scrolled.
+    Aside { title: String, answer: Result<String, String>, scroll: usize },
     /// OpenCode `command.palette.show`: every action, searched as typed.
     Palette { query: String, selected: usize },
     /// Every key, and the layer that set it.
@@ -318,6 +319,8 @@ pub struct App {
     pub toasts: Vec<Toast>,
     /// When ctrl+c (`app.exit`) was last pressed: a second press within `EXIT_WINDOW` quits.
     pub exit_armed: Option<Instant>,
+    /// The slash command this TUI last sent, and when: what a `report` event answers.
+    reporting: Option<(String, Instant)>,
 }
 
 /// One palette row: an action (`id`), or a slash command (`slash`, with `id` empty).
@@ -337,6 +340,9 @@ pub struct PaletteRow {
 
 /// The slash commands' group in the palette, and the groups' order.
 pub const SLASH_GROUP: &str = "Commands";
+/// How long after a slash command its report still opens a popup.
+const REPORT_WINDOW: Duration = Duration::from_secs(60);
+
 pub const PALETTE_GROUPS: [&str; 7] = ["App", "Session", SLASH_GROUP, "Agent", "System", "Prompt", "Input"];
 
 fn first_line(s: &str) -> &str {
@@ -425,6 +431,7 @@ impl App {
             defaults: None,
             toasts: Vec::new(),
             exit_armed: None,
+            reporting: None,
         }
     }
 
@@ -780,6 +787,10 @@ impl App {
             self.tabs.finished(&event.session, self.session.as_deref());
         }
         if Some(&event.session) == self.session.as_ref() {
+            if let EventData::Report { text, .. } = &event.data {
+                self.on_report(text);
+                return Vec::new();
+            }
             // An undone prompt comes back to be edited (P5 #42).
             // An undone prompt comes back ahead of anything typed since; an empty one (a redo) leaves the box alone.
             if let EventData::PromptSet { text } = &event.data {
@@ -835,7 +846,32 @@ impl App {
 
     pub fn on_aside(&mut self, question: String, answer: Result<String, String>) {
         self.asides = self.asides.saturating_sub(1);
-        self.dialog = Some(Dialog::Aside { question, answer, scroll: 0 });
+        self.dialog = Some(Dialog::Aside { title: format!("/btw {}", first_line(&question)), answer, scroll: 0 });
+    }
+
+    /// A slash command this TUI sent answered: one line is a toast, more a popup; a second answer to the same command
+    /// joins the popup. An answer nobody here asked for (a replay, another client's command) is left out.
+    fn on_report(&mut self, text: &str) {
+        let Some((command, at)) = &self.reporting else { return };
+        if at.elapsed() > REPORT_WINDOW {
+            self.reporting = None;
+            return;
+        }
+        let title = command.clone();
+        let text = text.trim_end_matches('\n');
+        if let Some(Dialog::Aside { title: t, answer: Ok(a), .. }) = &mut self.dialog {
+            if *t == title {
+                a.push('\n');
+                a.push_str(text);
+                return;
+            }
+        }
+        if !text.contains('\n') && text.chars().count() <= 100 && self.dialog.is_none() {
+            let kind = if text.starts_with("lykos:") { ToastKind::Error } else { ToastKind::Info };
+            self.toast(kind, text.trim_start_matches("lykos: ").to_string());
+            return;
+        }
+        self.dialog = Some(Dialog::Aside { title, answer: Ok(text.to_string()), scroll: 0 });
     }
 
     /// `session.options`' answer: what the lists show.
@@ -2527,6 +2563,8 @@ impl App {
             return self.ask_aside();
         }
         let Some(text) = self.take_prompt() else { return Vec::new() };
+        // A command's answer comes back as a report: it shows here only while this is what was asked.
+        self.reporting = text.starts_with('/').then(|| (text.split_whitespace().next().unwrap_or("").to_string(), Instant::now()));
         if self.status() == Some(SessionStatus::Closed) {
             self.session = None;
         }
@@ -3614,5 +3652,32 @@ two
         press(&mut app, key(KeyCode::Esc));
         press(&mut app, key(KeyCode::Enter));
         assert!(matches!(app.dialog, Some(Dialog::Info { info: Info::Usage })));
+    }
+
+    #[test]
+    fn a_commands_report_is_a_popup_or_a_toast_and_one_nobody_asked_for_is_left_out() {
+        let mut app = idle();
+        let report = |app: &mut App, seq, text: &str| {
+            app.on_event(&Event { event: "report".into(), session: "s1".into(), seq, data: EventData::Report { command: "session".into(), text: text.into() } });
+        };
+        report(&mut app, 10, "replayed");
+        assert!(app.dialog.is_none() && app.toasts.is_empty(), "not asked for here");
+        typed(&mut app, "/session");
+        press(&mut app, key(KeyCode::Esc));
+        press(&mut app, key(KeyCode::Enter));
+        report(&mut app, 11, "id s1\ncwd /w");
+        report(&mut app, 12, "model m1");
+        match &app.dialog {
+            Some(Dialog::Aside { title, answer: Ok(text), .. }) => assert_eq!((title.as_str(), text.as_str()), ("/session", "id s1\ncwd /w\nmodel m1")),
+            d => panic!("{d:?}"),
+        }
+        assert!(app.store.sessions["s1"].items.iter().all(|i| !matches!(i, Item::System(_))), "out of the conversation");
+        app.dialog = None;
+        typed(&mut app, "/thinking");
+        press(&mut app, key(KeyCode::Esc));
+        press(&mut app, key(KeyCode::Enter));
+        report(&mut app, 13, "thinking hidden");
+        assert_eq!(said(&app), Some("thinking hidden"));
+        assert!(app.dialog.is_none());
     }
 }
