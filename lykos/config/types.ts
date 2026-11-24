@@ -517,10 +517,9 @@ export interface UiConfig {
    * the waiting line under it starts saying it has gone on too long
    * (2026-09-02 round twelve, item 2). Default 300 (five minutes).
    *
-   * A REPORTING limit, not a kill switch — see `fullscreen-ui.ts`'s
-   * `startWaiting()` for why Lykos cannot terminate a tool it does not own
-   * and what it does at the limit instead. 0 shows elapsed time with no
-   * limit named at all.
+   * A REPORTING limit, not a kill switch. 0 shows elapsed time with no limit
+   * named at all. Read by nothing since P5 #55 removed the old TUI, whose
+   * waiting line used it; lykos-tui does not read it yet.
    */
   tool_wait_limit_seconds?: number;
 }

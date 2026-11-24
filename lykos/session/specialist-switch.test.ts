@@ -16,7 +16,7 @@ import {
 } from "./specialist-switch.js";
 import { createSpecialistGuardHandler } from "../tools/specialist-guard-extension.js";
 import { SPECIALIST_NAME_ENV, SPECIALIST_OFF_LIMITS_ENV, SPECIALIST_ALLOWED_ENV } from "../config/extensions.js";
-import { createSpecialistSwitcher } from "../tui/interactive-surface.js";
+import { createSpecialistSwitcher } from "../surface/interactive-surface.js";
 import { applySpecialist } from "./specialist-apply.js";
 import { AutoApproveGate, PostureGate, type ApprovalRequest, type ReadOnlyPosture } from "../gate/approval.js";
 import { resolveStandaloneTools, applyToolDeltas } from "../tools.js";

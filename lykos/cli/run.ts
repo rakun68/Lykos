@@ -8,7 +8,7 @@ import { defaultLedgerPath, openLedger } from "../ledger/use.js";
 import { formatSessionSummary, loadSessionSummary } from "../ledger/summary.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { DEFAULT_DELEGATED_MODE } from "../delegate/session-protocol.js";
-import { stderrWrite, stdoutWrite } from "../tui/io-mode.js";
+import { stderrWrite, stdoutWrite } from "../io-mode.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from "../gate/trust.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { loadConfig } from "../config/load.js";
@@ -256,6 +256,27 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
  * abort-then-end behaviour real rather than just tested.
  */
 async function runInteractive(cwd: string, opts: RunCliOptions, trustSource: "stored" | "flag" | "prompt"): Promise<number> {
+  // P5 #55: in a terminal, the conversation is lykos-tui's. It carries the model, and the mode as the project's
+  // remembered one (an explicit --mode is remembered either way, T209). An option it does not carry yet, and a
+  // session without a terminal, run the line session below.
+  const tuiCarries =
+    opts.tools === undefined &&
+    opts.subagents === undefined &&
+    opts.taskId === undefined &&
+    opts.projectId === undefined &&
+    opts.specialist === undefined &&
+    opts.outputStyle === undefined &&
+    opts.autoApprove !== true &&
+    opts.askOutcome !== true;
+  if (process.stdin.isTTY && process.stdout.isTTY && tuiCarries) {
+    if (opts.mode !== undefined) {
+      const { rememberMode } = await import("../gate/permissions.js");
+      const { resolveProject } = await import("../session/identity.js");
+      rememberMode(resolveProject(cwd).id, opts.mode);
+    }
+    const { runTui } = await import("./tui.js");
+    return runTui(cwd, { trust: trustSource, args: opts.model !== undefined ? ["--model", opts.model] : [] });
+  }
   const { runInteractiveStandaloneSession } = await import("../session/interactive.js");
   const result = await runInteractiveStandaloneSession({
     workspace: cwd,

@@ -23,7 +23,7 @@ It never writes its own state to `.pi/`.
   config.yaml                  Project configuration overrides
   ledger.db                    SQLite telemetry ledger (WAL mode)
   today.json                   Ephemeral daily spend cache
-  history.json                 Prompt history, the last 500: the old TUI and lykos-tui share it
+  history.json                 Prompt history, the last 500: lykos-tui reads and writes it
   memory/
     failed-approaches.md       Active human-accepted mistake memories
     proposals.jsonl            Agent-proposed memory queue
@@ -89,9 +89,9 @@ The `lykos` executable provides the following commands:
 
 ### 1.1 `lykos-tui` (P5)
 
-`lykos` with no arguments runs `lykos-tui` in the current directory (P5 #52); `lykos --old-tui` runs the
-TypeScript TUI (`lykos run --interactive`). `lykos` asks to trust an untrusted workspace on the terminal
-first, as the old TUI does, and passes `--trust-workspace` when the trust was not read from the store. The
+`lykos` with no arguments runs `lykos-tui` in the current directory (P5 #52), and so does
+`lykos run --interactive` in a terminal (P5 #55: the TypeScript TUI is gone). `lykos` asks to trust an untrusted workspace on the terminal
+first, and passes `--trust-workspace` when the trust was not read from the store. The
 binary is `LYKOS_TUI_BIN`, else a source build at `target/release/`, else the prebuilt one `npm install`
 fetched into `vendor/tui/<platform>-<arch>/`. Its server command is this Node and this `lykos`, so it needs
 no `lykos` on `PATH`. Prebuilt binaries exist for `win32-x64` and `linux-x64` (static, musl): the `tui`

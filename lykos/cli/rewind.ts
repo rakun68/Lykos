@@ -26,7 +26,7 @@ import {
   restoreCheckpointByHash,
   shortHash,
 } from "../loop/checkpoint.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 export interface RewindOptions {
   /** Positional argument, if any: which checkpoint to restore — a hash prefix or an index. */

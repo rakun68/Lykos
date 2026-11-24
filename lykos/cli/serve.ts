@@ -3,7 +3,7 @@
  * one of its session children and is never typed by hand.
  */
 import { loadConfig } from "../config/load.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 
 export async function runServe(cwd: string, args: string[]): Promise<number> {
   let idleSeconds: number;

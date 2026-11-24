@@ -62,6 +62,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const r = await install({ root });
   if (r.error) {
-    process.stderr.write(`lykos: ${r.error}\n  cargo build --release -p lykos-tui builds it, LYKOS_TUI_BIN names one; lykos --old-tui runs the old TUI.\n`);
+    process.stderr.write(`lykos: ${r.error}\n  cargo build --release -p lykos-tui builds it, LYKOS_TUI_BIN names one.\n`);
   }
 }

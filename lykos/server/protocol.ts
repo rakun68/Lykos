@@ -5,8 +5,8 @@
  */
 
 import type { KeybindSetting } from "../config/keybinds.js";
-import type { CacheGaugeEntry } from "../tui/cache-gauge.js";
-import type { Alert, OutcomeView, TokenCounters } from "../tui/types.js";
+import type { CacheGaugeEntry } from "../surface/cache-gauge.js";
+import type { Alert, OutcomeView, TokenCounters } from "../surface/types.js";
 export type { ModelOption, ProviderOption, SessionOptions, SpecialistOption } from "../session/session-options.js";
 
 /** Bumped on any change a client of the previous version would misread. A client of another version is refused. */

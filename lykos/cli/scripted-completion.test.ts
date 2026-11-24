@@ -12,8 +12,7 @@ import { describe, it } from "node:test";
 import { defaultExtensionVersion } from "../extensions/defaults/index.js";
 import { AutoApproveGate } from "../gate/approval.js";
 import { runInteractiveStandaloneSession, type LineSource } from "../session/interactive.js";
-import { completeCommand, renderCompletionPopup } from "../tui/screen/completion.js";
-import { resolveTheme } from "../tui/theme/resolve.js";
+import { slashCandidates } from "../surface/commands.js";
 import { reply, say, SCRIPTED_MODEL, scriptedPiHost, scriptedWorld } from "./scripted-session.js";
 
 class Lines implements LineSource {
@@ -99,8 +98,8 @@ describe("every slash command is in Tab completion (T163)", () => {
     world.check();
     assert.equal(result.status, "ok", JSON.stringify(result));
 
-    // What Tab offers after `/`, read from the session's own rosters.
-    const offered = new Map(completeCommand("/").map((c) => [c.label, c]));
+    // What lykos-tui completes `/` from (the server's `commands` event), read from the session's own rosters.
+    const offered = new Map(slashCandidates().map((c) => [c.name, c]));
     const expect = (name: string, source: string, extension?: string) => {
       const c = offered.get(name);
       assert.ok(c !== undefined, `${name} is offered by Tab; got ${[...offered.keys()].join(" ")}`);
@@ -112,16 +111,9 @@ describe("every slash command is in Tab completion (T163)", () => {
     expect("/lykos-hello", "extension", "demo-lykos-cmd");
     expect("/handy", "skill");
     expect("/help", "builtin");
-    assert.deepEqual(completeCommand("/self").map((c) => c.label), ["/self-compact"], "prefix completion finds it");
-
-    // Each row shows where it came from.
-    const popup = renderCompletionPopup(completeCommand("/self"), { width: 120, theme: resolveTheme("mono", "none", "unicode") }).join("\n");
-    assert.match(popup, /\/self-compact.*\[pi ext lykos-self-compact\]/);
-    const lykosRow = renderCompletionPopup(completeCommand("/lykos-h"), { width: 120, theme: resolveTheme("mono", "none", "unicode") }).join("\n");
-    assert.match(lykosRow, /\/lykos-hello.*\[lykos ext demo-lykos-cmd\]/);
 
     // The colliding Pi `/help` is not silently dropped: the session said so.
-    assert.equal([...offered.values()].filter((c) => c.label === "/help").length, 1);
+    assert.equal(slashCandidates().filter((c) => c.name === "/help").length, 1);
     assert.match(stderr, /lykos: \/help from the Pi extension demo-pi-cmd is shadowed by the built-in \/help; typing it runs the built-in/);
   });
 });

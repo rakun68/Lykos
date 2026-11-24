@@ -11,7 +11,7 @@ Maintainers keep the plan, decisions and findings outside the repository. If
 
 A coding agent built on the Pi runtime, in TypeScript on Node, with a SQLite ledger. It runs
 **standalone**, as an **MCP worker** under an orchestrator, and, later, **under human supervision**
-through a desktop application. The interface today is the terminal: the TUI in `lykos/tui/`.
+through a desktop application. The interface today is the terminal: `lykos-tui`, a Rust client in `crates/`.
 
 **What it is not.** Not a fork of Pi: translate at the boundary.
 
@@ -26,7 +26,7 @@ lightweightness, memory and collaboration.
 
 | | |
 | --- | --- |
-| [lykos/](lykos/) | **Source tree**: `tools/`, `session/`, `gate/`, `loop/`, `ledger/`, `tui/` (pixels only), `cli/` adapters |
+| [lykos/](lykos/) | **Source tree**: `tools/`, `session/`, `gate/`, `loop/`, `ledger/`, `surface/` (the line session's output), `server/`, `cli/` adapters |
 | [docs/reference/](docs/reference/) | Reference specifications: CLI and config, MCP, sessions, specialists, telemetry, UI |
 | [docs/adr/](docs/adr/) | Decisions. Authoritative when a doc disagrees with one |
 | [GLOSSARY.md](GLOSSARY.md) | The glossary. Use its words |

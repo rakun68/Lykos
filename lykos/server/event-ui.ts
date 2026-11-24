@@ -1,13 +1,13 @@
 /**
  * The surface a server session draws on (P5 #35): the old TUI's `AgentUi`, with every block it would print
- * turned into a protocol event instead. Pi's events are read the way `tui/s0.ts`'s `attach` reads them, and the
+ * turned into a protocol event instead. Pi's events are read the way `surface/s0.ts`'s `attach` reads them, and the
  * status line's numbers come from the same `deriveHud` the old footer uses.
  */
 import type { ApprovalRequest } from "../gate/approval.js";
 import type { InteractiveSession } from "../session/interactive.js";
-import { deriveHud, previewResult, toolSummary, type AgentUi, type AgentUiOptions, type StreamEvent } from "../tui/s0.js";
-import { extractDiff, type ConversationView } from "../tui/renderers/conversation.js";
-import { renderJson } from "../tui/renderers/json.js";
+import { deriveHud, previewResult, toolSummary, type AgentUi, type AgentUiOptions, type StreamEvent } from "../surface/s0.js";
+import { extractDiff, type ConversationView } from "../surface/renderers/conversation.js";
+import { renderJson } from "../surface/renderers/json.js";
 import type { EventData, SessionStatus, UsageData } from "./protocol.js";
 
 /** A tool's output is shown, not stored, here: the transcript keeps all of it. */

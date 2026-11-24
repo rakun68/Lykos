@@ -13,9 +13,9 @@ import { loadConfig } from "../config/load.js";
 import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { AutoApproveGate } from "../gate/approval.js";
 import { newRetryObservation } from "../loop/retry-observer.js";
-import { createSpecialistSwitcher } from "../tui/interactive-surface.js";
+import { createSpecialistSwitcher } from "../surface/interactive-surface.js";
 import type { StandaloneSessionState } from "./session.js";
-import type { AgentUi } from "../tui/s0.js";
+import type { AgentUi } from "../surface/s0.js";
 
 process.env.LYKOS_PI_HOST_DIR = mkdtempSync(join(tmpdir(), "lykos-pi-host-"));
 

@@ -1,8 +1,8 @@
 import { firstPositional, positionals, RUN_BOOLEAN_FLAGS, RUN_VALUED_FLAGS, unknownRunFlag } from "./args.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { parseInteractionMode, type InteractionMode } from "../gate/modes.js";
-import { claimProtocolStream, stdoutWrite } from "../tui/io-mode.js";
-import type { ColorFlag } from "../tui/theme/resolve.js";
+import { claimProtocolStream, stdoutWrite } from "../io-mode.js";
+import type { ColorFlag } from "../surface/theme/resolve.js";
 import type { ImageAttachment } from "../session/session.js";
 
 export interface CommandContext {
@@ -102,13 +102,11 @@ export const COMMANDS: readonly Command[] = [
     ],
     run: async (rest, { cwd }) => {
       const { runDoctor } = await import("./doctor.js");
-      const { vtSupport } = await import("../tui/doctor-rendering.js");
-      const vt = await vtSupport();
       const { loadConfig } = await import("../config/load.js");
       const { defaultImageTag } = await import("../containment/containment.js");
       const { probeConfiguredRuntimes } = await import("./doctor.js");
       const containment = await probeConfiguredRuntimes(loadConfig({ cwd }).resolved.containment, defaultImageTag());
-      return runDoctor(cwd, { benchUi: rest.includes("--bench-ui"), vt, containment });
+      return runDoctor(cwd, { benchUi: rest.includes("--bench-ui"), containment });
     },
   },
   {
@@ -374,8 +372,20 @@ export const COMMANDS: readonly Command[] = [
       "            shows what the replay costs before spending it; the original is never rewritten",
       "            --fork continues in a copy of it, a new session, and leaves it as it is",
       "            with no id it opens the session picker (`--all` for every project)",
+      "            in a terminal it opens lykos-tui on the session, or on its session list with no id",
     ],
     run: async (rest, { cwd }) => {
+      // P5 #55: in a terminal, lykos-tui resumes it; its server asks the preflight's question. --dry-run prints it here.
+      if (process.stdin.isTTY && process.stdout.isTTY && !rest.includes("--dry-run")) {
+        const tuiModel = flagValue(rest, "model");
+        const id = rest.find((a, i) => !a.startsWith("--") && rest[i - 1] !== "--model");
+        if (rest.includes("--fork")) {
+          stderrWrite("lykos resume: --fork in a terminal: open the session, then Fork session (ctrl+p)\n");
+          return 1;
+        }
+        const { runTui } = await import("./tui.js");
+        return runTui(cwd, { args: [...(id !== undefined ? ["--session", id] : []), ...(tuiModel !== undefined ? ["--model", tuiModel] : [])] });
+      }
       const { runResume } = await import("./resume.js");
       const { createReadlineLineSource } = await import("../session/interactive.js");
       const model = flagValue(rest, "model");
@@ -390,7 +400,6 @@ export const COMMANDS: readonly Command[] = [
         const picked = await pickSession({
           sources,
           read: () => lineSource.next(),
-          ...(rest.includes("--no-fullscreen") ? { noFullscreen: true } : {}),
         });
         if (!picked) {
           lineSource.close();
@@ -693,7 +702,7 @@ export const COMMANDS: readonly Command[] = [
       "            (stdin, then each @file, then the argument; `--` makes the next argument the task verbatim).",
       "            On Windows give a multi-line task as @task.md: a .cmd launcher (npm run, npx, lykos.cmd)",
       "            cuts an argument at its first newline, and PowerShell 5.1 reads a file without a BOM as ANSI",
-      "            `lykos run --interactive` (or `lykos --old-tui`) starts the old terminal UI; `lykos` alone starts lykos-tui",
+      "            `lykos run --interactive` opens lykos-tui in a terminal, and reads lines from stdin without one",
       "            `lykos run task.md`: a task file (frontmatter files/sealed/test/scope/red/steps/issue, then the brief)",
       "            [--max-steps n] the step cap; [--request-id id] a retry with the same id finds its session; [--base ref]",
       "            [--rulings-from id[,id]] sessions whose spec-check rulings bind this one (a reviewer names the implementer it reviews)",

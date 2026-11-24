@@ -66,7 +66,7 @@ import {
 } from "../gate/modes.js";
 import { loadPermissions, rememberAllow, rememberMode, type PermissionsOptions } from "../gate/permissions.js";
 import { runPermissionsCommand } from "../gate/permissions-command.js";
-import { setSkillCommands, skillPrompt } from "../tui/commands.js";
+import { setSkillCommands, skillPrompt } from "../surface/commands.js";
 import { nestSessions, type SessionListRow } from "./listing.js";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -126,18 +126,18 @@ import {
 } from "../tools.js";
 import { PostureGate, TerminalApprovalGate, type ApprovalGate, type ReadOnlyPosture } from "../gate/approval.js";
 import { ApprovalMetrics } from "../gate/approval-metrics.js";
-import { setStderrSink, stdoutWrite, stderrWrite } from "../tui/io-mode.js";
+import { setStderrSink, stdoutWrite, stderrWrite } from "../io-mode.js";
 import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
 import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type PendingUndos, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
-import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type AgentUiOptions, type SystemPart } from "../tui/s0.js";
+import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type AgentUiOptions, type SystemPart } from "../surface/s0.js";
 import type { AsideAnswer } from "./aside.js";
-import { runInteractiveSurface } from "../tui/interactive-surface.js";
-import { effortToken } from "../tui/effort.js";
-import { fmtUsd } from "../tui/format.js";
-import { openUrl } from "../tui/open-url.js";
-import { parseOutcomeAnswer, renderOutcomePrompt, renderOutcomeResult } from "../tui/outcome.js";
+import { runInteractiveSurface } from "../surface/interactive-surface.js";
+import { effortToken } from "../surface/effort.js";
+import { fmtUsd } from "../surface/format.js";
+import { openUrl } from "../surface/open-url.js";
+import { parseOutcomeAnswer, renderOutcomePrompt, renderOutcomeResult } from "../surface/outcome.js";
 import { parseCompactArgs } from "../loop/compaction-chain.js";
 import type { CompactionRecord } from "../loop/self-compact.js";
 import { buildContinuationPrompt, decideContinuation, type ContinuationPlan } from "../loop/continuation.js";
@@ -454,7 +454,7 @@ export interface RunInteractiveLoopOpts {
    *
    * A callback rather than the host itself, for the reason every other entry
    * here is one: the loop is unit-tested against a scripted session and must
-   * not need an extension host to exist. `tui/commands.ts` decides what
+   * not need an extension host to exist. `surface/commands.ts` decides what
    * `/foo` IS; this decides what running it does, which is the half that
    * belongs to whoever owns the session.
    */
@@ -599,7 +599,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
   function sessionInfo(): string {
     const g = state.usage;
     // Same costUsd source deriveHud() sums for the footer's running total
-    // (tui/s0.ts's runFromSessionState) — /session is not a second cost path.
+    // (surface/s0.ts's runFromSessionState) — /session is not a second cost path.
     const costUsd = g.calls.reduce((s, c) => s + (c.costUsd ?? 0), 0);
     return `session ${session.sessionId}\nmodel  ${modelSpec}\nturns  ${state.turns}  interventions ${state.humanInterventions}\ntokens ↑ ${g.input}  ⚡ ${g.cacheRead}  ✎ ${g.cacheWrite}  ↓ ${g.output}\ncost   ${fmtUsd(costUsd)}`;
   }
@@ -1454,6 +1454,11 @@ export interface RunInteractiveStandaloneSessionInput {
   model?: string;
   /** T209 / ADR-0041: explicit starting permission mode passed on startup (e.g. via --mode). */
   mode?: InteractionMode;
+  /**
+   * P5 #55: apply the interaction modes (`/mode`, Plan's exit, remembered approvals) in front of the approval
+   * gate. The engine server's session child sets it; a line session and a test that injects its own gate do not.
+   */
+  interactionModes?: boolean;
   /** T209: options passed to the permissions store (e.g. custom permissionsPath for tests). */
   permissionsOpts?: PermissionsOptions | undefined;
   tools?: string[];
@@ -1508,8 +1513,6 @@ export interface RunInteractiveStandaloneSessionInput {
    * with `LYKOS_ASK_OUTCOME=1`.
    */
   askOutcome?: boolean;
-  /** T50.1: force the append-only surface even when `decideRenderMode()` would otherwise choose full-screen. */
-  noFullscreen?: boolean;
   /** T57: when set, this session continues another one. */
   resume?: ResumePlan;
   /**
@@ -1843,7 +1846,6 @@ export async function injectReplay(
   );
 }
 
-/** T37's surface, unchanged in behaviour from before T50.1's branch existed — the fallback every mode not `fullscreen` gets, and the only mode a caller that injects its own `lineSource`/`approvalGate` (a test, an acceptance script) ever gets. */
 /**
  * T33's "one ledger, one ingest path" for real: both render-mode branches
  * end here, so ingest and the T52.1 outcome question can never diverge
@@ -2216,7 +2218,7 @@ export async function finishInteractiveSession(opts: {
  * scripted `LineSource` and a temp ledger with no session and no terminal.
  *
  * The division of labour is `07-ui-and-hud.md` §1.1, unchanged by Phase 3.5:
- * `tui/outcome.ts` renders the question and parses the answer and touches no
+ * `surface/outcome.ts` renders the question and parses the answer and touches no
  * ledger; `cli/verify.ts` runs the command and performs the single write.
  * Nothing here can produce `outcome_source = 'agent_claim'` -- it is not an
  * option on screen, and the ledger writer rejects the value outright.

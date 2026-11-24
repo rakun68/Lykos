@@ -5,7 +5,7 @@
 // error (R19).
 
 import { resolve } from "node:path";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { cycleViews, isCycleId, recoverCycle, runCycle } from "../delegate/cycle.js";
 import { ledgerViews, runDelegated, steerElsewhere, stopElsewhere, waitForQuestions, waitForSessions } from "../delegate/mcp-server.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from "../gate/trust.js";
@@ -15,7 +15,7 @@ import { readProcessStdin } from "./brief.js";
 import type { SessionView } from "../delegate/ownership.js";
 import { CAUSE_LIST, decideAt, type DecisionKind } from "../delegate/decisions.js";
 import { defaultLedgerPath } from "../ledger/use.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 export interface ParsedFlags {
   ids: string[];

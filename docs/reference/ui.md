@@ -7,25 +7,33 @@
 
 ## 0. UI Architecture
 
-Lykos provides a zero-dependency, pure Node terminal user interface operating across three levels:
+Lykos has four terminal surfaces:
 
-1. **Inline HUD (`lykos hud`):** A lightweight single-line or two-line status banner drawn during
-   plain streaming execution.
-2. **Full-screen Interactive Surface (`lykos run --interactive`):** An alternate-screen terminal
-   application with a dedicated multi-line composer, scrollback transcript, interactive approval
-   modal, and slash command dispatcher.
-3. **Live Watch Surface (`lykos watch`):** A multi-panel dashboard monitoring in-flight or
+1. **`lykos-tui` (`lykos`, §5):** the interface. A Rust client (`crates/tui`, ADR-0063) on the
+   engine server (`lykos serve`, [engine-server.md](engine-server.md)). The client crate
+   `crates/client` connects to it, starts it when none answers, and rebuilds each session from its
+   event stream.
+2. **The line session (`lykos run --interactive` without a terminal):** reads prompts from stdin
+   and prints the conversation as lines. In a terminal, `lykos run --interactive` opens `lykos-tui`
+   unless it is given an option `lykos-tui` does not carry yet (`--specialist`, `--output-style`,
+   `--yes`, `--tools`, `--subagents`, `--task`, `--project`, `--ask-outcome`); then the line session
+   runs there too. The session child `lykos-tui` drives is this same session, on the server's seams.
+3. **Inline HUD (`lykos hud`):** a single-line or two-line status banner drawn during plain
+   streaming execution.
+4. **Live Watch Surface (`lykos watch`, §4):** a multi-panel dashboard monitoring in-flight or
    historical sessions.
 
-P5 replaces the full-screen surface with a Rust client (`crates/tui`, ADR-0063) on the engine
-server (`lykos serve`, [engine-server.md](engine-server.md)). The client crate `crates/client`
-connects to it, starts it when none answers, and rebuilds each session from its event stream.
+P5 #55 removed the TypeScript full-screen TUI (`lykos/tui/`, `lykos --old-tui`). What it held
+besides pixels lives on: the IO-mode decision in `lykos/io-mode.ts` (rule 8), the line session, the
+command roster and the HUD renderers in `lykos/surface/`, and the interaction modes in
+`lykos/gate/mode-gate.ts`.
 
 ---
 
 ## 1. Themes & Color Resolution
 
-The UI themes are purely declarative palettes defined in `lykos/tui/theme/palettes.ts`.
+The HUD's and `lykos watch`'s themes are declarative palettes in `lykos/surface/theme/palettes.ts`.
+`lykos-tui` has its own (§5).
 Themes provide semantic color tokens (`primary`, `secondary`, `accent`, `muted`, `success`,
 `warning`, `error`, `border`, `bg`, etc.).
 
@@ -38,27 +46,10 @@ Themes provide semantic color tokens (`primary`, `secondary`, `accent`, `muted`,
 
 ---
 
-## 2. Full-Screen Interactive Surface
+## 2. The Session's Slash Commands
 
-The full-screen interface uses standard VT escape sequences to claim the alternate screen buffer
-(`\x1b[?1049h`), installing a stderr sink so asynchronous diagnostics do not corrupt rendering.
-
-### 2.1 Composer & Input Controls
-The input composer is a multi-line buffer with word-wrapping and bracketed paste handling:
-
-| Keybinding | Action |
-|---|---|
-| `Enter` | Submit current prompt (or insert newline if unclosed block) |
-| `Shift+Enter` | Insert literal newline |
-| `Shift+Tab` | Cycle primary specialists; queues the specialist stream message for the next turn (ADR-0044) |
-| `Ctrl+Up` | Recall previous prompt from `.lykos/history.json` |
-| `Ctrl+Down` | Recall next prompt from `.lykos/history.json` |
-| `Ctrl+R` | Interactive prefix-filtered history search |
-| `Shift+Tab` | Reserved (no longer cycles modes; reserved for specialist cycling in T216) |
-| `PgUp` / `PgDn` | Scroll transcript viewport up/down |
-| Mouse Wheel | Scroll transcript viewport smoothly |
-| `Escape` | Dismiss completion popup or cancel search |
-| `Esc Esc` | On an empty input, `/rewind` (T263) |
+The session runs these, in `lykos-tui` and in the line session alike: `lykos-tui` sends what it does
+not handle itself to the session as typed (§5). Its keys are in §5.
 
 ### 2.2 Built-in Slash Commands
 Commands are dispatched locally without incurring LLM turns:
@@ -80,10 +71,13 @@ Commands are dispatched locally without incurring LLM turns:
 - `/fork`: End this session and continue in a copy of it, a new session forked from it at its last turn; the turns a rewind undid are not copied, and this session is kept as it is (`sessions-and-archive.md` §2.1.1; T266). Refused while a turn runs.
 - `/close-session`: Mark current session closed and exit.
 - `/new`: Start a fresh session.
-- `/skill:<name>`: Load and invoke a specific registered skill.
+- `/skill:<name>`: Load and invoke a specific registered skill; `/<name>` too when no built-in owns the word (`/handoff`).
+- `/context`: What the context holds: the usage Pi measures, the system prompt, context files, skills and tools.
+- `/followup <text>`: Send `text` as the next prompt; typed while a turn runs, it is queued for after it.
 
-### 2.3 Tab Completion of Slash Commands
-`/` then `Tab` offers every slash command the session can run, from one list built the way Claude
+### 2.3 Completion of Slash Commands
+`lykos-tui` completes `/` from every slash command the session can run, sent as the `commands` event
+once the session boots ([engine-server.md](engine-server.md)), from one list built the way Claude
 Code builds its own (`src/commands.ts` `getCommands`: every source merged into one list, each
 command carrying where it came from). The sources, in the order a colliding word is dispatched:
 
@@ -104,14 +98,16 @@ No registered command is dropped silently.
 
 ---
 
-## 3. Interaction Modes & The Approval Modal
+## 3. Interaction Modes & The Approval Prompt
 
 Permission modes persist per project in `~/.lykos/permissions.json` (keyed by project ID) and default to
 **Manual** on first run (ADR-0041). Permission modes cannot be configured in `config.yaml`.
-Modes can be viewed or changed live with `/mode` or `/permissions mode <name>` (or `--mode` on startup).
-`Shift+Tab` is reserved and no longer cycles modes.
+Modes can be viewed or changed live with `/mode` or `/permissions mode <name>` (or `--mode` on startup);
+in `lykos-tui` the command palette's mode entry sends `/mode`. The mode is held by `ModeGate`
+(`lykos/gate/mode-gate.ts`) in front of the gate that asks, in the session `lykos-tui` drives. The line
+session asks for every gated action and has no mode.
 
-The approval modal pauses the session loop when a tool request requires human consent:
+The approval prompt pauses the session loop when a tool request requires human consent:
 
 | Mode | Reads | Writes / Edits | Safe Bash (`npm test`) | Destructive Bash (`rm -rf`) |
 |---|---|---|---|---|
@@ -122,7 +118,11 @@ The approval modal pauses the session loop when a tool request requires human co
 When prompted, answers are:
 - `y` (or `yes`): Allow this single execution.
 - `n` (or `no`): Deny execution.
-- `a` (or `always`): Allow and remember the command pattern (`npm test`) for this project session. Destructive commands cannot be allowlisted.
+- `a` (or `always`): Allow and remember the command pattern (`npm test`) for this project session. Destructive commands cannot be allowlisted; `a` on one allows it once.
+- `f` (or `folder`): Allow and remember the file's folder as an extra directory for this project.
+
+A path rule's ask (a file outside the project, T210) asks in every mode, Auto included, and never
+remembers a command pattern. A protected path (T211) offers only `y`, for this session, and `n`.
 
 ---
 
@@ -144,8 +144,8 @@ When prompted, answers are:
 
 ## 5. The Rust TUI (`lykos-tui`, P5)
 
-`crates/tui` builds `lykos-tui`; `lykos` with no arguments runs it, and `lykos --old-tui` runs the
-TypeScript TUI of sections 2 to 4 until #55 removes it. It ships prebuilt for Windows and Linux x64
+`crates/tui` builds `lykos-tui`; `lykos` with no arguments runs it, and so does `lykos run
+--interactive` in a terminal (§0). It ships prebuilt for Windows and Linux x64
 ([cli-and-config.md](cli-and-config.md) §1.1). It draws its first frame before it connects, then connects to the
 engine server on a thread, starting one when none answers ([engine-server.md](engine-server.md)).
 It sleeps while nothing on screen moves and draws only after a key, an event or a spinner tick.
@@ -458,6 +458,15 @@ TUI opens no ledger and derives no number. The gate's verdict, the seal's checks
 question at a session's end are the session's system lines, as in the old TUI. `/mode`,
 `/permissions`, `/output-style` and `/credential` are palette actions (Agent) that send the command;
 `/login` is `Connect a provider` and `/specialist` is `List specialists`.
+
+**The old TUI's last commands (#55).** `/handoff` (a skill), `/self-compact` (a Pi extension command),
+`/context` and `/followup` are not the TUI's, so it sends them to the session as typed and the session
+runs them as the old TUI's did (section 2.2). `/mode` holds: the session `lykos-tui` drives applies the
+interaction modes (section 3), which before #55 only the old TUI's approval prompt did. The old session
+browser's this-project and every-project scopes are the session list's `Ctrl+X L` and `Ctrl+O`, and
+`Ctrl+A` inside it; its preview pane of a session's last turns is not carried. In a terminal, `lykos resume`
+opens `lykos-tui`, at the session when given an id (`--fork` is refused there: `/fork` forks); without
+one, it prints the numbered list.
 
 **MCP and `lykos run` sessions (#51).** The session list shows the project's delegated sessions
 that run now, with their owner and state (`MCP running`, `lykos run waiting`). `Enter` on one

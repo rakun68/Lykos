@@ -40,7 +40,7 @@ import { resolveLoadedSkills, SKILLS_HEADING } from "./skills.js";
 import { SPECIALIST_HEADING } from "./specialist-head.js";
 import { runPrompt } from "../cli/prompt.js";
 import { reply, runScriptedSession, say, scriptedPiHost } from "../cli/scripted-session.js";
-import { resetIoMode } from "../tui/io-mode.js";
+import { resetIoMode } from "../io-mode.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(HERE, "lean-head-t227.fixture.json");

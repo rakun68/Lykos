@@ -28,10 +28,10 @@ import {
   workerSurfaceMeasurement,
 } from "../tools.js";
 import { EXPLORE_METRIC_VERSION } from "../loop/exploration.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 // T61: `--by task`'s table. `fmtUsd` is defined locally in this file (below)
 // and deliberately not re-imported.
-import { pad, truncate } from "../tui/format.js";
+import { pad, truncate } from "../surface/format.js";
 
 export interface CostOptions {
   since?: string;

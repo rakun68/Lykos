@@ -2,7 +2,7 @@
 
 import { loadConfig } from "../config/load.js";
 import { roleMappings, type RoleMapping } from "../config/roles.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 export function configRoles(cwd: string, opts: { globalDir?: string; env?: NodeJS.ProcessEnv } = {}): RoleMapping[] {
   const { resolved, layers } = loadConfig({ cwd, ...(opts.globalDir !== undefined ? { globalDir: opts.globalDir } : {}), ...(opts.env !== undefined ? { env: opts.env } : {}) });

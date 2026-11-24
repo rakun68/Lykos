@@ -33,8 +33,8 @@ import { existsSync } from "node:fs";
 
 import { openLedgerSync, type Ledger } from "../ledger/use.js";
 
-import { stdoutWrite } from "../tui/io-mode.js";
-import { fmtUsd, pad, truncate } from "../tui/format.js";
+import { stdoutWrite } from "../io-mode.js";
+import { fmtUsd, pad, truncate } from "../surface/format.js";
 
 export interface TaskRow {
   id: string;

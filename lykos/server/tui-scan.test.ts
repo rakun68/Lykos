@@ -1,4 +1,4 @@
-// P5 #53: the rule `lykos/tui/s0-writes.test.ts` holds for the old TUI, held for the new one. lykos-tui and its
+// P5 #53: the rule `lykos/surface/s0-writes.test.ts` holds for the old TUI, held for the new one. lykos-tui and its
 // client (`crates/tui`, `crates/client`) never open the ledger, and never make a number out of the server's
 // numbers: each usage figure is shown as it came, only formatted. Scanned, not trusted.
 import assert from "node:assert/strict";

@@ -1,5 +1,6 @@
 // `lykos` opens lykos-tui (P5 #52), as an installed package runs it: `node dist/cli.js` with no arguments, its own
-// server command, the workspace trust asked on the terminal first. `lykos --old-tui` opens the old TUI.
+// server command, the workspace trust asked on the terminal first. `lykos run --interactive` in a
+// terminal opens it too (P5 #55: the old TUI is gone).
 //
 //   npm run build && node scripts/tui/launch-test.mjs
 //
@@ -76,11 +77,12 @@ try {
   await s.close();
   await stopped();
 
-  // The old TUI checks the default model's credential before it draws; no prompt is sent, so none is used.
-  s = new TuiSession(process.execPath, [cli, "--old-tui"], { cols: 100, rows: 30, cwd: work, env: { DEEPSEEK_API_KEY: "unused", ...env } });
-  await step("lykos --old-tui opens the old TUI", () => /· LYKOS ·|\/help  Ctrl-C abort/.test(s.screen()) && !s.screen().includes("Ask anything"), 60000);
-  console.log(s.screen().split("\n").filter((l) => l.trim()).slice(0, 6).join("\n"));
+  s = new TuiSession(process.execPath, [cli, "run", "--interactive"], { cols: 100, rows: 30, cwd: work, env });
+  await step("lykos run --interactive opens lykos-tui", () => s.screen().includes("Ask anything"), 60000);
+  await quit();
+  await step("and quits", () => s.exit !== null);
   await s.close();
+  await stopped();
 } finally {
   await s?.close();
   await new Promise((r) => setTimeout(r, 1500));

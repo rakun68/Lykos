@@ -37,7 +37,7 @@ import {
   type EditFailureReason,
 } from "../tools/edit-failure.js";
 import type { TranscriptEventInput } from "../session/transcript.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 interface StrengthRow {
   post_edit_command: string | null;

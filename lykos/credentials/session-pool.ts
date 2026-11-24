@@ -2,7 +2,7 @@
 //
 // `/credential` in the TUI lists the current provider's pool, pins one row to
 // the session through ticket 05's `pinCredential`, or removes the pin. It
-// lives here, not in `tui/`, because it reads the credential db; the surface
+// lives here, not in `surface/`, because it reads the credential db; the surface
 // only prints what these functions return. Nothing here returns a secret.
 
 import { activeCooldowns, openCredentialDb } from "./db.js";

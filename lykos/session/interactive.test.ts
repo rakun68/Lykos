@@ -20,10 +20,10 @@ import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { runInteractiveLoop, type InteractiveHandle, type InteractiveSession, type LineSource } from "./interactive.js";
 import type { InteractionMode } from "../gate/modes.js";
 import type { StandaloneSessionState } from "./session.js";
-import type { AgentUi } from "../tui/s0.js";
+import type { AgentUi } from "../surface/s0.js";
 import { openCredentialDb } from "../credentials/db.js";
 import { listCredentials, readCredentialById } from "../credentials/pool.js";
-import { createCredentialCommands } from "../tui/credential-commands.js";
+import { createCredentialCommands } from "../surface/credential-commands.js";
 import { createOutputStyleSwitcher } from "../config/output-styles.js";
 
 /** Only the surface `runInteractiveLoop` itself calls (writeUser/writeSystem/writeHud/renderApproval/view/streamed) — attach()/snapshotJson() belong to the caller that constructs a real AgentUi, not to this loop. */

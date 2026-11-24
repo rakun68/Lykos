@@ -109,8 +109,9 @@ derives nothing from them (P5 #53, scanned by `lykos/server/tui-scan.test.ts`).
 ## 3. Sessions
 
 Each session runs in its own `lykos server-session` child, spawned with an IPC channel: the same
-interactive session the old TUI runs, with its approvals and questions sent as `request` events and
-answered by `session.answer`. Its ledger row and archive are written exactly as the old TUI's are.
+interactive session `lykos run --interactive` runs without a terminal, with its approvals and questions sent as `request` events and
+answered by `session.answer`. Its ledger row and archive are written exactly as that session's are. Interaction modes apply
+through `ModeGate` (`lykos/gate/mode-gate.ts`), as the old TUI's gate applied them (P5 #55).
 When the server goes away the child closes its session (archive and ledger), with a 30 s deadline.
 A session in one of Lykos's worktrees (`~/.lykos/worktrees/`) writes the main checkout's ledger, so
 removing the worktree takes none of its sessions with it. `/fork` and a rewind or redo past the

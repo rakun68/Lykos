@@ -14,7 +14,7 @@ import {
   type SweLiveInstance,
 } from "../bench/swe-live.js";
 import { defaultLedgerPath, withLedger } from "../ledger/use.js";
-import { stderrWrite, stdoutWrite } from "../tui/io-mode.js";
+import { stderrWrite, stdoutWrite } from "../io-mode.js";
 import { positionals } from "./args.js";
 
 export const DEFAULT_BENCH_DATASET = "SWE-bench-Live/Windows";

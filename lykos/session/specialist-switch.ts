@@ -6,7 +6,7 @@
 // actually differs from what is running now? The live half — applying that
 // diff to a real `AgentSession` (`session.setModel`, `setActiveToolsByName`,
 // `setThinkingLevel`) and recording it on the ledger — is owned by
-// `tui/interactive-surface.ts`, which is where the real session object
+// `surface/interactive-surface.ts`, which is where the real session object
 // lives; this module never touches one.
 //
 // **Why `loadConfig()` is called again rather than only calling
@@ -122,7 +122,7 @@ export interface ResolveSpecialistSwitchOpts {
    * P10.9 (ticket 21, D2): where `specialist_switch` fires from.
    *
    * This module is where the diff is computed, and the diff is the payload. It
-   * is NOT where the switch is applied — `tui/interactive-surface.ts` owns the
+   * is NOT where the switch is applied — `surface/interactive-surface.ts` owns the
    * live half — and that is a real limitation worth naming rather than hiding:
    * a resolution this function returns `ok` for is applied by its one
    * production caller, so the event is a resolution that was about to be

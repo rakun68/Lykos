@@ -161,6 +161,60 @@ describe("a real session on the engine server", () => {
     }
   });
 
+  it("runs the old TUI's commands: /context, /mode, and /followup (P5 #55)", async () => {
+    const w = world();
+    model.script.set("pooled-key", [
+      { kind: "tool", name: "write", input: { path: "note.txt", content: "hi\n" } },
+      { kind: "ok", text: "written" },
+      { kind: "ok", text: "done" },
+    ]);
+    const address = engineAddress(w.dir);
+    const server = new EngineServer({ address, idleSeconds: 60, env: w.env, log: () => {}, trust: async () => "flag" });
+    await server.listen();
+    try {
+      const c = await connectEngine(address, readOrCreateKey(address));
+      const events: Event[] = [];
+      c.onEvent((e) => events.push(e));
+      const until = async (pred: (e: Event) => boolean, what: string): Promise<Event> => {
+        const deadline = Date.now() + 60_000;
+        for (;;) {
+          const hit = events.find(pred);
+          if (hit) return hit;
+          if (Date.now() > deadline) throw new Error(`no ${what} in ${JSON.stringify(events.map((e) => e.data), null, 1)}`);
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      };
+      const system = (re: RegExp) => (e: Event) => e.data.type === "system" && re.test(e.data.text);
+      await c.request("subscribe");
+      const s = await c.request<SessionSummary>("session.start", { cwd: w.workspace, model: `${PROVIDER}/m1` });
+      await until((e) => e.data.type === "session.status" && e.data.session.status === "idle", "boot");
+
+      await c.request("session.prompt", { session: s.id, text: "/context" });
+      await until(system(/^context /), "the context report");
+
+      // Auto runs a write inside the workspace without asking, and the model is told the mode changed.
+      await c.request("session.prompt", { session: s.id, text: "/mode auto" });
+      await until(system(/^mode: Auto/), "the mode line");
+      await c.request("session.prompt", { session: s.id, text: "Write note.txt." });
+      const first = await until((e) => e.data.type === "turn.end", "the write's turn");
+      assert.ok(events.some((e) => e.seq < first.seq && e.data.type === "tool.end" && e.data.ok), "the write ran");
+      assert.ok(!events.some((e) => e.data.type === "request"), "Auto asked nothing");
+      assert.ok(model.bodies.some((b) => b.includes("Interaction mode is now Auto")), "the model was told");
+
+      await c.request("session.prompt", { session: s.id, text: "/followup Reply with done." });
+      const second = await until((e) => e.seq > first.seq && e.data.type === "turn.end", "the follow-up's turn");
+      const reply = events.filter((e) => e.seq > first.seq && e.seq < second.seq && e.data.type === "message.delta").map((e) => (e.data as { text: string }).text).join("");
+      assert.match(reply, /done/);
+      assert.ok(model.bodies.at(-1)!.includes("Reply with done."));
+
+      await c.request("session.close", { session: s.id });
+      await until((e) => e.data.type === "session.status" && e.data.session.status === "closed", "closed");
+      c.close();
+    } finally {
+      await server.stop("test");
+    }
+  });
+
   it("puts an undone prompt back in the client's prompt, and resumes the session it closed under the same id (P5 #42)", async () => {
     const w = world();
     model.script.set("pooled-key", [

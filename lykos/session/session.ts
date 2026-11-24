@@ -133,7 +133,7 @@ import {
 } from "../loop/fallback.js";
 import { HANDOFF_USAGE_ENTRY_TYPE } from "../loop/self-compact.js";
 import { CompactionLatencyTracker, LatencyTracker } from "../loop/latency.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { extensionFailureNotice, renderSessionEndReports, type ChildSessionResult, type SessionEndEvent } from "../extensions/api.js";
 import { readSessionMeta, transcriptDir, writeSessionMeta } from "./transcript.js";
 import { buildContinuationPrompt, decideContinuation, type ContinuationPlan } from "../loop/continuation.js";
@@ -507,7 +507,7 @@ export interface StandaloneSessionState {
   modelSwitches?: number;
   modelPath?: string;
   modelSwitchedPending?: boolean;
-  /** Specialists ticket 04: mid-session `/specialist <name>` switches, same shape as the model fields above. Set directly by the surface that applies a switch (`tui/interactive-surface.ts`), not observed off the event stream — unlike a model switch, a specialist switch is never inferred from a message. */
+  /** Specialists ticket 04: mid-session `/specialist <name>` switches, same shape as the model fields above. Set directly by the surface that applies a switch (`surface/interactive-surface.ts`), not observed off the event stream — unlike a model switch, a specialist switch is never inferred from a message. */
   specialistSwitches?: number;
   specialistPath?: string;
   specialistSwitchedPending?: boolean;

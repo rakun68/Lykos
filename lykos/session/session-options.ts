@@ -10,7 +10,7 @@ import { DEFAULT_SPECIALIST, discoverSpecialists, primarySpecialists } from "../
 import { providerMatrix, type ProviderReach } from "../config/providers.js";
 import { defaultCredentialDbPath } from "../credentials/db.js";
 import { poolSummary, summaryPoolSizes } from "../credentials/presence.js";
-import { EFFORT_LEVELS } from "../tui/effort.js";
+import { EFFORT_LEVELS } from "../surface/effort.js";
 
 export interface ModelOption {
   provider: string;

@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { discoverSpecialists, shippedSpecialistsDir } from "../config/specialists.js";
 import { writePiPresetsFile } from "../config/pi-preset-export.js";
 import { formatSpecialistList } from "../session/specialist-switch.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import { loadConfig } from "../config/load.js";
 import {
   applySpecialist,

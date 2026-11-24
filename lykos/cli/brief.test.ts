@@ -10,7 +10,6 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { crc32, deflateSync } from "node:zlib";
-import { completePath } from "../tui/screen/completion.js";
 import { parseRunBriefArgs, resolveRunBrief, type BriefSources } from "./brief.js";
 
 const TASK = 'Fix D18: a Monday "22:00-02:00" window\ncovers Tuesday 01:00.\n\nDo not commit.\n';
@@ -193,13 +192,11 @@ describe("resolveRunBrief — @path mentions in the prompt (T268)", () => {
     assert.deepEqual(r, { brief: "@mention the owner", fromStdin: false, files: [], images: [] });
   });
 
-  it("the path the interactive `@` completion inserts is the path that attaches", async () => {
+  it("a workspace-relative `@path`, as lykos-tui's `@` completion inserts it, is the path that attaches", async () => {
     const dir = workspace();
     mkdirSync(join(dir, "src"));
     writeFileSync(join(dir, "src", "deep.ts"), "deep\n");
-    const [picked] = completePath(dir, "deep");
-    assert.equal(picked?.label, "src/deep.ts");
-    const r = await resolveRunBrief({ message: `explain @${picked!.label}`, files: [], stdin: false }, sources(dir));
+    const r = await resolveRunBrief({ message: "explain @src/deep.ts", files: [], stdin: false }, sources(dir));
     assert.ok("brief" in r, JSON.stringify(r));
     assert.deepEqual(r.files, [resolve(dir, "src", "deep.ts")]);
   });

@@ -5,7 +5,7 @@
 // It reads one request line from stdin (delegate/session-protocol.ts), runs the
 // same delegated session `lykos run` runs (`sessionInput` in cli/run.ts), and
 // writes progress lines and one result line to stdout. stdout is the protocol:
-// nothing else may be written there, so lykos/tui/io-mode.ts owns the stream
+// nothing else may be written there, so lykos/io-mode.ts owns the stream
 // (`claimProtocolStream`): it hands this file the writer for frames and routes
 // every other write to stderr.
 
@@ -19,7 +19,7 @@ import { ledgerSpecCheck, renderRulings, rulingsOf } from "../delegate/spec-chec
 import { loadConfig } from "../config/load.js";
 import { ensureWorkspaceTrust, type TrustSource } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { joinNotes, recordWork, rootSessionOf, withWorkTarget, workFields, type WorkReport } from "../delegate/work-target.js";
 import { stepCapNote, watchStepCap, wrapUpNote, type StepCappable } from "../delegate/step-cap.js";
 import { runStandaloneTask, type RunStandaloneTaskInput, type RunStandaloneTaskResult } from "../session/session.js";

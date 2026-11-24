@@ -1,6 +1,6 @@
 /**
- * `lykos` with no arguments (P5 #52): the Rust TUI, `lykos-tui`, prebuilt per platform. `lykos --old-tui` is the
- * TypeScript one in `lykos/tui/`.
+ * `lykos` with no arguments (P5 #52): the Rust TUI, `lykos-tui`, prebuilt per platform. `lykos run --interactive`
+ * and `lykos resume` in a terminal open it too (P5 #55).
  *
  * The binary is, in order: `LYKOS_TUI_BIN`; a source build at `target/release/`; the one `scripts/tui/install.mjs`
  * fetched into `vendor/tui/` at `npm install`. The TUI starts its engine server with this same Node and entry
@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureWorkspaceTrust, trustedAtPath, WorkspaceTrustError } from "../gate/trust.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 
 /** The package's root: two levels above `lykos/cli/` and `dist/cli/` alike. */
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -37,26 +37,32 @@ export interface TuiLaunch {
 }
 
 /** How to start the TUI in `cwd`: its arguments, and the server command it starts when none runs. */
-export function tuiLaunch(binary: string, cwd: string, trustOnce: boolean, env: NodeJS.ProcessEnv = process.env): TuiLaunch {
+export function tuiLaunch(binary: string, cwd: string, trustOnce: boolean, env: NodeJS.ProcessEnv = process.env, extra: readonly string[] = []): TuiLaunch {
   const serve = env.LYKOS_SERVE_CMD || JSON.stringify([process.execPath, ...process.execArgv, process.argv[1] ?? join(ROOT, "dist", "cli.js"), "serve"]);
-  return { command: binary, args: ["--cwd", cwd, ...(trustOnce ? ["--trust-workspace"] : [])], env: { ...env, LYKOS_SERVE_CMD: serve } };
+  return { command: binary, args: ["--cwd", cwd, ...(trustOnce ? ["--trust-workspace"] : []), ...extra], env: { ...env, LYKOS_SERVE_CMD: serve } };
 }
 
-export async function runTui(cwd: string): Promise<number> {
+export interface RunTuiOptions {
+  /** More of lykos-tui's arguments: `--model`, `--session`. */
+  args?: readonly string[];
+  /** Trust the caller already settled: not asked again. */
+  trust?: "stored" | "flag" | "prompt";
+}
+
+export async function runTui(cwd: string, opts: RunTuiOptions = {}): Promise<number> {
   const binary = findTui();
   if (binary === undefined) {
     stderrWrite(
       `lykos: the TUI binary for ${process.platform}-${process.arch} is not installed.\n` +
-        `  npm install fetches it; cargo build --release -p lykos-tui builds it; LYKOS_TUI_BIN names one.\n` +
-        `  lykos --old-tui runs the old TUI.\n`,
+        `  npm install fetches it; cargo build --release -p lykos-tui builds it; LYKOS_TUI_BIN names one.\n`,
     );
     return 1;
   }
   // The trust question is asked here, on the terminal, as the old TUI asks it: the TUI has no trust dialog.
-  let trustOnce = false;
+  let trustOnce = opts.trust !== undefined && opts.trust !== "stored";
   // A trusted project at this path starts at once: resolving its identity costs two git processes, and the
   // server checks it anyway when the first session starts.
-  if (!trustedAtPath(cwd)) {
+  if (opts.trust === undefined && !trustedAtPath(cwd)) {
     try {
       // Trust not read from the store holds for this run: the flag, or a yes in a workspace with no git identity,
       // which `resolveProject` cannot find again in the server's process.
@@ -70,7 +76,7 @@ export async function runTui(cwd: string): Promise<number> {
       process.stdin.pause();
     }
   }
-  const launch = tuiLaunch(binary, cwd, trustOnce);
+  const launch = tuiLaunch(binary, cwd, trustOnce, process.env, opts.args ?? []);
   return new Promise((resolve) => {
     // Keys reach the TUI raw; a signal the terminal still sends goes to both, and the TUI decides.
     const ignore = (): void => {};

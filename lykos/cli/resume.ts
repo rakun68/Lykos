@@ -63,7 +63,7 @@ import { preflightResume, formatPreflight, type ResumePreflight } from "../sessi
 import type { LaunchInput, LaunchResult, ResumePlan } from "../session/interactive.js";
 import { earlierPrompts } from "../session/rewind.js";
 import type { LineSource } from "../session/interactive.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 export interface ResumeOptions {
   /** Skip the confirmation for cost and a moved working tree. Never skips a refusal. */

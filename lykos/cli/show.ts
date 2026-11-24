@@ -53,7 +53,7 @@ import { clampVerificationOutput } from "../session/verify-outcome.js";
 import { checkpointsForSession, isGitRepo, shortHash, type CheckpointEntry } from "../loop/checkpoint.js";
 import { PRUNE_NOTICES } from "../loop/tool-result-prune.js";
 import { SHAKE_NOTICE } from "../loop/shake.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import { readStrength, writeStrength } from "./show-strength.js";
 
 export interface ShowOptions {

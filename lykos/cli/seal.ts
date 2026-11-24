@@ -1,10 +1,10 @@
 import { sealKeyInit } from "../seal/keys.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { sealCreate } from "../seal/create.js";
 import { sealStatus } from "../seal/status.js";
 import { verifySeals } from "../seal/verify.js";
 import { installSealHook } from "../seal/hook.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 export async function runSeal(cwd: string, args: string[]): Promise<number> {
   const [sub, ...rest] = args;

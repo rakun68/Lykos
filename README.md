@@ -22,7 +22,7 @@ behind an approval gate, records every model call, and reports what it verified.
 
 It runs three ways:
 
-- **Standalone**, as a full-screen terminal UI or a one-shot task runner.
+- **Standalone**, as a terminal UI (`lykos-tui`) or a one-shot task runner.
 - **As an MCP worker** under an orchestrating agent, which calls Lykos specialists as its own tools.
 - **Under human supervision** through a desktop app. Not built yet.
 
@@ -104,8 +104,6 @@ Start the terminal UI:
 ```bash
 lykos
 ```
-
-`lykos --old-tui` starts the previous one.
 
 Or run one task and exit:
 

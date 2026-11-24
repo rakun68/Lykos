@@ -35,7 +35,7 @@
 // **Renderers are Pi's.** The definition is spread from
 // `createEditToolDefinition`, so `renderCall` and `renderResult` are Pi's, and
 // they read `details.diff` and `details.firstChangedLine`, which this tool sets
-// in the same shape. Lykos's own interface (`tui/`) reads the call's
+// in the same shape. Lykos's own interface (`lykos/server/event-ui.ts`, then lykos-tui) reads the call's
 // `edits[].oldText`/`newText` and the result's text. One exception: Pi's
 // `renderCall` previews the diff with Pi's own matcher, which knows no
 // `replaceAll` and would show a valid rename as a red "Found N occurrences"

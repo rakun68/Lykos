@@ -16,7 +16,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { CredentialStore, LykosModelRuntimeOptions } from "../session/model-runtime.js";
 import { openCredentialDb } from "./db.js";
 import { type Credential, listEnabled, upsertCredential } from "./pool.js";
-import { isOpenableUrl, openUrl } from "../tui/open-url.js";
+import { isOpenableUrl, openUrl } from "../surface/open-url.js";
 
 type AuthInteraction = Parameters<ModelRuntime["login"]>[2];
 type AuthPrompt = Parameters<AuthInteraction["prompt"]>[0];

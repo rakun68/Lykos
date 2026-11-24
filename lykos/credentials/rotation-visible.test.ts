@@ -17,7 +17,7 @@ import Database from "better-sqlite3";
 import { ModelRegistry, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { createLykosModelRuntime, RotationRelay } from "../session/model-runtime.js";
-import { createCredentialCommands, showRotationNotices } from "../tui/credential-commands.js";
+import { createCredentialCommands, showRotationNotices } from "../surface/credential-commands.js";
 import { openCredentialDb } from "./db.js";
 import { anthropicError, type FakeAnthropicServer, startFakeAnthropicServer } from "./fake-anthropic-server.js";
 import { upsertCredential } from "./pool.js";

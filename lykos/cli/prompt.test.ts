@@ -16,7 +16,7 @@ import {
 } from "../session/ponytail-head.js";
 import { OFF_LIMITS_HEADING } from "../session/specialist-apply.js";
 import { renderHeadView, runPrompt } from "./prompt.js";
-import { resetIoMode } from "../tui/io-mode.js";
+import { resetIoMode } from "../io-mode.js";
 
 const HEAD = "deadbeefcafebabe0000000000000000deadbeef";
 const ENV: NodeJS.ProcessEnv = {};

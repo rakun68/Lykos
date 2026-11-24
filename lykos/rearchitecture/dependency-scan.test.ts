@@ -22,8 +22,8 @@ describe("P0.5 dependency scan against the target map", () => {
     const byId = Object.fromEntries(DEPENDENCY_RULES.map((r) => [r.id, r]));
     assert.equal(byId["no-domain-imports-cli"]?.status, "green");
     assert.equal(byId["no-domain-imports-cli"]?.greenTicket, undefined);
-    assert.equal(byId["tui-through-agent-ui-seam"]?.status, "green");
-    assert.equal(byId["tui-through-agent-ui-seam"]?.greenTicket, undefined);
+    assert.equal(byId["no-tui-directory"]?.status, "green");
+    assert.equal(byId["no-tui-directory"]?.greenTicket, undefined);
     assert.equal(byId["only-ledger-opens-database"]?.status, "green");
     assert.equal(byId["only-ledger-opens-database"]?.greenTicket, undefined);
     assert.equal(byId["only-boundary-names-pi-paths"]?.status, "green");
@@ -36,7 +36,7 @@ describe("P0.5 dependency scan against the target map", () => {
 
   it("resolves relative import edges for rule checks", () => {
     assert.equal(resolveImportPath("session/memory-head.ts", "../cli/memory.js"), "cli/memory.ts");
-    assert.equal(resolveImportPath("session/interactive.ts", "../tui/screen/browser.js"), "tui/screen/browser.ts");
+    assert.equal(resolveImportPath("session/interactive.ts", "../tui/s0.js"), "tui/s0.ts");
   });
 
   it("reports a deliberate fixture violation with file, import and rule name", () => {
@@ -53,14 +53,16 @@ describe("P0.5 dependency scan against the target map", () => {
   it("fixture tree: each rule is triggered by a planted violation", () => {
     const files = new Map<string, string>([
       ["core/cli-import.ts", readFileSync(join(FIXTURE_ROOT, "domain-imports-cli.ts"), "utf8")],
-      ["core/tui-screen.ts", readFileSync(join(FIXTURE_ROOT, "tui-screen-import.ts"), "utf8")],
+      ["core/tui-import.ts", readFileSync(join(FIXTURE_ROOT, "tui-import.ts"), "utf8")],
+      ["tui/planted.ts", "export const planted = 1;"],
       ["cli/opens-ledger.ts", readFileSync(join(FIXTURE_ROOT, "ledger-open.ts"), "utf8")],
       ["gate/names-pi.ts", readFileSync(join(FIXTURE_ROOT, "pi-path.ts"), "utf8")],
       ["core/exists.ts", readFileSync(join(FIXTURE_ROOT, "core-exists.ts"), "utf8")],
     ]);
     const hits = scanSources(files);
     assert.ok(hits.some((v) => v.rule === "no-domain-imports-cli" && v.import === "../cli/memory.js"));
-    assert.ok(hits.some((v) => v.rule === "tui-through-agent-ui-seam" && v.import === "../tui/screen/browser.js"));
+    assert.ok(hits.some((v) => v.rule === "no-tui-directory" && v.import === "../tui/s0.js"));
+    assert.ok(hits.some((v) => v.rule === "no-tui-directory" && v.file === "tui/planted.ts"), "a file under tui/ is itself a violation");
     assert.ok(hits.some((v) => v.rule === "only-ledger-opens-database"));
     assert.ok(hits.some((v) => v.rule === "only-boundary-names-pi-paths"));
     assert.ok(hits.some((v) => v.rule === "no-core-directory"));

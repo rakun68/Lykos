@@ -113,8 +113,8 @@ _Avoid_: cache miss, prompt invalidation
 ### The agent and its interface
 
 **TUI**:
-The terminal interface: the full-screen surface and the append-only HUD behind one seam. It is the
-only interface the product ships; the desktop supervisor is planned and will be a second adapter,
+The terminal interface: `lykos-tui`, the Rust client that runs sessions on the engine server (P5). The
+TypeScript full-screen surface was removed in P5 #55. It is the only interface the product ships; the desktop supervisor is planned and will be a second adapter,
 not a replacement.
 _Avoid_: UI (unqualified), desktop app, frontend
 
@@ -629,7 +629,7 @@ _Avoid_: attached session, adopted session
 
 **Triad**:
 The footer's token counts for a session: fresh input, cache hit, cache write and output, followed by
-the context, the cache gauge, the cost and the top alert. The old TUI and `lykos-tui` show the same
+the context, the cache gauge, the cost and the top alert. `lykos-tui` shows the same
 numbers, read from the ledger by the engine server; the interface formats them and derives none.
 _Avoid_: token bar, stats line
 

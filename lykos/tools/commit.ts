@@ -36,7 +36,7 @@ import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { authorizeCommit, type ApprovalGate, type DenialLog } from "../gate/approval.js";
 import { hostGit, type GitRun } from "../git/host-git.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { resolveEditPath } from "./edit.js";
 import { isInsideWorkspace } from "./workspace-confine.js";
 

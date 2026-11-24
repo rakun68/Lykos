@@ -1,6 +1,6 @@
 // A registered slash command appears and runs.
 //
-// It lives beside the API rather than in `tui/commands.test.ts` because it is
+// It lives beside the API rather than in `surface/commands.test.ts` because it is
 // an assertion about the seam between the two: the host holds the handler, the
 // command surface holds the name, and neither half on its own is the feature.
 
@@ -14,8 +14,8 @@ import {
   setExtensionCommands,
   setSkillCommands,
   slashCandidates,
-} from "../tui/commands.js";
-import { parseInteractiveInput } from "../tui/s0.js";
+} from "../surface/commands.js";
+import { parseInteractiveInput } from "../surface/s0.js";
 import { LykosExtensionHost } from "./api.js";
 
 class NoGate implements ApprovalGate {

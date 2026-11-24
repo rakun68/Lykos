@@ -181,7 +181,7 @@ import {
   type RepoMap,
   type RepoMapPolicy,
 } from "../context/repo-map.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { LiveTranscriptRecorder } from "./live-capture.js";
 import { readSessionMeta, transcriptDir, type SessionResumeContract } from "./transcript.js";
 import { currentGitCommit, gitStatus, isGitDirty } from "./identity.js";

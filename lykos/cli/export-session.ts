@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { openLedgerSync } from "../ledger/use.js";
 import { sessionMarkdown } from "../session/export-markdown.js";
 import { resolveTranscriptFile, transcriptFilePath } from "../session/transcript.js";
-import { stderrWrite, stdoutWrite } from "../tui/io-mode.js";
+import { stderrWrite, stdoutWrite } from "../io-mode.js";
 import { resolveSessionId } from "./resume.js";
 
 export function runExportSession(cwd: string, ledgerPath: string, idOrPrefix: string, file?: string): number {

@@ -282,7 +282,7 @@ newline), then:
 
 Rules:
 
-- **stdout carries the protocol and nothing else.** `lykos/tui/io-mode.ts` owns it (`protocol` mode): it
+- **stdout carries the protocol and nothing else.** `lykos/io-mode.ts` owns it (`protocol` mode): it
   hands the child the writer for frames and sends any other write (a `console.log`, a dependency banner) to
   stderr. A stdout line that is not a frame is
   ignored by the server and kept for the crash report.

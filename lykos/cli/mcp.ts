@@ -13,7 +13,7 @@
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMcpServer } from "../delegate/mcp-server.js";
-import { setIoMode } from "../tui/io-mode.js";
+import { setIoMode } from "../io-mode.js";
 
 export async function runMcp(cwd: string, version: string): Promise<number> {
   // T32: declared before the transport connects, so any writer elsewhere in

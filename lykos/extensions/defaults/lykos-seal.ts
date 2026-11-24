@@ -25,7 +25,7 @@ import { scanWeakening } from "../../seal/weakening.js";
 import { sealCreate } from "../../seal/create.js";
 import { enforceForDeprecation, sealEnforced } from "../../seal/enforce.js";
 import { restoreSealed } from "../../seal/guard.js";
-import { stderrWrite } from "../../tui/io-mode.js";
+import { stderrWrite } from "../../io-mode.js";
 
 export const SEAL_EXTENSION = "lykos-seal";
 

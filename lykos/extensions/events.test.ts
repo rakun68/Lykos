@@ -18,7 +18,7 @@ import { createCheckpoint, spawnGit, type GitRunner } from "../loop/checkpoint.j
 import { runSessionGate, type GateOutcome, type GatePolicy } from "../gate/verify-gate.js";
 import { buildMemoryHead } from "../session/memory-head.js";
 import { buildTaskListTool, newTaskListState } from "../tools/task-list.js";
-import { resolveSpecialistSwitch } from "./../session/specialist-switch.js";
+import { resolveSpecialistSwitch } from "../session/specialist-switch.js";
 import type { ResolvedConfig } from "../config/types.js";
 import { LYKOS_EVENTS, LykosExtensionHost, type LykosEvent, type LykosEventPayloads } from "./api.js";
 import { anthropicError, startFakeAnthropicServer } from "../credentials/fake-anthropic-server.js";

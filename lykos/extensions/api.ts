@@ -90,7 +90,7 @@ import {
 import type { ProjectExecutor } from "../tools/executor.js";
 import type { GateOutcome } from "../gate/verify-gate.js";
 import { workingTreeFingerprint } from "../loop/checkpoint.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import type { JobRecord } from "../tools/job-runner.js";
 
 // ---------------------------------------------------------------------------
@@ -752,7 +752,7 @@ export interface LykosExtensionHostOpts {
  *
  * Not module-level state. A second session in one process would otherwise
  * inherit the first one's handlers, and the counters would describe neither —
- * the same argument `tui/commands.ts` makes for the one piece of module state
+ * the same argument `surface/commands.ts` makes for the one piece of module state
  * this codebase does keep, read in the other direction.
  */
 export class LykosExtensionHost {

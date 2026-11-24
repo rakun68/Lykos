@@ -1,10 +1,6 @@
-// `lykos sessions` and the picker driver.
-//
-// The picker is driven through an injected `PickerIo`, so the whole loop —
-// paint, key, select — is asserted without a terminal. The one thing these
-// tests are most careful about is the promise in the task's own text: the
-// picker is READ-ONLY, and returning a session id is the whole of what it
-// does. T57 re-runs the preflight and owns every decision about spending.
+// `lykos sessions` and the numbered picker `lykos resume` shows without a terminal. The picker is READ-ONLY:
+// returning a session id is the whole of what it does. T57 re-runs the preflight and owns every decision about
+// spending.
 
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -13,14 +9,10 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { Ledger } from "../ledger/ledger.js";
 import { TranscriptWriter, writeSessionMeta } from "../session/transcript.js";
-import type { KeyEvent } from "../tui/screen/input.js";
 import {
   gatherSessions,
   pickSessionFallback,
-  pickSessionInteractive,
   runSessions,
-  verdictForRow,
-  type PickerIo,
   type SessionSource,
 } from "./sessions.js";
 
@@ -78,24 +70,6 @@ function seed(
   });
 }
 
-/** A scripted terminal: hands out keys in order, records what was painted. */
-function scriptedIo(keys: readonly KeyEvent[]): PickerIo & { painted: string[][]; closed: boolean } {
-  let i = 0;
-  const io = {
-    painted: [] as string[][],
-    closed: false,
-    size: () => ({ columns: 100, rows: 20 }),
-    paint(lines: readonly string[]) {
-      this.painted.push([...lines]);
-    },
-    nextKey: async () => (i < keys.length ? keys[i++]! : null),
-    close() {
-      this.closed = true;
-    },
-  };
-  return io;
-}
-
 describe("T58 gatherSessions", () => {
   it("merges several ledgers and remembers which one each session came from", () => {
     const a = project();
@@ -120,91 +94,6 @@ describe("T58 gatherSessions", () => {
     a.ledger.close();
     const missing: SessionSource = { ledgerPath: join(a.dir, "nope.db"), workspace: a.dir, projectName: "gone" };
     assert.equal(gatherSessions([a.source, missing]).rows.length, 1);
-  });
-});
-
-describe("T58 verdictForRow", () => {
-  it("condenses T56's preflight to the line the picker shows, with the price on it", () => {
-    const p = project();
-    seed(p.ledger, p.source.ledgerPath, "priced11");
-    p.ledger.close();
-    const { rows, sourceOf } = gatherSessions([p.source]);
-    const verdict = verdictForRow(rows[0]!, sourceOf.get(rows[0]!.id), NOW);
-    // Whatever the verdict, the summary always says something specific — the
-    // one thing it may never do is imply safety it has not checked.
-    assert.ok(verdict.summary.length > 0);
-    assert.ok(["proceed", "warn", "confirm", "refuse"].includes(verdict.overall));
-  });
-
-  it("refuses rather than throwing when the ledger behind a row has gone", () => {
-    const p = project();
-    seed(p.ledger, p.source.ledgerPath, "orphan11");
-    p.ledger.close();
-    const { rows } = gatherSessions([p.source]);
-    const verdict = verdictForRow(rows[0]!, undefined, NOW);
-    assert.equal(verdict.overall, "refuse");
-  });
-});
-
-describe("T58 the picker loop", () => {
-  it("returns the highlighted session on Enter, and closes the terminal on the way out", async () => {
-    const p = project();
-    seed(p.ledger, p.source.ledgerPath, "first111");
-    p.ledger.close();
-    const io = scriptedIo([{ type: "enter" }]);
-    const picked = await pickSessionInteractive({
-      sources: [p.source],
-      io,
-      now: NOW,
-      verdictFor: () => ({ overall: "proceed", summary: "replays 100 tokens" }),
-    });
-    assert.equal(picked, "first111");
-    assert.equal(io.closed, true);
-    assert.ok(io.painted.length >= 1);
-  });
-
-  it("returns null on Escape, having spent nothing", async () => {
-    const p = project();
-    seed(p.ledger, p.source.ledgerPath, "first111");
-    p.ledger.close();
-    const before = Ledger.open(p.source.ledgerPath);
-    const callsBefore = before.db.prepare(`SELECT COUNT(*) AS n FROM calls`).get() as { n: number };
-    before.close();
-
-    const io = scriptedIo([{ type: "escape" }]);
-    assert.equal(await pickSessionInteractive({ sources: [p.source], io, now: NOW }), null);
-
-    const after = Ledger.open(p.source.ledgerPath);
-    assert.deepEqual(after.db.prepare(`SELECT COUNT(*) AS n FROM calls`).get(), callsBefore);
-    after.close();
-  });
-
-  it("stays open and shows the reason when Enter lands on a session that cannot be resumed", async () => {
-    const p = project();
-    seed(p.ledger, p.source.ledgerPath, "hop1aaaa", { resumable: false, reason: "MCP hop-1 has no local transcript" });
-    p.ledger.close();
-    const io = scriptedIo([{ type: "enter" }, { type: "escape" }]);
-    assert.equal(await pickSessionInteractive({ sources: [p.source], io, now: NOW }), null);
-    const last = io.painted.at(-1)!.join("\n");
-    assert.match(last, /MCP hop-1 has no local transcript/);
-  });
-
-  it("computes each row's verdict at most once", async () => {
-    const p = project();
-    seed(p.ledger, p.source.ledgerPath, "cached11");
-    p.ledger.close();
-    let calls = 0;
-    const io = scriptedIo([{ type: "arrow", dir: "down" }, { type: "arrow", dir: "up" }, { type: "escape" }]);
-    await pickSessionInteractive({
-      sources: [p.source],
-      io,
-      now: NOW,
-      verdictFor: () => {
-        calls += 1;
-        return { overall: "proceed", summary: "replays 100 tokens" };
-      },
-    });
-    assert.equal(calls, 1);
   });
 });
 

@@ -4,7 +4,7 @@ import { writeResolvedConfigCache } from "../config/cache.js";
 import { loadConfig } from "../config/load.js";
 import { scaffoldLykosDir } from "../config/scaffold.js";
 import { resolveProject } from "../session/identity.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 export function runInit(cwd: string): number {
   const result = scaffoldLykosDir(cwd);

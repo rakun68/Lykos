@@ -15,7 +15,7 @@
 // ADR-0027: a tiny module (node:fs, node:os, node:path only), so the static
 // import costs nothing on the hot path.
 import { adoptPiHost, ensurePiHost } from "./config/pi-host.js";
-import { stderrWrite } from "./tui/io-mode.js";
+import { stderrWrite } from "./io-mode.js";
 
 /** Set by a command that must end by draining the event loop rather than `process.exit` (`usage --refresh`). */
 let exitByDraining = false;
@@ -37,7 +37,7 @@ async function main(argv: string[]): Promise<number> {
   // Pi session (bare `lykos`, `run`, `resume`, `mcp`). Everything else — `hud`
   // on the S1 hot path, `usage`, `doctor` — pays for the variable only and
   // never writes into the home.
-  if (command === "--old-tui" || command === "run" || command === "resume" || command === "mcp" || command === "session-child" || command === "server-session") {
+  if (command === "run" || command === "resume" || command === "mcp" || command === "session-child" || command === "server-session") {
     try {
       ensurePiHost({ dir: piHost });
     } catch (err) {
@@ -51,15 +51,10 @@ async function main(argv: string[]): Promise<number> {
   // standalone terminal UI"; nothing implemented it, so a bare `lykos`
   // answered `unknown command "undefined"`. Found 2026-09-07 while looking
   // into UI feedback item 3, which begins "if we just start lykos".
-  // P5 #52: bare `lykos` is the Rust TUI, whose server prepares Pi's directory; `lykos --old-tui` the
-  // TypeScript one, until #55 removes it.
+  // P5 #52: bare `lykos` is the Rust TUI, whose server prepares Pi's directory.
   if (command === undefined) {
     const { runTui } = await import("./cli/tui.js");
     return runTui(cwd);
-  }
-  if (command === "--old-tui") {
-    const { runRun, askOutcomeFromEnv } = await import("./cli/run.js");
-    return runRun(cwd, undefined, { interactive: true, askOutcome: askOutcomeFromEnv() });
   }
 
   // Loaded here, not at the top: bare `lykos` starts the TUI without the command table (P5 #52).

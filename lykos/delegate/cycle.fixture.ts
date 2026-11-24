@@ -5,7 +5,7 @@
 
 import { appendFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import { runCycle } from "./cycle.js";
 import type { SessionRunner } from "./session-protocol.js";
 

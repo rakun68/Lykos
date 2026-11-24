@@ -19,12 +19,12 @@ import {
   type BootConfig,
   type BootedStandaloneSession,
 } from "./boot.js";
-import { assembleBootHead, assembleIdentityHead, fingerprintHead, HeadContract, type BootArtifacts } from "../session/head-contract.js";
-import { assembleMountedCatalogHead } from "../session/mounted-catalog-head.js";
+import { assembleBootHead, assembleIdentityHead, fingerprintHead, HeadContract, type BootArtifacts } from "./head-contract.js";
+import { assembleMountedCatalogHead } from "./mounted-catalog-head.js";
 import { assembleDietHead, assembleOutputDietHead } from "../loop/prompt-diet.js";
-import { assemblePonytailHead, PONYTAIL_REPLACE_MARKER, PONYTAIL_RULESET_TEXT } from "../session/ponytail-head.js";
+import { assemblePonytailHead, PONYTAIL_REPLACE_MARKER, PONYTAIL_RULESET_TEXT } from "./ponytail-head.js";
 import { assembleOutputStyleHead } from "../config/output-styles.js";
-import { applySpecialist } from "../session/specialist-apply.js";
+import { applySpecialist } from "./specialist-apply.js";
 import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { AutoApproveGate } from "../gate/approval.js";
 import { createSealTestCommandAllowance, wrapApprovalGateWithSealAllowance } from "../gate/delegated.js";

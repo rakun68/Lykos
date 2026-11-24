@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import { AutoApproveGate } from "../gate/approval.js";
 import { LykosExtensionHost } from "../extensions/api.js";
 import { isFileChangingCall, TOOL_CALL_TOOL_NAME } from "../tools/tool-call.js";
-import { setStderrSink } from "../tui/io-mode.js";
+import { setStderrSink } from "../io-mode.js";
 import { call, mounted, reply, runScriptedSession, say, scriptedPiHost } from "./scripted-session.js";
 
 // Written only against `LykosExtensionApi`, with Node's own fs — what any author has.

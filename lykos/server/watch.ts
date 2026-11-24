@@ -13,7 +13,7 @@ import type { SessionView } from "../delegate/ownership.js";
 import { defaultLedgerPath } from "../ledger/ledger.js";
 import type { TranscriptRecord } from "../session/replay.js";
 import { transcriptFilePath } from "../session/transcript.js";
-import { toolSummary } from "../tui/s0.js";
+import { toolSummary } from "../surface/s0.js";
 import { toolEndData } from "./event-ui.js";
 import type { DelegatedInfo, EventData, SessionStatus } from "./protocol.js";
 import type { FromChild, ToChild } from "./session-child.js";

@@ -150,7 +150,7 @@ or more digits is read as a hash when one matches, and refused when it is also a
 checkpoint's index.
 
 ### 2.2.1 Rewinding a Live Session (`/rewind`, Esc Esc)
-In an interactive session, `/rewind` (or Esc Esc on an empty input, on the full-screen surface)
+In an interactive session, `/rewind` (or Esc Esc on an empty input, in `lykos-tui`)
 lists the session's earlier prompts. The chosen one offers: code and conversation, conversation
 only, code only, summarize from here, or cancel. Only the person can rewind; there is no tool for it.
 

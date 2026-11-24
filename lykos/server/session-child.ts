@@ -16,7 +16,7 @@ import { resolveApprovalGate } from "../session/session.js";
 import type { InteractiveHandle, LaunchResult, LineSource, ResumePlan, ResumeRunner } from "../session/interactive.js";
 import { defaultLedgerPath } from "../ledger/ledger.js";
 import { TerminalAsk, type AskRequest } from "../tools/ask.js";
-import { slashCandidates } from "../tui/commands.js";
+import { slashCandidates } from "../surface/commands.js";
 import type { AsideAnswer } from "../session/aside.js";
 import type { SessionOptions } from "../session/session-options.js";
 import { createEventUi } from "./event-ui.js";
@@ -292,6 +292,7 @@ export async function runSessionChild(
       ...(ledgerPath !== undefined ? { ledgerPath } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(params.mode !== undefined ? { mode: params.mode } : {}),
+      interactionModes: true,
       ...(input.resume?.tools !== undefined ? { tools: input.resume.tools } : {}),
       ...(input.resume !== undefined ? { resume: input.resume } : {}),
       trustSource: params.trustSource,
