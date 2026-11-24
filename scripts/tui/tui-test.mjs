@@ -72,6 +72,11 @@ try {
   await step("the session goes idle", () => s.screen().includes(work.slice(-20)) && !s.screen().includes("esc interrupt"));
   await submit("tool");
   await step("a tool call folds into its activity line at low verbosity", () => s.screen().includes("+ 1 read"));
+  // 100 columns is narrow: the sidebar opens over the session and esc closes it (#46).
+  await key("ctrl+x", "b");
+  await step("leader b opens the sidebar over the session", () => s.screen().includes("Context") && s.screen().includes("6% used\n"));
+  await key("esc");
+  await step("esc closes it", () => !s.screen().includes("Context"));
   // The palette's verbosity entry: low, medium, high, and back to low.
   const verbosity = async (now) => {
     await key("ctrl+p");

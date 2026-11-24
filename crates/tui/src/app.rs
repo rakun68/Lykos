@@ -275,6 +275,8 @@ pub struct App {
     pub req_diff: RefCell<crate::request::Laid>,
     /// The diff viewer, while open.
     pub diff: Option<crate::diffview::Viewer>,
+    /// The session sidebar's state (P5 #46).
+    pub side: crate::sidebar::Side,
     pub laid: RefCell<Option<Rc<Layout>>>,
     pub frame: Cell<Option<Frame>>,
     /// Groups a click opened or closed, per session.
@@ -326,6 +328,7 @@ impl App {
             req: crate::request::Ui::default(),
             req_diff: RefCell::new(None),
             diff: None,
+            side: crate::sidebar::Side::default(),
             laid: RefCell::new(None),
             frame: Cell::new(None),
             opened: BTreeMap::new(),
@@ -355,6 +358,7 @@ impl App {
             }
             "app.toggle.animations" => pick(p.animations, "Disable animations", "Enable animations"),
             "app.toggle.diffwrap" => pick(p.diff_wrap, "Disable diff wrapping", "Enable diff wrapping"),
+            "session.sidebar.toggle" => pick(crate::sidebar::place(self, self.side.width.get()).is_some(), "Hide sidebar", "Show sidebar"),
             _ => d.title.to_string(),
         }
     }
@@ -1032,6 +1036,10 @@ impl App {
         if id == "diff.open" {
             return Some(self.open_diff());
         }
+        if id == "session.sidebar.toggle" {
+            self.toggle_sidebar();
+            return Some(Vec::new());
+        }
         let current = self.session.clone();
         let out = match id {
             // OpenCode opens the home screen; the next prompt starts the session.
@@ -1462,6 +1470,7 @@ impl App {
     pub fn on_mouse(&mut self, m: MouseEvent, now: Instant) -> Vec<Action> {
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if self.diff_mouse(&m) => return Vec::new(),
+            _ if self.dialog.is_none() && self.sidebar_mouse(&m) => return Vec::new(),
             MouseEventKind::ScrollUp => {
                 self.on_scroll(true, 3);
                 return Vec::new();
@@ -1539,6 +1548,9 @@ impl App {
         }
         let m = key.modifiers;
         let (ctrl, alt, sup) = (m.contains(KeyModifiers::CONTROL), m.contains(KeyModifiers::ALT), m.contains(KeyModifiers::SUPER));
+        if key.code == KeyCode::Esc && self.sidebar_esc() {
+            return Vec::new();
+        }
         if let Some(answer) = self.request_key(&key) {
             return answer;
         }

@@ -101,6 +101,7 @@ pub const DEFS: &[Def] = &[
     // OpenCode's session and tab actions (P5 #42). The child and parent keys (down, right, left, up there) are
     // unbound: here the arrows move in the prompt. Tab history forward (ctrl+i there) is tab in a terminal.
     def("session.new", "<leader>n", "Create a new session", "Session"),
+    def("session.sidebar.toggle", "<leader>b", "Toggle sidebar", "Session"),
     def("session.list", "<leader>l", "List all sessions", "Session"),
     def("open.menu", "ctrl+o", "Open recent sessions and projects", "Session"),
     def("session.tab.next", "ctrl+tab,alt+down", "Switch to next open session tab", "Session"),
@@ -499,7 +500,7 @@ mod tests {
             "leader": { "value": "ctrl+o", "source": "global (g.yaml)" },
             "app.exit": { "value": "none", "source": "project (p.yaml)" },
             "input.undo": { "value": ["ctrl+z", "alt+u"], "source": "project (p.yaml)" },
-            "session.aside": { "value": "<leader>b", "source": "project (p.yaml)" },
+            "session.aside": { "value": "<leader>j", "source": "project (p.yaml)" },
             "nope.action": { "value": "ctrl+q", "source": "project (p.yaml)" },
             "prompt.clear": { "value": "ctrl+what", "source": "project (p.yaml)" },
         }));
@@ -508,13 +509,13 @@ mod tests {
         assert_eq!(k.matches(&ev(KeyCode::Char('c'), KeyModifiers::CONTROL), false), ["prompt.copy", "prompt.clear"], "exit unbound");
         assert_eq!(k.keys("app.exit"), "");
         assert_eq!(k.keys("input.undo"), "ctrl+z, alt+u");
-        assert_eq!(k.keys("session.aside"), "ctrl+o b");
+        assert_eq!(k.keys("session.aside"), "ctrl+o j");
         assert_eq!(k.source("input.undo"), "project (p.yaml)");
         assert_eq!(k.source("leader"), "global (g.yaml)");
         assert_eq!(k.source("input.redo"), "default");
         assert!(k.is_leader(&ev(KeyCode::Char('o'), KeyModifiers::CONTROL)));
         assert!(!k.is_leader(&ev(KeyCode::Char('x'), KeyModifiers::CONTROL)));
-        assert_eq!(k.matches(&ev(KeyCode::Char('b'), KeyModifiers::NONE), true), ["session.aside"]);
+        assert_eq!(k.matches(&ev(KeyCode::Char('j'), KeyModifiers::NONE), true), ["session.aside"]);
         assert_eq!(k.keys("prompt.clear"), "ctrl+c", "a bad value leaves the default");
     }
 }

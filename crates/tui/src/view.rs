@@ -31,14 +31,15 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
         return None;
     }
     let pad = pad(w);
+    app.side.width.set(w);
     let docked = crate::diffview::dock_width(app, w).is_some();
+    let sw = crate::diffview::session_width(app, w);
     // A request waiting takes the keys, so a full-screen viewer steps aside for it.
     let full = app.diff.is_some() && !docked && app.request().is_none();
     let cursor = if full {
         None
-    } else if docked {
-        // Docked, the session draws beside the viewer at the width it leaves.
-        let sw = crate::diffview::session_width(app, w);
+    } else if sw < w {
+        // Beside the docked viewer or the sidebar, the session draws at the width it leaves.
         let mut left = Buffer::new(sw, h);
         let cursor = match app.current() {
             None => home(app, &mut left, crate::view::pad(sw)),
@@ -49,8 +50,10 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
                 buf.set(x, y, *left.get(x, y));
             }
         }
+        // The terminal scrolls whole rows: what then differs on the right is written again, so the hint holds.
+        buf.scroll = left.scroll;
         // The viewer has the keys; a request's typed answer keeps its cursor.
-        cursor.filter(|_| app.request().is_some())
+        cursor.filter(|_| !docked || app.request().is_some())
     } else {
         match app.current() {
             None => home(app, buf, pad),
@@ -59,6 +62,8 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     };
     if docked || full {
         crate::diffview::draw(app, buf);
+    } else {
+        crate::sidebar::draw(app, buf);
     }
     crate::request::draw_expanded(app, buf);
     if app.dialog.is_some() {
@@ -710,7 +715,7 @@ fn context_label(app: &App) -> Option<String> {
     Some(s)
 }
 
-fn group(n: u64) -> String {
+pub(crate) fn group(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, ch) in digits.chars().enumerate() {
@@ -858,7 +863,7 @@ mod tests {
         let s = screen(&buf);
         assert!(s.contains("Press ctrl+p to see all available actions"), "{s}");
         assert!(s.contains("Leader") && s.contains("ctrl+x · default"), "{s}");
-        app.dialog = Some(Dialog::Help { scroll: 105 });
+        app.dialog = Some(Dialog::Help { scroll: 106 });
         draw(&app, &mut buf);
         assert!(screen(&buf).contains("Undo in input"), "scrolled to the input actions");
     }

@@ -597,6 +597,16 @@ _Avoid_: detail level, log level
 `lykos-tui --mini`: the transcript printed into the terminal's own scrollback, a footer drawn under it.
 _Avoid_: inline mode, compact mode
 
+**Diff viewer**:
+`lykos-tui`'s `/diff`: the workspace's changes from `vcs.diff`, file by file, against one of four
+sources (All, Committed, Uncommitted, Last turn), docked on the right or full screen.
+_Avoid_: diff panel, review pane
+
+**Sidebar**:
+The 42 columns on the right of a `lykos-tui` session: title, context, todos, modified files,
+working directory. Shown by itself on a wide screen; `<leader>b` toggles it.
+_Avoid_: info panel, side pane
+
 **Queued prompt**:
 A prompt held by `lykos-tui` until its session is idle, then sent; queued with `Ctrl+X Enter`.
 _Avoid_: pending message

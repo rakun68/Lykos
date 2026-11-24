@@ -26,6 +26,8 @@ pub struct Prefs {
     pub verbosity: Verbosity,
     pub diff_wrap: bool,
     pub animations: bool,
+    /// `session.sidebar`: "auto" shows the sidebar on a wide screen, "hide" only when toggled open.
+    pub sidebar: bool,
 }
 
 impl Default for Prefs {
@@ -42,6 +44,7 @@ impl Default for Prefs {
             verbosity: Verbosity::Low,
             diff_wrap: true,
             animations: true,
+            sidebar: true,
         }
     }
 }
@@ -68,6 +71,7 @@ impl Prefs {
             verbosity: v["verbosity"].as_str().and_then(Verbosity::parse).unwrap_or(d.verbosity),
             diff_wrap: v["diffWrap"].as_str().map_or(d.diff_wrap, |s| s != "none"),
             animations: v["animations"].as_bool().unwrap_or(d.animations),
+            sidebar: v["sidebar"].as_str().map_or(d.sidebar, |s| s != "hide"),
         }
     }
 
@@ -120,6 +124,7 @@ impl Prefs {
             "verbosity": self.verbosity.name(),
             "diffWrap": if self.diff_wrap { "word" } else { "none" },
             "animations": self.animations,
+            "sidebar": if self.sidebar { "auto" } else { "hide" },
         });
         let _ = std::fs::write(path, format!("{v}\n"));
     }

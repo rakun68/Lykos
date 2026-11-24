@@ -376,15 +376,78 @@ Where the transcript and mini mode differ from OpenCode on purpose:
 
 - The toggles and verbosity persist in `state.json`, not in the config.
 - There is no file context part.
-- Diff wrapping is a saved toggle with nothing to wrap until the diff view lands (#46).
 - At low verbosity a shell call reads `$ bash ls`.
 - Mini mode has no `Ctrl+L`, takes no mouse, and cannot open a group once it is in the scrollback;
   when the footer shrinks, the rows it gives back stay blank until the next print.
 
-Where it differs from OpenCode on purpose: the context use is always on screen rather than in a
+
+**Prompts, the diff viewer and the sidebar (#46).** OpenCode's `routes/session/permission.tsx`,
+`question.tsx`, `component/diff-viewer/` and `routes/session/sidebar.tsx` at `4332e24`.
+
+- **Approval:** the prompt box gives its place to `△ Permission required`, then what the tool will
+  do: `$ command` for a shell call, `← Edit path` with the patch for a write or edit (split past 120
+  columns, wrapped while diff wrapping is on), `→ Read path`, or `⚙ title`. The decisions the gate
+  offers are buttons; `←` `→` (`h` `l`) move, `↑` `↓` scroll the body, `Enter` confirms, `Esc` denies
+  (or leaves full screen), `Ctrl+F` shows the
+  request full screen. A standing decision (allow always, allow for a folder) replaces the body with
+  what it will keep allowing. `y`, `a`, `f` and `n` still answer directly. The answer goes to the
+  gate unchanged, so each decision behaves and is recorded as it is in the line TUI.
+- **Question:** `Question`, the title, the options numbered, then `N+1. Type your own answer` and
+  `If nobody answers: …`. A number, `↑` `↓` and `Enter`, or typing answers; `Esc` dismisses it with
+  the stated assumption. A question that wants more conversation is answered by typing.
+- **Diff viewer:** `/diff` (or the palette's `Open diff viewer`) shows the workspace's changes from
+  the engine server's `vcs.diff` (12 lines of context, `.lykos/` left out, untracked files included).
+  Docked on the right half from 108 columns, full screen below that or with `f`. Each file is a card
+  with its counts; past 88 columns a file list sits beside the cards; past 100 the patch splits.
+
+| Key | Action |
+| --- | --- |
+| `Esc` `q` | Close |
+| `j` `k`, `↓` `↑` | Line down, up |
+| `PageDown` `Ctrl+F`, `PageUp` `Ctrl+B` | Page |
+| `Ctrl+D`, `Ctrl+U` | Half page |
+| `Home` `gg`, `End` `G` | Start, end |
+| `]`, `[` | Next, previous hunk |
+| `n` `Alt+Down`, `p` `Alt+Up` | Next, previous file |
+| `b` | File list |
+| `s` | One file at a time |
+| `d` | Source: All (the branch against its merge base with the default branch), Committed, Uncommitted (against `HEAD`), Last turn |
+| `v` | Split or unified |
+| `f` | Full screen |
+| `m` | Mark the file reviewed: it folds to its header, and in single-file mode the next opens |
+| `?` | Every shortcut |
+
+- **Sidebar:** 42 columns on the right with the session's title, Context (tokens, % used, $ spent),
+  Todo (the `todo` tool's latest list; past two items a click on the header folds it to
+  `▶ Todo (N remaining)`), Modified Files (each file the session's tools changed, `+added -removed`)
+  and the working directory. It shows by itself past 120 columns. `<leader>b` hides it (remembered
+  as `sidebar: "hide"` in `state.json`) or shows it; on a narrower screen it opens over the session
+  on a dimmed backdrop and `Esc` closes it. The wheel scrolls it. The diff viewer takes its place.
+
+Measured (`node scripts/tui/scroll-measure.mjs`, release build, Windows 10 ConPTY, 2026-11-24,
+120x40 unless named): a 5,000-line diff (`--diff 5000`) opens in 6.2 to 9.4 ms (its first frame
+lays it out once) and scrolls at a median 0.358 ms per 3-row wheel step (p95 0.47), 0.219 to 0.23 ms
+per row. A 10,000-message transcript at 160 columns (`--cols 160`) scrolls at 0.364 ms with the
+sidebar beside it and 0.316 ms with it hidden (`--no-sidebar`). Both are over the gate's 1-row frame
+limit (0.187 ms + 0.010) and wait on the maintainer.
+
+Where #46 differs from OpenCode on purpose:
+
+- A denial takes no message: there is no reject-with-reason stage. The buttons take no mouse.
+- `d` cycles the sources where OpenCode opens a dialog, and there is no base-branch chooser.
+- Last turn is the uncommitted diff kept to the files the last turn's tools wrote.
+- The file list is flat, not a directory tree.
+- Docked, the viewer takes every key but `Ctrl+C`; a pending request takes them first.
+- Untracked files are diffed in process (jsdiff), not by git.
+- The viewer's choices (file list, split, wrap, reviewed files) last until it closes.
+- The sidebar has no MCP section (a Lykos session connects to no MCP server), no getting-started
+  card and no branch after the directory; its title is cut to one row; Modified Files is a Lykos
+  section; the Todo fold is not saved.
+
+Where it differs from OpenCode on purpose: the context use is always on screen as well as in the
 sidebar, the metadata row has no specialist name, the footer shows the
 workspace without its git branch (reading it would cost a process at startup), and
-`--trust-workspace` replaces a trust dialog until the dialogs land (#46). In the prompt:
+`--trust-workspace` replaces a trust dialog. In the prompt:
 
 - `Ctrl+X` cuts when text is selected, and is the leader otherwise.
 - `Ctrl+R` searches the history, as the old TUI did, where OpenCode renames the session.

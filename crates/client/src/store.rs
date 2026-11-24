@@ -31,6 +31,8 @@ pub struct Session {
     /// The slash commands the session runs, once it has said.
     pub commands: Vec<CommandInfo>,
     pub last_seq: u64,
+    /// Tool calls finished: what a view kept from the items reads again when it changes.
+    pub tool_ends: u64,
     /// True while an assistant message is streaming into the last item.
     open_assistant: bool,
     open_thinking: bool,
@@ -38,7 +40,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(summary: SessionSummary) -> Self {
-        Session { summary, items: Vec::new(), usage: None, requests: Vec::new(), commands: Vec::new(), last_seq: 0, open_assistant: false, open_thinking: false }
+        Session { summary, items: Vec::new(), usage: None, requests: Vec::new(), commands: Vec::new(), last_seq: 0, tool_ends: 0, open_assistant: false, open_thinking: false }
     }
 
     fn close_stream(&mut self) {
@@ -86,6 +88,7 @@ impl Session {
                 });
                 if let Some((state, preview, diff)) = found {
                     *state = if *ok { ToolState::Ok } else { ToolState::Error };
+                    self.tool_ends += 1;
                     *preview = p.clone();
                     if d.is_some() {
                         *diff = d.clone();

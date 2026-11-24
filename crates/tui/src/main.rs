@@ -12,6 +12,7 @@ mod mini;
 mod paste;
 mod prefs;
 mod request;
+mod sidebar;
 mod stash;
 mod tabs;
 mod theme;
