@@ -622,6 +622,11 @@ A shell `lykos-tui` runs on a pseudo-terminal and draws on the right half of the
 whole screen when narrow. `<leader>t` toggles it.
 _Avoid_: embedded terminal, console
 
+**Watched session**:
+An MCP or `lykos run` session shown in `lykos-tui` while its owner keeps running it: the engine
+server reads its owner row and transcript, a prompt steers it and an interrupt stops it.
+_Avoid_: attached session, adopted session
+
 **Queued prompt**:
 A prompt held by `lykos-tui` until its session is idle, then sent; queued with `Ctrl+X Enter`.
 _Avoid_: pending message

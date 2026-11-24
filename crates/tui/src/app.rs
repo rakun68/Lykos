@@ -933,10 +933,14 @@ impl App {
         let make = |r: &HistoryRow, group: String| {
             let title = if confirm == Some(r.id.as_str()) { format!("Press {delete} again to confirm") } else { r.title.clone().unwrap_or_else(|| "Untitled session".into()) };
             let time = r.started_utc.get(11..16).unwrap_or_default().to_string();
-            let detail = match &r.project_name {
+            let mut detail = match &r.project_name {
                 Some(p) => format!("{p} · {time}"),
                 None => time,
             };
+            // P5 #51: an MCP or `lykos run` session that runs now, named by its owner.
+            if let Some(d) = past.delegated.get(&r.id) {
+                detail = format!("{} {} · {detail}", owner_label(&d.owner).unwrap_or(d.owner.as_str()), d.state);
+            }
             Row { value: r.id.clone(), title, detail, group, current: me.as_deref() == Some(r.id.as_str()), favorite: self.prefs.pinned.contains(&r.id) }
         };
         let roots = past.rows.iter().filter(|r| r.parent_session_id.is_none() && !r.archived);
@@ -1009,7 +1013,8 @@ impl App {
         vec![self.worktrees_call()]
     }
 
-    /// A session of the list: its tab when it runs here, else resumed (`session.start` with `resume`).
+    /// A session of the list: its tab when it runs here, watched when an MCP server or `lykos run` runs it (P5
+    /// #51), else resumed (`session.start` with `resume`).
     fn open_session(&mut self, id: &str, cwd: Option<String>) -> Vec<Action> {
         // One start at a time: a second press before the first answers would resume the session twice.
         if self.starting {
@@ -1020,7 +1025,11 @@ impl App {
             return self.activate(sid);
         }
         self.starting = true;
-        vec![Action::Call { method: "session.start", params: json!({ "cwd": cwd.unwrap_or_else(|| self.cwd.clone()), "origin": "tui", "resume": id }), then: Then::Started { replaces: None } }]
+        let cwd = cwd.unwrap_or_else(|| self.cwd.clone());
+        if self.past.as_ref().is_some_and(|p| p.delegated.contains_key(id)) {
+            return vec![Action::Call { method: "session.watch", params: json!({ "cwd": cwd, "id": id }), then: Then::Started { replaces: None } }];
+        }
+        vec![Action::Call { method: "session.start", params: json!({ "cwd": cwd, "origin": "tui", "resume": id }), then: Then::Started { replaces: None } }]
     }
 
     /// An answer to `Action::Call`.
@@ -2391,6 +2400,15 @@ fn select(key: &KeyEvent, ids: &[&str], query: Option<&mut String>, selected: &m
 }
 
 /// Today's UTC date as `YYYY-MM-DD` (Howard Hinnant's `civil_from_days`).
+/// How the session list and the tab name a delegated session's owner (P5 #51): `MCP` or `lykos run`.
+pub(crate) fn owner_label(origin: &str) -> Option<&'static str> {
+    match origin {
+        "mcp" => Some("MCP"),
+        "run" => Some("lykos run"),
+        _ => None,
+    }
+}
+
 fn today_utc() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let z = secs.div_euclid(86_400) + 719_468;
@@ -3005,6 +3023,24 @@ mod tests {
         assert_eq!(app.editor.text(), "do it again\ndraft", "the undone prompt goes ahead of the draft");
         event(&mut app, "s1", 3, EventData::PromptSet { text: String::new() });
         assert_eq!(app.editor.text(), "do it again\ndraft", "a redo's empty text leaves the box alone");
+    }
+
+    #[test]
+    fn a_delegated_session_lists_with_its_owner_and_opens_as_a_watch() {
+        let mut app = two_tabs();
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('l')));
+        let today = format!("{}T09:30:00Z", today_utc());
+        app.on_reply(Then::History, Ok(json!({
+            "rows": [{ "id": "D1", "title": null, "startedUtc": today, "endedUtc": null, "model": null, "parentSessionId": null, "archived": false, "resumable": false, "projectPath": null, "projectName": null }],
+            "live": {},
+            "delegated": { "D1": { "owner": "mcp", "state": "running", "startedAt": today, "specialist": "general" } }
+        })));
+        assert_eq!(app.session_rows("", None)[0].detail, "MCP running · 09:30");
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert_eq!(calls(&out), [("session.watch", json!({ "cwd": "/w", "id": "D1" }))], "watched, not resumed: its owner keeps it");
+        assert_eq!(owner_label("run"), Some("lykos run"));
+        assert_eq!(owner_label("tui"), None);
     }
 
     #[test]

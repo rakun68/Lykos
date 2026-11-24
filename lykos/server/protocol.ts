@@ -93,6 +93,11 @@ export type Method =
   | "session.job.stop"
   /** P5 #48: moves the session's running shell calls to the background (OpenCode's `session.background`). */
   | "session.background"
+  /**
+   * P5 #51: `{ cwd, id }`: a live session that shows an MCP or `lykos run` session of the project. A prompt to it
+   * steers the session as `lykos steer` does, an interrupt stops it as `lykos stop` does; its owner keeps running it.
+   */
+  | "session.watch"
   | "subscribe";
 
 // --- Events ------------------------------------------------------------------------------------------------------
@@ -107,10 +112,18 @@ export interface SessionSummary {
   model: string;
   title: string | null;
   startedAt: string;
-  /** "tui" for a client's session; "mcp" and "run" for the shapes ADR-0064 decision 3 moves onto the server. */
+  /** "tui" for a client's session; "mcp" and "run" for a delegated session it watches (`session.watch`). */
   origin: string;
   /** The ledger's session id once the session has booted: what `lykos sessions` and resume name. */
   ledgerSessionId: string | null;
+}
+
+/** P5 #51: a delegated session of the project that runs now: `sessions.history`'s `delegated`, by ledger id. */
+export interface DelegatedInfo {
+  owner: "run" | "mcp";
+  state: "running" | "waiting";
+  startedAt: string;
+  specialist: string | null;
 }
 
 /** The status line's numbers, read from Pi and the ledger as the old TUI's HUD reads them (`deriveHud`). */

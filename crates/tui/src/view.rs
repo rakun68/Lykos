@@ -267,11 +267,18 @@ pub fn draw_mini(app: &App, buf: &mut Buffer, live: &[Row], screen_h: u16) -> Op
 
 /// The box's top edge: the session's title, or with more than one tab open, every tab's (OpenCode
 /// `component/session-tabs.tsx`): the one shown bold, an unread one marked.
+/// A watched MCP or `lykos run` session's title carries its owner (P5 #51).
 fn tab_strip(app: &App, session: &Session, buf: &mut Buffer, x: u16, width: u16) {
-    let title_of = |id: &str| app.store.sessions.get(id).and_then(|s| s.summary.title.clone()).unwrap_or_else(|| "New session".into());
+    let titled = |s: &Session| {
+        let title = first_line(s.summary.title.as_deref().unwrap_or("New session")).to_string();
+        match crate::app::owner_label(&s.summary.origin) {
+            Some(owner) => format!("{owner} · {title}"),
+            None => title,
+        }
+    };
+    let title_of = |id: &str| app.store.sessions.get(id).map(titled).unwrap_or_else(|| "New session".into());
     if app.tabs.open.len() < 2 {
-        let title = session.summary.title.as_deref().unwrap_or("New session");
-        buf.text(x, 0, width, &format!(" {} ", first_line(title)), theme::subtle().bold());
+        buf.text(x, 0, width, &format!(" {} ", titled(session)), theme::subtle().bold());
         return;
     }
     let mut at = x;

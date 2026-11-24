@@ -228,11 +228,25 @@ pub struct HistoryRow {
     pub project_name: Option<String>,
 }
 
-/// `sessions.history`' answer: the rows, and the live sessions by ledger id.
+/// An MCP or `lykos run` session that runs now (P5 #51): its owner keeps it, `session.watch` shows it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegatedInfo {
+    /// `mcp` or `run`.
+    pub owner: String,
+    /// `running` or `waiting`.
+    pub state: String,
+    pub started_at: String,
+    pub specialist: Option<String>,
+}
+
+/// `sessions.history`' answer: the rows, the live sessions by ledger id, and the delegated ones that run now.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct History {
     pub rows: Vec<HistoryRow>,
     pub live: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub delegated: std::collections::BTreeMap<String, DelegatedInfo>,
 }
 
 /// One row of `worktree.list`: a worktree of the project, the main checkout first.

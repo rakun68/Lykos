@@ -444,6 +444,16 @@ Where #46 differs from OpenCode on purpose:
   card and no branch after the directory; its title is cut to one row; Modified Files is a Lykos
   section; the Todo fold is not saved.
 
+**MCP and `lykos run` sessions (#51).** The session list shows the project's delegated sessions
+that run now, with their owner and state (`MCP running`, `lykos run waiting`). `Enter` on one
+watches it (`session.watch`, [engine-server.md](engine-server.md)): its owner keeps running it, the
+tab title starts with the owner, and the transcript shows as it is written. A prompt steers it as
+`lykos steer` does, an interrupt stops it as `lykos stop` does, and closing the tab ends only the
+watch. Where it differs from OpenCode, which runs every session in its own server: the session
+stays with its owner, so ownership and `lykos recover` are unchanged; a watch follows one session
+id, not a successor started at the context limit; only the cwd's project is listed; a waiting
+session's question is answered with a prompt.
+
 **Background work, the composer and the terminal pane (#48).** OpenCode's `component/prompt/composer/`,
 `component/dialog-shell-output.tsx`, `component/terminal-pane.tsx`, `context/session-terminals.tsx`
 and the `terminal.*` actions of `app.tsx` at `4332e24`.

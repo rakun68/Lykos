@@ -13,6 +13,14 @@ import type { EventData, SessionStatus, UsageData } from "./protocol.js";
 /** A tool's output is shown, not stored, here: the transcript keeps all of it. */
 const PREVIEW_MAX = 8 * 1024;
 
+/** A tool call's end as the TUI draws it: its output's head and, for an edit, its diff. */
+export function toolEndData(toolId: string, name: string, args: unknown, result: unknown, isError: boolean): EventData {
+  const diff = extractDiff(name, args, result);
+  const full = previewResult(result);
+  const preview = full !== undefined && full.length > PREVIEW_MAX ? `${full.slice(0, PREVIEW_MAX)}\n… ${full.length - PREVIEW_MAX} more characters in the transcript` : full;
+  return { type: "tool.end", toolId, name, ok: !isError, ...(preview !== undefined ? { preview } : {}), ...(diff !== undefined ? { diff } : {}) };
+}
+
 export interface EventUiHooks {
   emit: (data: EventData) => void;
   status: (status: SessionStatus) => void;
@@ -114,17 +122,7 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
             const toolId = ev.toolCallId ?? [...toolNames.keys()].reverse().find((id) => toolNames.get(id) === ev.toolName) ?? `tool-${toolSeq}`;
             const name = toolNames.get(toolId) ?? ev.toolName ?? "tool";
             toolNames.delete(toolId);
-            const diff = extractDiff(name, ev.args, ev.result);
-            const full = previewResult(ev.result);
-            const preview = full !== undefined && full.length > PREVIEW_MAX ? `${full.slice(0, PREVIEW_MAX)}\n… ${full.length - PREVIEW_MAX} more characters in the transcript` : full;
-            hooks.emit({
-              type: "tool.end",
-              toolId,
-              name,
-              ok: ev.isError !== true,
-              ...(preview !== undefined ? { preview } : {}),
-              ...(diff !== undefined ? { diff } : {}),
-            });
+            hooks.emit(toolEndData(toolId, name, ev.args, ev.result, ev.isError === true));
             break;
           }
           case "compaction_start":

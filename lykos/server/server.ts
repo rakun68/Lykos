@@ -8,6 +8,9 @@
  * It exits after `tui.server_idle_seconds` once no client is connected and no session runs (`0`: at once). A session
  * runs while it is starting, running a turn, or waiting on an answer; an idle session left open is closed at exit,
  * and like every session it stays archived and resumable.
+ *
+ * An MCP or `lykos run` session runs in the process that owns it; `session.watch` shows one as a session here
+ * (`watch.ts`, P5 #51).
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -26,6 +29,7 @@ import { resolveProject } from "../session/identity.js";
 import { archiveHistorySession, exportHistorySession, historyRows, ledgerFor, projectRoot, renameHistorySession } from "./history.js";
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
+import type { DelegatedWatch } from "./watch.js";
 import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type EventData, type SessionOptions, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
 import { LineReader, send, serverHandshake } from "./wire.js";
 
@@ -54,7 +58,8 @@ export interface EngineServerOptions {
 
 interface LiveSession {
   summary: SessionSummary;
-  child: ChildProcess;
+  /** Its `lykos server-session` child, or the watch of a delegated session. */
+  child: ChildProcess | DelegatedWatch;
   events: Event[];
   exited: Promise<void>;
   /** The ledger the session writes, fixed when it starts: a later `session.cd` moves its cwd, never its ledger. */
@@ -261,7 +266,15 @@ export class EngineServer {
         });
         const live: Record<string, string> = {};
         for (const s of this.sessions.values()) if (s.summary.ledgerSessionId !== null) live[s.summary.ledgerSessionId] = s.summary.id;
-        return { rows, live };
+        // P5 #51: the project's MCP and `lykos run` sessions that run now. One whose ledger row is not written yet
+        // still lists, from its owner row.
+        const { delegatedLive } = await import("./watch.js");
+        const delegated = delegatedLive(projectRoot(cwd));
+        for (const [id, d] of Object.entries(delegated)) {
+          if (rows.some((r) => r.id === id)) continue;
+          rows.unshift({ id, title: null, startedUtc: d.startedAt, endedUtc: null, model: null, parentSessionId: null, forkedFrom: null, resumedFrom: null, depth: 0, archived: false, resumable: false, costUsd: null, projectPath: projectRoot(cwd), projectName: null });
+        }
+        return { rows, live, delegated };
       }
       case "session.rename": {
         const cwd = needCwd(params, method);
@@ -340,6 +353,8 @@ export class EngineServer {
         if (mode !== "branch" && mode !== "committed" && mode !== "working") throw new Error(`vcs.diff: unknown mode ${mode}`);
         return workspaceDiff(needCwd(params, method), mode satisfies DiffMode);
       }
+      case "session.watch":
+        return this.watch(params);
       case "subscribe":
         return this.subscribe(client, params);
       default:
@@ -440,6 +455,48 @@ export class EngineServer {
     return summary;
   }
 
+  /**
+   * P5 #51: a delegated session of the project as a session here. It runs in its owner; this reads its owner row
+   * and transcript, and a prompt or an interrupt reaches it through the ledger as `lykos steer` and `lykos stop` do.
+   */
+  private async watch(params: Record<string, unknown>): Promise<SessionSummary> {
+    if (this.stopping) throw new Error("the server is stopping");
+    const cwd = needCwd(params, "session.watch");
+    const ledgerId = needString(params, "id", "session.watch");
+    const open = [...this.sessions.values()].find((s) => s.summary.ledgerSessionId === ledgerId);
+    if (open !== undefined) return open.summary;
+    const { DelegatedWatch, delegatedView } = await import("./watch.js");
+    const root = projectRoot(cwd);
+    const view = delegatedView(root, ledgerId);
+    if (view === undefined) throw new Error(`no MCP or lykos run session ${ledgerId} in ${root}`);
+    const id = randomUUID();
+    const title = historyRows(root).find((r) => r.id === ledgerId)?.title ?? null;
+    const summary: SessionSummary = { id, cwd: root, status: "starting", model: "", title, startedAt: view.started_at, origin: view.owner, ledgerSessionId: ledgerId };
+    let ended: () => void = () => {};
+    const tag = id.slice(0, 8);
+    const watch = new DelegatedWatch({
+      workspace: root,
+      id: ledgerId,
+      onMessage: (msg) => this.fromChild(live, msg),
+      onExit: () => {
+        this.log(`[${tag}] stopped watching ${ledgerId}`);
+        if (live.summary.status !== "closed") this.setStatus(live, "closed");
+        for (const settle of live.asides.values()) settle({ kind: "aside", id: "", error: "the session ended" });
+        live.asides.clear();
+        this.sessions.delete(id);
+        ended();
+        this.checkIdle();
+      },
+    });
+    const live: LiveSession = { summary, child: watch, events: [], exited: new Promise((resolve) => (ended = resolve)), ledgerPath: ledgerFor(root), asides: new Map() };
+    this.sessions.set(id, live);
+    this.log(`[${tag}] watching ${view.owner} session ${ledgerId}`);
+    this.emit(live, { type: "session.status", session: { ...summary } });
+    watch.start();
+    this.checkIdle();
+    return live.summary;
+  }
+
   /** Sends the child a call and waits for the reply with its id; a child that exits first settles it with an error. */
   private async ask(s: LiveSession, msg: (id: string) => ToChild): Promise<Extract<FromChild, { kind: "aside" | "options" | "job" }>> {
     const id = `a${++this.asideSeq}`;
@@ -527,6 +584,8 @@ export class EngineServer {
 
   private busy(): boolean {
     for (const s of this.sessions.values()) {
+      // A watched session runs in its owner: watching it keeps nothing running here.
+      if (s.summary.origin === "mcp" || s.summary.origin === "run") continue;
       if (s.summary.status === "starting" || s.summary.status === "running" || s.summary.status === "waiting") return true;
     }
     return false;
