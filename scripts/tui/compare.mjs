@@ -1,7 +1,7 @@
 // Measures lykos-tui against other agents' TUIs on this machine (P5 #56, the demonstration): startup to an input box,
 // keystroke-to-screen latency, idle CPU and memory, each TUI in a real pty with nothing sent to a model.
 //
-//   npm run build && node scripts/tui/compare.mjs [--runs 5] [--only lykos,opencode] [--json]
+//   npm run build && node scripts/tui/compare.mjs [--launch exe|command] [--runs 5] [--only lykos-tui,opencode] [--json]
 //
 // Every number is the whole process tree the TUI starts (lykos-tui and the engine server it starts; OpenCode and the
 // server it starts), summed: a TUI that splits its work across processes is charged for all of them. Startup is the
@@ -46,44 +46,66 @@ function onPath(name) {
 /** Claude Code's own session markers would change what a child Claude Code draws; a measured one starts clean. */
 const cleanEnv = () => Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith("CLAUDE")).map((k) => [k, undefined]));
 
-export function targets() {
+/** lykos-tui's own binary, found as `lykos` finds it (`lykos/cli/tui.ts`). */
+function lykosTui() {
+  const exe = win ? "lykos-tui.exe" : "lykos-tui";
+  return first(process.env.LYKOS_TUI_BIN, join(root, "target", "release", exe), join(root, "vendor", "tui", `${process.platform}-${process.arch}`, exe));
+}
+
+/** A command as a person types it, run by the platform's shell: what is on PATH, shims and launchers included. */
+const typed = (line) => (win ? { command: "cmd.exe", args: ["/d", "/s", "/c", line] } : { command: "/bin/sh", args: ["-c", line] });
+
+/**
+ * The TUIs, each launched one of two ways. `exe`: the TUI's own executable, as each install runs it in the end (the
+ * other agents' commands are shims or launchers that start one). `command`: the command a person types, through the
+ * shell, so every shim and launcher is counted.
+ */
+export function targets(launch = "exe") {
   const npmGlobal = win ? join(process.env.APPDATA ?? "", "npm", "node_modules") : "/usr/local/lib/node_modules";
-  return [
+  // A fresh engine directory: the server this run starts is the one measured, never one already running.
+  const fresh = () => ({ LYKOS_ENGINE_DIR: mkdtempSync(join(tmpdir(), "lykos-compare-engine-")) });
+  const all = [
     {
       name: "lykos-tui",
-      command: process.execPath,
-      args: [join(root, "dist", "cli.js")],
-      present: existsSync(join(root, "dist", "cli.js")),
+      exe: { command: lykosTui(), args: ["--cwd", root, "--trust-workspace"] },
+      typed: "lykos",
       ready: "Ask anything",
-      // The other TUIs are already trusted in this repository; lykos is told so, not asked.
-      env: { LYKOS_TRUST_WORKSPACE: "1" },
-      // A fresh engine directory: the server this run starts is the one measured, never one already running.
-      fresh: () => ({ LYKOS_ENGINE_DIR: mkdtempSync(join(tmpdir(), "lykos-compare-engine-")) }),
+      // The other TUIs are already trusted in this repository; lykos is told so, not asked. Run as its binary, it starts
+      // its engine server as `lykos` tells it to: this Node and this checkout's CLI.
+      env: { LYKOS_TRUST_WORKSPACE: "1", LYKOS_SERVE_CMD: JSON.stringify([process.execPath, join(root, "dist", "cli.js"), "serve"]) },
+      fresh,
     },
     {
       name: "opencode",
-      command: first(
-        join(npmGlobal, "opencode-ai", "node_modules", `opencode-${win ? "windows" : process.platform}-${process.arch}`, "bin", win ? "opencode.exe" : "opencode"),
-        onPath("opencode"),
-      ),
-      args: [],
+      exe: {
+        command: first(
+          join(npmGlobal, "opencode-ai", "node_modules", `opencode-${win ? "windows" : process.platform}-${process.arch}`, "bin", win ? "opencode.exe" : "opencode"),
+          onPath("opencode"),
+        ),
+        args: [],
+      },
+      typed: "opencode",
       ready: "Ask anything",
     },
     {
       name: "claude-code",
-      command: first(join(homedir(), ".local", "bin", win ? "claude.exe" : "claude"), onPath("claude")),
-      args: [],
+      exe: { command: first(join(homedir(), ".local", "bin", win ? "claude.exe" : "claude"), onPath("claude")), args: [] },
+      typed: "claude",
       ready: /^❯/m,
       env: cleanEnv(),
     },
     {
       name: "codex",
-      command: win ? codexExe() : onPath("codex"),
       // The Windows build's background server does not start under a pty here; it says to pass --no-daemon.
-      args: win ? ["--no-daemon"] : [],
+      exe: { command: win ? codexExe() : onPath("codex"), args: win ? ["--no-daemon"] : [] },
+      typed: win ? "codex --no-daemon" : "codex",
       ready: "Ask Codex to do anything",
     },
   ];
+  return all.map((t) => {
+    const how = launch === "command" ? { ...typed(t.typed), present: onPath(t.typed.split(" ")[0]) !== undefined } : { ...t.exe, present: t.exe.command !== undefined };
+    return { ...t, ...how, launch };
+  });
 }
 
 /** Every process as {pid, ppid, cpuMs, rss, peak}. */
@@ -211,8 +233,9 @@ if (process.argv[1] && import.meta.url === `file:///${process.argv[1].replace(/\
   const argv = process.argv.slice(2);
   const opt = (name, fallback) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback);
   const only = opt("--only", "")?.split(",").filter(Boolean);
+  const launch = opt("--launch", "exe");
   const results = [];
-  for (const t of targets()) {
+  for (const t of targets(launch)) {
     if (only.length && !only.includes(t.name)) continue;
     if (!t.command || t.present === false) {
       results.push({ name: t.name, platform: `${process.platform}-${process.arch}`, unmeasured: "not installed" });
