@@ -21,7 +21,8 @@ import { slashCandidates } from "../tui/commands.js";
 import type { AsideAnswer } from "../session/aside.js";
 import type { SessionOptions } from "../session/session-options.js";
 import { createEventUi } from "./event-ui.js";
-import type { EventData, RequestData, SessionStatus } from "./protocol.js";
+import type { EventData, JobLogResult, RequestData, SessionStatus } from "./protocol.js";
+import type { JobRegistry } from "../tools/job-runner.js";
 
 /** What the server sends a session child. */
 export type ToChild =
@@ -31,6 +32,8 @@ export type ToChild =
   | { kind: "answer"; requestId: string; answer: string }
   | { kind: "aside"; id: string; text: string }
   | { kind: "options"; id: string }
+  /** P5 #48: a job's log, a job's stop, or the running shell calls to the background. */
+  | { kind: "job"; id: string; op: "logs" | "stop" | "background"; jobId?: string; offset?: number }
   | { kind: "close" };
 
 /** What a session child sends the server. */
@@ -39,6 +42,7 @@ export type FromChild =
   | { kind: "status"; status: SessionStatus; ledgerSessionId?: string; model?: string }
   | { kind: "aside"; id: string; answer?: string; model?: string; error?: string }
   | { kind: "options"; id: string; options?: SessionOptions; error?: string }
+  | { kind: "job"; id: string; result?: unknown; error?: string }
   | { kind: "exit"; ok: boolean; message?: string; ledgerSessionId?: string };
 
 export interface ChildStartParams {
@@ -121,6 +125,38 @@ function approvalBody(req: ApprovalRequest): Pick<RequestData, "body" | "patch">
   return body.length > 0 ? { body } : {};
 }
 
+/** P5 #48: the composer's calls on a session's jobs: a log window, a stop (the process tree), or the move to the background. */
+export async function answerJobCall(jobs: JobRegistry | undefined, msg: Extract<ToChild, { kind: "job" }>): Promise<unknown> {
+  if (jobs === undefined) throw new Error("the session has not started");
+  if (msg.op === "background") return { jobs: jobs.backgroundAll().map((j) => j.id) };
+  const id = msg.jobId ?? "";
+  if (jobs.get(id) === undefined) throw new Error(`no job ${id}`);
+  if (msg.op === "stop") {
+    const record = await jobs.stop(id, "stopped by the user");
+    return { status: record?.status };
+  }
+  const offset = msg.offset;
+  const window = offset !== undefined ? jobs.logs(id, { offset }) : jobs.logs(id, { lines: 10_000 });
+  return { text: window?.text ?? "", nextOffset: window?.nextOffset ?? 0, size: window?.size ?? 0 } satisfies JobLogResult;
+}
+
+/** P5 #48: the jobs event, whole, on every change to a session's jobs, batched to one per tick. */
+export function watchJobs(jobs: JobRegistry, emit: (data: EventData) => void): void {
+  let queued = false;
+  jobs.watch(() => {
+    if (queued) return;
+    queued = true;
+    setImmediate(() => {
+      queued = false;
+      emit({
+        type: "jobs",
+        jobs: jobs.list().map((j) => ({ id: j.id, command: j.command, status: j.status, startedAt: j.startedAt, ...(j.exitCode !== undefined ? { exitCode: j.exitCode } : {}) })),
+        foreground: jobs.foregroundShells().map((f) => ({ id: f.id, command: f.command })),
+      });
+    });
+  });
+}
+
 export async function runSessionChild(send: (msg: FromChild) => void, receive: (fn: (msg: ToChild) => void) => void): Promise<number> {
   const params = await new Promise<ChildStartParams>((resolve) => {
     receive((msg) => {
@@ -176,6 +212,12 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
           }
         }
         break;
+      case "job":
+        void jobCall(msg).then(
+          (result) => send({ kind: "job", id: msg.id, result }),
+          (err: unknown) => send({ kind: "job", id: msg.id, error: err instanceof Error ? err.message : String(err) }),
+        );
+        break;
       case "close":
         lines.close();
         for (const resolve of answers.values()) resolve(null);
@@ -186,6 +228,8 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
         break;
     }
   });
+
+  const jobCall = (msg: Extract<ToChild, { kind: "job" }>): Promise<unknown> => answerJobCall(handle?.jobs, msg);
 
   /** Opens a request: the event goes out, and the next read waits for its answer. */
   const open = (data: Omit<RequestData, "requestId">): void => {
@@ -261,6 +305,7 @@ export async function runSessionChild(send: (msg: FromChild) => void, receive: (
       },
       onReady: (h) => {
         handle = h;
+        if (h.jobs !== undefined) watchJobs(h.jobs, emit);
       },
     });
     return result.status === "ok"

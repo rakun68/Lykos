@@ -70,6 +70,9 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `worktree.create` | `{cwd, name}` | `{path, branch, head, main}`: a worktree at `~/.lykos/worktrees/<project id>/<name>` on the branch `lykos/<name>` |
 | `worktree.remove` | `{cwd, path}` | `{removed, savedUncommitted, saved?, note?}`: uncommitted work is committed onto the branch and ignored files the sessions wrote are archived beside it, then the worktree is removed. The branch stays. Only a worktree Lykos made is removed: under `~/.lykos/worktrees/<project id>/` on a `lykos/` branch. Refused for the main checkout, a detached or other worktree, and while a session runs there or in a directory under it, here or in another process (its lock is held) |
 | `vcs.diff` | `{cwd, mode}` | `{base?, branch?, files: [{file, status, additions, deletions, patch}]}`: the repository's changes, 12 lines of context. `branch` is everything since the merge base with the default branch (the remote's HEAD, else `init.defaultBranch`, else `main`, else `master`), untracked files included; `committed` only what is committed since it; `working` what is not committed, against `HEAD`. Before the first commit, the untracked files. A binary file, or an untracked one over 1 MiB, has an empty `patch` |
+| `session.job.logs` | `{session, jobId, offset?}` | `{text, nextOffset, size}`: a background job's log from byte `offset`, at most 40,000 bytes; without `offset`, its last 40,000 bytes |
+| `session.job.stop` | `{session, jobId}` | `{status}`: kills the job's process tree (`taskkill /T /F` on Windows, the process group elsewhere) and waits for it to exit |
+| `session.background` | `{session}` | `{jobs: [id]}`: moves the shell calls holding the turn to the background. Each becomes a job, its output goes to the job's log, it is no longer timed, and the tool call ends with a notice naming the job |
 | `subscribe` | `{sessions?, after?: {<id>: seq}}` | `{sessions: SessionSummary[]}`, then the replay |
 
 ### 2.3 Events
@@ -84,7 +87,7 @@ applied, so an overlapping replay changes nothing and a gap waits.
 `diff?` for a file change), `request`, `request.resolved`, `usage`, `system` (a notice line, compaction
 among them), `turn.end` and `commands` (the slash commands the session runs, `{name, description, source}`,
 sent once it has booted: what a client completes `/` from) and `prompt.set` (`{text}`: a prompt an undo or a
-rewind put back, for the client's prompt). The types
+rewind put back, for the client's prompt) and `jobs` (`{jobs: [{id, command, status, startedAt, exitCode?}], foreground: [{id, command}]}`, whole, whenever a job or a running shell call starts or ends). The types
 are `lykos/server/protocol.ts`; `crates/client/src/protocol.rs` mirrors them, and reads a type it
 does not know as `Unknown`.
 

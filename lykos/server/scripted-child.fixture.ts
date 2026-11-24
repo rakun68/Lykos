@@ -1,13 +1,20 @@
 /**
  * A scripted `server-session` child for the engine server's tests: the IPC messages a real session child sends,
  * with no model behind them. `hold` keeps a turn running until `release`; `ask` waits on an answer; anything else
- * streams itself back in three deltas.
+ * streams itself back in three deltas. P5 #48: `job` starts a real background job and `shell` runs a real shell call
+ * that holds the turn, on the session child's own job calls.
  */
-import type { FromChild, ToChild } from "./session-child.js";
+import { buildBashOperations, type ApprovalDecision } from "../gate/approval.js";
+import { JobRegistry } from "../tools/job-runner.js";
+import { answerJobCall, watchJobs, type FromChild, type ToChild } from "./session-child.js";
 
 const send = (msg: FromChild): void => {
   process.send?.(msg);
 };
+let jobs: JobRegistry | undefined;
+let shellAbort: AbortController | undefined;
+/** Prints a line every 200 ms until it is killed. */
+const ticking = `${JSON.stringify(process.execPath)} -e "let n=0;setInterval(()=>console.log('tick '+(++n)),200)"`;
 let holding = false;
 let asked: string | undefined;
 let ledgerSessionId = "ledger-1";
@@ -17,9 +24,17 @@ process.on("message", (msg: ToChild) => {
     case "start":
       // A resume keeps the ledger session; the ledger it writes is said, so a test can see which.
       ledgerSessionId = msg.params.resume ?? "ledger-1";
+      jobs = new JobRegistry({ cwd: msg.params.cwd });
+      watchJobs(jobs, (data) => send({ kind: "event", data }));
       send({ kind: "status", status: "idle", ledgerSessionId, model: msg.params.model ?? "faux/scripted" });
       send({ kind: "event", data: { type: "system", text: `ledger ${msg.params.ledgerPath}` } });
       send({ kind: "event", data: { type: "commands", commands: [{ name: "/help", description: "list commands", source: "builtin" }, { name: "/skill:tdd", description: "test first", source: "skill" }] } });
+      break;
+    case "job":
+      answerJobCall(jobs, msg).then(
+        (result) => send({ kind: "job", id: msg.id, result }),
+        (err: unknown) => send({ kind: "job", id: msg.id, error: err instanceof Error ? err.message : String(err) }),
+      );
       break;
     case "aside":
       // An answer that names the question, and nothing in the conversation.
@@ -81,6 +96,30 @@ process.on("message", (msg: ToChild) => {
         send({ kind: "status", status: "waiting" });
         break;
       }
+      if (msg.text === "job" && jobs !== undefined) {
+        const job = jobs.start({ command: ticking });
+        send({ kind: "event", data: { type: "message.delta", text: `started ${job.id}` } });
+        send({ kind: "event", data: { type: "message.end" } });
+        send({ kind: "event", data: { type: "turn.end" } });
+        send({ kind: "status", status: "idle" });
+        break;
+      }
+      if (msg.text === "shell" && jobs !== undefined) {
+        const allow = { request: (): Promise<ApprovalDecision> => Promise.resolve("allow") };
+        const ops = buildBashOperations(jobs.cwd, allow, undefined, { jobs, defaultTimeoutSeconds: 120 });
+        shellAbort = new AbortController();
+        send({ kind: "event", data: { type: "tool.start", toolId: "sh1", name: "bash", summary: "ticking", args: { command: ticking } } });
+        let out = "";
+        ops.exec(ticking, jobs.cwd, { onData: (d) => (out += d.toString()), signal: shellAbort.signal }).then(
+          (r) => {
+            send({ kind: "event", data: { type: "tool.end", toolId: "sh1", name: "bash", ok: r.exitCode === 0, preview: out.slice(-300) } });
+            send({ kind: "event", data: { type: "turn.end" } });
+            send({ kind: "status", status: "idle" });
+          },
+          () => undefined,
+        );
+        break;
+      }
       if (msg.text === "tool") {
         // A tool call and the usage after it, as a real turn sends them (the TUI's end-to-end test, #37).
         send({ kind: "event", data: { type: "tool.start", toolId: "t1", name: "read", summary: "README.md", args: { path: "README.md" } } });
@@ -110,12 +149,15 @@ process.on("message", (msg: ToChild) => {
       break;
     case "interrupt":
       holding = false;
+      shellAbort?.abort();
       send({ kind: "event", data: { type: "system", text: "interrupted" } });
       send({ kind: "status", status: "idle" });
       break;
     case "close":
-      send({ kind: "exit", ok: true, ledgerSessionId });
-      process.disconnect();
+      void (jobs?.stopAll() ?? Promise.resolve()).then(() => {
+        send({ kind: "exit", ok: true, ledgerSessionId });
+        process.disconnect();
+      });
       break;
     default:
       break;

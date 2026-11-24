@@ -60,7 +60,7 @@ interface LiveSession {
   /** The ledger the session writes, fixed when it starts: a later `session.cd` moves its cwd, never its ledger. */
   ledgerPath: string;
   /** `session.aside` and `session.options` calls waiting on the child, by id. */
-  asides: Map<string, (msg: Extract<FromChild, { kind: "aside" | "options" }>) => void>;
+  asides: Map<string, (msg: Extract<FromChild, { kind: "aside" | "options" | "job" }>) => void>;
 }
 
 interface Client {
@@ -237,6 +237,20 @@ export class EngineServer {
         const s = this.session(params);
         this.toChild(s, { kind: "close" });
         return { ok: true };
+      }
+      case "session.job.logs":
+      case "session.job.stop":
+      case "session.background": {
+        const s = this.session(params);
+        if (s.summary.status === "starting" || s.summary.status === "closed") throw new Error(`the session is ${s.summary.status}`);
+        const op = method === "session.job.logs" ? "logs" : method === "session.job.stop" ? "stop" : "background";
+        if (op !== "background" && typeof params.jobId !== "string") throw new Error(`${method} needs jobId`);
+        const jobId = typeof params.jobId === "string" ? params.jobId : undefined;
+        const offset = typeof params.offset === "number" ? params.offset : undefined;
+        const reply = await this.ask(s, (id) => ({ kind: "job", id, op, ...(jobId !== undefined ? { jobId } : {}), ...(offset !== undefined ? { offset } : {}) }));
+        if (reply.error !== undefined) throw new Error(reply.error);
+        if (reply.kind !== "job") throw new Error("the session answered something else");
+        return reply.result;
       }
       case "sessions.history": {
         const cwd = needCwd(params, method);
@@ -427,9 +441,9 @@ export class EngineServer {
   }
 
   /** Sends the child a call and waits for the reply with its id; a child that exits first settles it with an error. */
-  private async ask(s: LiveSession, msg: (id: string) => ToChild): Promise<Extract<FromChild, { kind: "aside" | "options" }>> {
+  private async ask(s: LiveSession, msg: (id: string) => ToChild): Promise<Extract<FromChild, { kind: "aside" | "options" | "job" }>> {
     const id = `a${++this.asideSeq}`;
-    const reply = await new Promise<Extract<FromChild, { kind: "aside" | "options" }>>((resolve) => {
+    const reply = await new Promise<Extract<FromChild, { kind: "aside" | "options" | "job" }>>((resolve) => {
       // A child already gone never answers, and its exit has already settled the calls it had.
       if (!s.child.connected) return resolve({ kind: "aside", id, error: "the session ended" });
       s.asides.set(id, resolve);
@@ -464,6 +478,7 @@ export class EngineServer {
         return;
       case "aside":
       case "options":
+      case "job":
         s.asides.get(msg.id)?.(msg);
         return;
       case "exit":

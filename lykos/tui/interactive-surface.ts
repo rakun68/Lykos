@@ -468,7 +468,7 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
         skills: booted.skillNames,
         toolNames: session.getActiveToolNames(),
       }),
-      ...(input.onReady !== undefined ? { onReady: input.onReady } : {}),
+      ...(input.onReady !== undefined ? { onReady: (handle: InteractiveHandle) => input.onReady?.({ ...handle, jobs: booted.jobs }) } : {}),
       ...(recorder !== undefined ? { recorder } : {}),
       ...(input.continuation !== undefined ? { initialPrompt: input.continuation.prompt } : {}),
       continuationRequested: () => booted.continuationState.requested,
@@ -1577,7 +1577,7 @@ Start carrying this plan out?`,
         },
         onReady: (handle) => {
           handleRef = handle;
-          input.onReady?.(handle);
+          input.onReady?.({ ...handle, jobs: booted.jobs });
         },
         ...(recorder !== undefined ? { recorder } : {}),
         ...(input.continuation !== undefined ? { initialPrompt: input.continuation.prompt } : {}),

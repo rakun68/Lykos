@@ -46,6 +46,7 @@
 // session with exact, scripted timing, with no network call and no real
 // terminal.
 
+import type { JobRegistry } from "../tools/job-runner.js";
 import { sessionRoleModel } from "../config/roles.js";
 import { startContainment, type Containment } from "../containment/containment.js";
 import { collectPathRules } from "../gate/path-rules.js";
@@ -285,6 +286,8 @@ export class DoublePressExit {
 /** Handed to `opts.onReady` before the loop starts consuming input — the CLI wires real SIGINT to it; tests call it directly at a scripted moment. */
 export interface InteractiveHandle {
   interrupt: () => void;
+  /** P5 #48: the session's background jobs and running shell calls, for a client's composer. */
+  jobs?: JobRegistry;
 }
 
 export interface InteractiveLoopResult {

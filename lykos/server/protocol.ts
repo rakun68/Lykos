@@ -87,6 +87,12 @@ export type Method =
   | "worktree.remove"
   /** P5 #46: the workspace's changes for the diff viewer, `{ cwd, mode: "branch" | "committed" | "working" }`. */
   | "vcs.diff"
+  /** P5 #48: a background job's log, `{ sessionId, jobId, offset? }`: a `JobLogResult`. */
+  | "session.job.logs"
+  /** P5 #48: stops a background job and its process tree, `{ sessionId, jobId }`. */
+  | "session.job.stop"
+  /** P5 #48: moves the session's running shell calls to the background (OpenCode's `session.background`). */
+  | "session.background"
   | "subscribe";
 
 // --- Events ------------------------------------------------------------------------------------------------------
@@ -154,7 +160,31 @@ export type EventData =
   /** The slash commands the session runs, sent once it has booted: what a client completes `/` from. */
   | { type: "commands"; commands: CommandInfo[] }
   /** P5 #42: what goes in the client's prompt: the prompt a rewind or an undo took back. */
-  | { type: "prompt.set"; text: string };
+  | { type: "prompt.set"; text: string }
+  /** P5 #48: the session's background jobs and running shell calls, whole, whenever one starts or ends. */
+  | { type: "jobs"; jobs: JobInfo[]; foreground: ForegroundInfo[] };
+
+/** P5 #48: one background job, as the composer's Shell list shows it. */
+export interface JobInfo {
+  id: string;
+  command: string;
+  status: "running" | "exited" | "stopped" | "capped" | "failed";
+  startedAt: string;
+  exitCode?: number | null;
+}
+
+/** P5 #48: a shell call holding the turn, which `session.background` would move. */
+export interface ForegroundInfo {
+  id: string;
+  command: string;
+}
+
+/** P5 #48: what `session.job.logs` answers: the log from `offset` (the whole log's last 40,000 bytes without one). */
+export interface JobLogResult {
+  text: string;
+  nextOffset: number;
+  size: number;
+}
 
 export interface CommandInfo {
   /** As typed, with its slash. */

@@ -153,6 +153,50 @@ describe("engine server", () => {
     }
   });
 
+  it("lists a session's jobs, reads and stops one, and moves a running shell call to the background (#48)", async () => {
+    const { server, key, dir } = setup();
+    await server.listen();
+    const work = mkdtempSync(join(tmpdir(), "lykos-jobs-"));
+    try {
+      const a = await connectEngine(server.address, key);
+      await a.request("subscribe");
+      const s = await a.request<SessionSummary>("session.start", { cwd: work });
+      await waitStatus(a, s.id, "idle");
+      type Jobs = { jobs: { id: string; status: string }[]; foreground: { id: string }[] };
+      const jobsWhere = (test: (j: Jobs) => boolean): Promise<Jobs> =>
+        collect(a, (ev) => ev.some((e) => e.event === "jobs" && test(e.data as Jobs))).then((ev) => ev.filter((e) => e.event === "jobs" && test(e.data as Jobs)).at(-1)!.data as Jobs);
+      const started = jobsWhere((j) => j.jobs.some((x) => x.status === "running"));
+      await a.request("session.prompt", { session: s.id, text: "job" });
+      const id = (await started).jobs[0]!.id;
+      let log = "";
+      for (let i = 0; i < 100 && !log.includes("tick"); i++) {
+        log = (await a.request<{ text: string }>("session.job.logs", { session: s.id, jobId: id })).text;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.match(log, /tick 1/);
+      const stopped = jobsWhere((j) => j.jobs.some((x) => x.id === id && x.status === "stopped"));
+      assert.deepEqual(await a.request("session.job.stop", { session: s.id, jobId: id }), { status: "stopped" });
+      await stopped;
+      await assert.rejects(a.request("session.job.stop", { session: s.id, jobId: "job-none" }), /no job job-none/);
+      const holding = jobsWhere((j) => j.foreground.length === 1);
+      await a.request("session.prompt", { session: s.id, text: "shell" });
+      await holding;
+      const back = collect(a, (ev) => ev.some((e) => e.event === "tool.end"));
+      const moved = await a.request<{ jobs: string[] }>("session.background", { session: s.id });
+      assert.equal(moved.jobs.length, 1);
+      const end = (await back).find((e) => e.event === "tool.end")!.data as { preview: string };
+      assert.match(end.preview, new RegExp(`moved this command to the background as ${moved.jobs[0]}`));
+      const gone = jobsWhere((j) => j.jobs.some((x) => x.id === moved.jobs[0] && x.status === "stopped"));
+      await a.request("session.job.stop", { session: s.id, jobId: moved.jobs[0] });
+      await gone;
+      a.close();
+    } finally {
+      await server.stop("test");
+      rmSync(work, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("answers config.keybinds with what each layer sets and where", async () => {
     const { server, key, dir } = setup();
     const work = mkdtempSync(join(tmpdir(), "lykos-keybinds-"));
