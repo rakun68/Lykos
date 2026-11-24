@@ -334,6 +334,53 @@ Where sessions and tabs differ from OpenCode on purpose:
 - The timeline shows no times: the transcript keeps none per message.
 - Closing a tab leaves its session running until the server's idle timeout.
 
+The transcript (#44) follows OpenCode's `routes/session/grouping/` and `message-parts.tsx`:
+
+- **Verbosity:** low, the default, folds each run of tool calls and thoughts between answers into
+  one activity line (`3 commands, 1 edit, 2 thoughts, 4 reads`). Medium shows each call, grouping
+  only adjacent thoughts (while thinking is hidden) and adjacent reads and searches (while grouping
+  is on); high opens those groups. A click on a group's line opens or closes it.
+- **Thinking:** hidden by default; shown, each thought is muted italic text under a `Thought` line.
+- **Selection:** a drag in the transcript selects rows (shown reversed). `Ctrl+C` copies it; off
+  Windows, letting go copies it, as OpenCode does. `/copy` and `<leader>y` copy the last answer.
+- **Scrollbar:** off by default; on, a one-column bar at the transcript's right edge.
+- **Animations:** off, the spinner is a still `⋯`.
+
+| Key | Action |
+| --- | --- |
+| `Alt+End` | The last user message |
+| `<leader>y` | Copy the last assistant message |
+
+No key by default, the palette runs them: next and previous message, next and previous user message,
+toggle thinking, the scrollbar, tool call grouping, animations and diff wrapping, and cycle
+verbosity. The toggles and verbosity persist in `~/.lykos/tui/state.json` (`thinking`, `scrollbar`,
+`grouping`, `verbosity`, `diffWrap`, `animations`).
+
+A settled block (nothing in it runs and something came after it) is laid out once; the settled run
+from the first item is shared from frame to frame, so a frame lays out only what is new. A scroll
+moves the rows with a scroll region (DECSTBM, then SU or SD) and writes only the rows that came in.
+Scrolling a 10,000-message transcript (`node scripts/tui/scroll-measure.mjs`, release build,
+Windows 10 ConPTY, 2026-11-24), frame time at the median: 0.279 ms for a 3-row wheel step, 0.162 ms
+for 1 row; 100 messages take 0.271 ms, so the cost does not grow with the transcript. The gate's
+frame limit (0.187 ms + 0.010) comes from a 1-row streaming frame: the 3-row step is over it and
+waits on the maintainer.
+
+**Mini mode** (`lykos-tui --mini`, OpenCode's `src/mini`): the transcript goes into the terminal's
+own scrollback, and only a footer is drawn, on the bottom rows: the rows still changing (at most 4),
+then the prompt box. It starts with a blank row and `▪ lykos mini v<version> · <workspace>`; on exit it
+prints `Session  <title>` and `Continue lykos-tui --mini -s <ledger id>`. `-s ID` resumes that session.
+A row is printed once, when it can no longer change: a prompt when sent, a streaming answer up to its
+last full row, a group when it settles.
+
+Where the transcript and mini mode differ from OpenCode on purpose:
+
+- The toggles and verbosity persist in `state.json`, not in the config.
+- There is no file context part.
+- Diff wrapping is a saved toggle with nothing to wrap until the diff view lands (#46).
+- At low verbosity a shell call reads `$ bash ls`.
+- Mini mode has no `Ctrl+L`, takes no mouse, and cannot open a group once it is in the scrollback;
+  when the footer shrinks, the rows it gives back stay blank until the next print.
+
 Where it differs from OpenCode on purpose: the context use is always on screen rather than in a
 sidebar, the metadata row has no specialist name, the footer shows the
 workspace without its git branch (reading it would cost a process at startup), and

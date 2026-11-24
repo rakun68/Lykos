@@ -583,6 +583,20 @@ One character in the prompt that stands for a large paste (`[Pasted ~N lines]`) 
 (`[Image N]`), and is sent expanded.
 _Avoid_: token, pill, placeholder
 
+**Activity line**:
+One transcript line that stands for a run of tool calls and thoughts between answers, at low
+verbosity: `3 commands, 1 edit, 2 thoughts, 4 reads`. A click opens it.
+_Avoid_: tool group, summary row
+
+**Verbosity**:
+How much of a turn `lykos-tui`'s transcript shows: low (activity lines), medium (each call), high
+(each call, groups open).
+_Avoid_: detail level, log level
+
+**Mini mode**:
+`lykos-tui --mini`: the transcript printed into the terminal's own scrollback, a footer drawn under it.
+_Avoid_: inline mode, compact mode
+
 **Queued prompt**:
 A prompt held by `lykos-tui` until its session is idle, then sent; queued with `Ctrl+X Enter`.
 _Avoid_: pending message

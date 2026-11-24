@@ -8,7 +8,7 @@
 //! group's line opens or closes it.
 //!
 //! A block that can no longer change (nothing in it runs, and something came after it) is laid out once and kept,
-//! so a 10,000-message transcript costs a walk over its items per frame, not a re-wrap.
+//! and the settled run from the first item is shared from frame to frame, so a frame lays out only what is new.
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;

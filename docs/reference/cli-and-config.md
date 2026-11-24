@@ -16,7 +16,8 @@ It never writes its own state to `.pi/`.
   run/                         The engine server: engine.key, engine.log, engine.sock (Linux)
   projects.json                Registry of known projects and roots
   tui/prompt-stash.jsonl       lykos-tui's stashed prompts, the last 50 (`LYKOS_TUI_DIR` moves tui/)
-  tui/state.json               lykos-tui's theme, recent models (the last 10), favorite models and pinned sessions
+  tui/state.json               lykos-tui's theme, recent models (the last 10), favorite models, pinned sessions,
+                               and the transcript toggles and verbosity
 
 .lykos/                        Project-local state (gitignored except tracked policies)
   config.yaml                  Project configuration overrides
@@ -88,10 +89,11 @@ The `lykos` executable provides the following commands:
 
 ### 1.1 `lykos-tui` (P5)
 
-`lykos-tui [--cwd DIR] [--model PROVIDER/MODEL] [--trust-workspace]`: the Rust TUI
-([ui.md](ui.md) §5). `--cwd` is the workspace (default: the current directory), `--model` the
+`lykos-tui [--cwd DIR] [--model PROVIDER/MODEL] [--trust-workspace] [--mini] [-s|--session ID]`: the
+Rust TUI ([ui.md](ui.md) §5). `--cwd` is the workspace (default: the current directory), `--model` the
 model its sessions start with (default: the config's), and `--trust-workspace` starts a session in
-a workspace not yet trusted. It finds the engine server through `LYKOS_ENGINE_DIR` and starts it
+a workspace not yet trusted. `--mini` writes the transcript into the terminal's scrollback under a
+footer, and `-s` resumes the session with that ledger id. It finds the engine server through `LYKOS_ENGINE_DIR` and starts it
 with `LYKOS_SERVE_CMD` when none answers. It keeps its stash in `LYKOS_TUI_DIR` (default `~/.lykos/tui`).
 
 ## 2. Configuration Precedence
