@@ -37,6 +37,9 @@ pub struct UsageData {
     pub context_tokens: Option<f64>,
     pub context_window: Option<f64>,
     pub context_percent: Option<f64>,
+    /// The system prompt and tool schemas, estimated: what the context holds before a message.
+    #[serde(default)]
+    pub head_tokens: Option<f64>,
     pub run_usd: Option<f64>,
     pub today_usd: Option<f64>,
     pub cache_hit_ratio: Option<f64>,
@@ -51,6 +54,34 @@ pub struct UsageData {
     pub alerts: Vec<Alert>,
     #[serde(default)]
     pub outcome: Option<Outcome>,
+}
+
+/// What fills the context window. `measured` is Pi's total; every part is an estimate.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextBreakdown {
+    pub model: Option<String>,
+    pub window: Option<f64>,
+    pub measured: Option<f64>,
+    pub parts: Vec<ContextPart>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextPart {
+    pub name: String,
+    pub tokens: f64,
+    #[serde(default)]
+    pub count: Option<u64>,
+    #[serde(default)]
+    pub items: Vec<ContextItem>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextItem {
+    pub name: String,
+    pub tokens: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -163,6 +194,9 @@ pub struct RequestData {
     pub options: Vec<RequestOption>,
     #[serde(default)]
     pub assumption: Option<String>,
+    /// A typed answer that is a secret (an API key): shown masked.
+    #[serde(default)]
+    pub secret: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -240,7 +274,13 @@ pub enum EventData {
     System { text: String },
     /// A slash command's answer, shown out of the conversation (#58 follow-up).
     #[serde(rename = "report")]
-    Report { command: String, text: String },
+    Report {
+        command: String,
+        text: String,
+        /// `/context`'s parts, for its window.
+        #[serde(default)]
+        context: Option<ContextBreakdown>,
+    },
     #[serde(rename = "usage")]
     Usage { usage: UsageData },
     #[serde(rename = "request")]

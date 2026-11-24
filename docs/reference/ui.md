@@ -250,15 +250,31 @@ The roles: `background` (painted under every cell, as a light theme does), `surf
 `text`, `error`, `warning`, `success`, `accent`, `selection`, `keybind`. The palette in effect is resolved once per
 theme or colour change; a frame reads it through a reference.
 
-**Toasts (#58).** Short messages (`Copied to clipboard`, `Press ctrl+c again to exit`) show at the top left over
-everything, three at most, each for 2.5 s, with a bar in its kind's colour: success, warning, error or info. Errors
-that need reading stay in the footer.
+**Toasts (#58).** Short messages (`Copied to clipboard`, `Press ctrl+c again to exit`) show at the top right over
+everything, three at most, each for 2.5 s, 48 columns wide with longer text wrapped, with a bar in its kind's colour:
+success, warning, error or info. Errors that need reading stay in the footer.
+
+**Starting.** Until the engine server has sent its settings, the full screen shows only the logo, a bar and the
+step it is on (`Starting the engine server…`, `Loading settings…`, or the link's error in red), so the footer never
+shows a half-loaded `lykos`. `--mini` skips it.
+
+**Tabs.** A click on a tab in the strip at the top shows that session.
+
+**Context window.** `/context` (a local command, so it completes before the session has booted) opens its own
+window: a 10×10 grid of the window's share by part, the model and `used/window`, then each part (system prompt,
+tools, memory files, skills, messages) with its tokens and items, and free space. The session answers it with a
+`report` event carrying `context` (a `ContextBreakdown`). The head (system prompt and tools) is estimated at four
+characters a token; messages are the measured total less the head when the provider has reported one. `/status`
+shows the head estimate as the context bar until a request measures it, never `unknown`.
+
+**Login.** `/connect` on a provider with OAuth sends `/login <name>`; any other asks for its API key in a request
+dialog whose answer is drawn as `•` and is never echoed in the conversation or the event log.
 
 **Command answers (#58).** What a session's slash command answers (`/session`, the lists of `/specialist` and
 `/output-style`, `/rewind`, `/compact`, `/mode`, `/model`) comes as a `report` event, not a line of the conversation:
 one short line is a toast (an error toast for `lykos:` refusals), more opens a popup titled with the command, and a
 second answer to the same command joins it. Only a command this TUI sent in the last minute opens one, so a replay or
-another client's command does not. `/context` is `/status`, with the context window as a bar; `/usage` opens Usage.
+another client's command does not. `/context` opens the Context window; `/usage` opens Usage.
 The line surface prints them as before.
 
 Where the keybinds differ from OpenCode on purpose:

@@ -30,6 +30,7 @@ import { contextTokens } from "../ledger/context-tokens.js";
 import type { RunLastCall, RunSnapshot, Snapshot, ViewModel } from "./types.js";
 import type { CacheObservation } from "./cache-gauge.js";
 import type { SemanticToken } from "./theme/types.js";
+import type { ContextBreakdown } from "../session/context-breakdown.js";
 import { isOwnedName, resolveExtensionCommandName, resolvePiCommandName, resolveSkillName } from "./commands.js";
 
 /** One coloured run of a system line: `writeSystem`'s `parts`. */
@@ -351,7 +352,7 @@ export interface AgentUi {
    */
   writeSystem(text: string, parts?: readonly SystemPart[]): void;
   /** A slash command's answer, for a surface that shows it apart from the conversation (a popup); else `writeSystem`. */
-  writeReport?(command: string, text: string): void;
+  writeReport?(command: string, text: string, context?: ContextBreakdown): void;
   /** T124: display a queued follow-up without pretending it is a new turn. */
   writeFollowup?(text: string): void;
   writeHud(state: StandaloneSessionState, sessionId: string): ViewModel;

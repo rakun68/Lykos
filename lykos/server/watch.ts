@@ -13,8 +13,7 @@ import type { SessionView } from "../delegate/ownership.js";
 import { defaultLedgerPath } from "../ledger/ledger.js";
 import type { TranscriptRecord } from "../session/replay.js";
 import { transcriptFilePath } from "../session/transcript.js";
-import { toolSummary } from "../surface/s0.js";
-import { toolEndData } from "./event-ui.js";
+import { TranscriptEvents } from "./transcript-events.js";
 import type { DelegatedInfo, EventData, SessionStatus } from "./protocol.js";
 import type { FromChild, ToChild } from "./session-child.js";
 
@@ -55,9 +54,7 @@ export class DelegatedWatch {
   private readonly path: string;
   private offset = 0;
   private partial = "";
-  private readonly args = new Map<string, unknown>();
-  private toolSeq = 0;
-  private assistantOpen = false;
+  private readonly events = new TranscriptEvents((data) => this.emit(data));
   private state: SessionView["state"] | "missing" | undefined;
   private question: string | null = null;
   private timer: NodeJS.Timeout | undefined;
@@ -164,8 +161,7 @@ export class DelegatedWatch {
   }
 
   private endTurn(): void {
-    if (this.assistantOpen) this.emit({ type: "message.end" });
-    this.assistantOpen = false;
+    this.events.endTurn();
   }
 
   /** The transcript's lines written since the last read; a line still being written waits for the next. */
@@ -187,57 +183,10 @@ export class DelegatedWatch {
     for (const line of lines) {
       if (line.trim() === "") continue;
       try {
-        this.record(JSON.parse(line) as TranscriptRecord);
+        this.events.record(JSON.parse(line) as TranscriptRecord);
       } catch {
         // A line that is not JSON is the writer's to explain, not the watcher's: `lykos show` reports it.
       }
-    }
-  }
-
-  /** One transcript record as the events a live session sent for it (`event-ui.ts`). */
-  private record(r: TranscriptRecord): void {
-    switch (r.kind) {
-      case "user_message":
-        this.endTurn();
-        this.emit({ type: "message.user", text: r.typed ?? r.text });
-        return;
-      case "steer":
-        this.endTurn();
-        this.emit({ type: "message.followup", text: r.text });
-        return;
-      case "turn_start":
-        this.endTurn();
-        return;
-      case "thinking":
-        this.emit({ type: "thinking.delta", text: r.text });
-        return;
-      case "assistant_message":
-        this.emit({ type: "message.delta", text: r.text });
-        this.assistantOpen = true;
-        this.endTurn();
-        return;
-      case "tool_call": {
-        this.endTurn();
-        const toolId = r.tool_call_id ?? `tool-${++this.toolSeq}`;
-        this.args.set(toolId, r.args);
-        this.emit({ type: "tool.start", toolId, name: r.name, summary: toolSummary(r.name, r.args), args: r.args ?? null });
-        return;
-      }
-      case "tool_result": {
-        const toolId = r.tool_call_id ?? `tool-${this.toolSeq}`;
-        const args = this.args.get(toolId);
-        this.args.delete(toolId);
-        this.emit(toolEndData(toolId, r.name, args, r.result, r.state === "error"));
-        return;
-      }
-      case "compaction":
-        this.emit({ type: "system", text: r.phase === "start" ? "compacting…" : "compacted" });
-        return;
-      case "error":
-        this.system(`error: ${r.message}`);
-        return;
-      default:
-        return;
     }
   }
 }

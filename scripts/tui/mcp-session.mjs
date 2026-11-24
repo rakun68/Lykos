@@ -118,6 +118,14 @@ try {
     await waitText("[Cc]trl\\+[Pp]");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
+  await step("/context opens its window and the session fills it by part", async () => {
+    await call("send_text", { sessionId: id, text: "/context" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Estimated usage by category");
+    await waitText("Free space");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
   await step("ctrl+c twice quits lykos, the first one says so (#58 item 5)", async () => {
     await call("send_keys", { sessionId: id, keys: "Ctrl+C" });
     await waitText("again to exit");

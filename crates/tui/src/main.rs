@@ -136,6 +136,8 @@ fn run(args: Args) -> io::Result<()> {
     let mut mini = args.mini.then(mini::Mini::default);
     let mut app = App::new(args.cwd.clone());
     app.mini = args.mini;
+    // The loading screen shows until the engine server's settings arrive; mini mode draws inline and skips it.
+    app.loading = !args.mini;
     app.resume = args.session.clone();
     app.history = history::History::load(Some(PathBuf::from(&args.cwd).join(".lykos").join("history.json")));
     app.stash = stash::Stash::load(state_dir().map(|d| d.join("prompt-stash.jsonl")));

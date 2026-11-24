@@ -63,6 +63,7 @@ import { resolveProject } from "../session/identity.js";
 import { resolveGatePolicy } from "../gate/verify-gate.js";
 import type { StandaloneSessionState } from "../session/session.js";
 import { askAside } from "../session/aside.js";
+import { skillsHeadCost } from "../session/skills.js";
 import { type RunInteractiveStandaloneSessionResult as Result } from "../session/interactive.js";
 
 export type FinishInteractiveSession = (opts: Parameters<typeof import("../session/interactive.js").finishInteractiveSession>[0]) => Promise<Result>;
@@ -491,6 +492,7 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
         systemPromptChars: session.systemPrompt.length,
         contextFiles: booted.frozenContextFiles.map((f) => ({ name: basename(f.path), bytes: f.bytes })),
         skills: booted.skillNames,
+        skillTokens: skillsHeadCost(booted.skillRoster),
         toolNames: session.getActiveToolNames(),
       }),
       ...(input.onReady !== undefined ? { onReady: (handle: InteractiveHandle) => input.onReady?.({ ...handle, jobs: booted.jobs }) } : {}),

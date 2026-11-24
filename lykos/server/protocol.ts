@@ -7,6 +7,7 @@
 import type { KeybindSetting } from "../config/keybinds.js";
 import type { CacheGaugeEntry } from "../surface/cache-gauge.js";
 import type { Alert, OutcomeView, TokenCounters } from "../surface/types.js";
+import type { ContextBreakdown } from "../session/context-breakdown.js";
 export type { ModelOption, ProviderOption, SessionOptions, SpecialistOption } from "../session/session-options.js";
 
 /** Bumped on any change a client of the previous version would misread. A client of another version is refused. */
@@ -135,6 +136,8 @@ export interface UsageData {
   contextTokens: number | null;
   contextWindow: number | null;
   contextPercent: number | null;
+  /** The system prompt and tool schemas, estimated at 4 characters a token: what the context holds before a message. */
+  headTokens: number | null;
   runUsd: number | null;
   todayUsd: number | null;
   cacheHitRatio: number | null;
@@ -164,6 +167,8 @@ export interface RequestData {
   options: { value: string; label: string; note?: string }[];
   /** A question's stated assumption, used when nobody answers. */
   assumption?: string;
+  /** A typed answer that is a secret (an API key): shown masked, kept out of history, never sent back in an event. */
+  secret?: boolean;
 }
 
 export type EventData =
@@ -177,8 +182,8 @@ export type EventData =
   | { type: "tool.end"; toolId: string; name: string; ok: boolean; preview?: string; diff?: DiffData }
   | { type: "turn.end" }
   | { type: "system"; text: string }
-  /** A slash command's answer: the TUI shows it in a popup (one line: a toast), out of the conversation. */
-  | { type: "report"; command: string; text: string }
+  /** A slash command's answer: the TUI shows it in a popup (one line: a toast), out of the conversation. `/context` carries its parts. */
+  | { type: "report"; command: string; text: string; context?: ContextBreakdown }
   | { type: "usage"; usage: UsageData }
   | { type: "request"; request: RequestData }
   | { type: "request.resolved"; requestId: string; answer: string }

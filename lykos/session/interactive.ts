@@ -143,6 +143,7 @@ import type { CompactionRecord } from "../loop/self-compact.js";
 import { buildContinuationPrompt, decideContinuation, type ContinuationPlan } from "../loop/continuation.js";
 import { listCheckpoints } from "../loop/checkpoint.js";
 import { sessionChangedPaths } from "../loop/diff-summary.js";
+import { contextBreakdown, type ContextBreakdown, type ContextTool } from "./context-breakdown.js";
 
 /** The subset of `AgentSession` this loop actually calls — the real class satisfies this structurally. */
 export interface InteractiveSession extends RewindableSession {
@@ -176,6 +177,10 @@ export interface InteractiveSession extends RewindableSession {
   getAvailableThinkingLevels?(): string[];
   supportsThinking?(): boolean;
   getContextUsage?(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+  /** Every configured tool with its schema: what `/context` sizes the tools from. */
+  getAllTools?(): ContextTool[];
+  /** The conversation so far: what `/context` sizes the messages from before Pi has a total. */
+  readonly messages?: readonly unknown[];
 }
 
 export interface LineSource {
@@ -500,6 +505,8 @@ export interface SessionContextFacts {
   systemPromptChars: number;
   contextFiles: Array<{ name: string; bytes: number }>;
   skills: string[];
+  /** The skill list's share of the system prompt, estimated (`skillsHeadCost`). */
+  skillTokens?: number;
   toolNames: string[];
 }
 
@@ -704,6 +711,23 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
    * cannot size (Pi builds them and never exposes the serialised form), and
    * that line says so instead of guessing a number.
    */
+  /** `/context`'s parts for a surface that draws them (the TUI's Context window); the report says the same in text. */
+  function contextData(): ContextBreakdown | undefined {
+    const facts = opts.contextInfo?.();
+    if (!facts) return undefined;
+    const active = new Set(session.getActiveToolNames());
+    return contextBreakdown({
+      model: opts.currentModel?.() ?? state.currentModel ?? null,
+      systemPrompt: session.systemPrompt,
+      tools: (session.getAllTools?.() ?? []).filter((t) => active.has(t.name)),
+      contextFiles: facts.contextFiles,
+      skillTokens: facts.skillTokens ?? 0,
+      skillCount: facts.skills.length,
+      messages: session.messages ?? [],
+      usage: session.getContextUsage?.(),
+    });
+  }
+
   function contextReport(): string {
     const est = (bytes: number) => `~${Math.ceil(bytes / 4)}`;
     const usage = session.getContextUsage?.();
@@ -1009,7 +1033,8 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         say(usageReport());
         return "ok";
       case "context":
-        say(contextReport());
+        if (ui?.writeReport) ui.writeReport("context", contextReport(), contextData());
+        else say(contextReport());
         return "ok";
       case "specialist-list":
         if (!opts.listSpecialists) {
@@ -1124,7 +1149,8 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
           return "ok";
         }
         await opts.login(parsed.provider, parsed.apiKey, {
-          write: (line) => chrome(line),
+          // A surface with popups shows the login's lines (a sign-in URL among them) in one.
+          write: (line) => (ui?.writeReport ? ui.writeReport("login", line) : chrome(line)),
           // Top level only (refused mid-turn above), so no read is pending
           // and these answers cannot be taken for prompts.
           read: async (secret) => {

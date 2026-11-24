@@ -9,6 +9,7 @@ import { deriveHud, previewResult, toolSummary, type AgentUi, type AgentUiOption
 import { extractDiff, type ConversationView } from "../surface/renderers/conversation.js";
 import { renderJson } from "../surface/renderers/json.js";
 import type { EventData, SessionStatus, UsageData } from "./protocol.js";
+import { headTokens } from "../session/context-breakdown.js";
 
 /** A tool's output is shown, not stored, here: the transcript keeps all of it. */
 const PREVIEW_MAX = 8 * 1024;
@@ -33,6 +34,19 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
   let assistantOpen = false;
   let toolSeq = 0;
 
+  // The head's estimate, worked out again only when the prompt or the tool set changes.
+  let head: { key: string; tokens: number } | undefined;
+  const headNow = (): number | null => {
+    if (!session.getAllTools) return null;
+    const active = session.getActiveToolNames();
+    const key = `${session.systemPrompt.length}:${active.join(",")}`;
+    if (head?.key !== key) {
+      const on = new Set(active);
+      head = { key, tokens: headTokens(session.systemPrompt, session.getAllTools().filter((t) => on.has(t.name))) };
+    }
+    return head.tokens;
+  };
+
   const usage = (state: Parameters<AgentUi["writeHud"]>[0], sessionId: string): ReturnType<AgentUi["writeHud"]> => {
     const contextUsage = session.getContextUsage?.();
     const model = opts.header.model;
@@ -52,6 +66,7 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
       contextTokens: contextUsage?.tokens ?? gauge?.usedTokens ?? null,
       contextWindow: contextUsage?.contextWindow ?? gauge?.totalTokens ?? null,
       contextPercent: contextUsage?.percent ?? (gauge?.pct !== null && gauge?.pct !== undefined ? gauge.pct * 100 : null),
+      headTokens: headNow(),
       runUsd: vm.cost.runUsd,
       todayUsd: vm.cost.todayUsd,
       cacheHitRatio: vm.tokens.hitRatio,
@@ -82,8 +97,8 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
     writeSystem(text) {
       hooks.emit({ type: "system", text });
     },
-    writeReport(command, text) {
-      hooks.emit({ type: "report", command, text });
+    writeReport(command, text, context) {
+      hooks.emit({ type: "report", command, text, ...(context !== undefined ? { context } : {}) });
     },
     writeFollowup(text) {
       hooks.emit({ type: "message.followup", text });

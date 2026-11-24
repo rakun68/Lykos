@@ -367,7 +367,9 @@ fn draw_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, h: u16) -> 
             buf.text(ex, ey, ew as u16, hint, Style::fg(c().muted).on(c().surface));
         }
         for (i, row) in rows.iter().skip(first).take(edit).enumerate() {
-            buf.text(ex, ey + i as u16, ew as u16, &app.editor.text()[row.start..row.end], style);
+            let text = &app.editor.text()[row.start..row.end];
+            let shown = if r.secret { "•".repeat(text.chars().count()) } else { text.to_string() };
+            buf.text(ex, ey + i as u16, ew as u16, &shown, style);
         }
         cursor = Some((ex + ccol as u16, ey + (crow - first) as u16));
         at = ey + edit as u16;

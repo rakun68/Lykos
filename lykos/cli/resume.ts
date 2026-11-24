@@ -83,6 +83,8 @@ export interface ResumeOptions {
   lineSource?: LineSource;
   /** P5 #42: asks for the agreement a `confirm` preflight needs, given the preflight; the engine server asks its client. */
   confirm?: (preflight: string) => Promise<boolean>;
+  /** Given the preflight once it is read, before anything is asked: the engine server shows the conversation from it. */
+  onPreflight?: (preflight: ResumePreflight) => void;
   /** Called with the reason, once, whenever resume refuses or is declined, in addition to saying it on stderr. A caller with no one reading stderr (an MCP continuation) reports it itself. */
   onRefusal?: (reason: string) => void;
   /** T264: what goes in the input box when the session starts: the prompt a rewind past a resume went back to. */
@@ -267,6 +269,7 @@ export async function runResume(
       ...(opts?.fork === true ? { fork: true } : {}),
     });
 
+    opts?.onPreflight?.(pre);
     stdoutWrite(`lykos resume${opts?.fork === true ? " --fork" : ""}  ${sessionId}\n`);
     stdoutWrite(`${formatPreflight(pre)}\n`);
 

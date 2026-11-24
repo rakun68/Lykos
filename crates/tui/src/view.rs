@@ -25,14 +25,18 @@ pub fn draw(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     cursor
 }
 
-/// #58 item 5: short messages at the top left, over dialogs too, newest last; each goes after `TOAST_TIME`.
+/// The widest a toast grows; a longer message wraps.
+const TOAST_WIDTH: u16 = 48;
+
+/// #58 item 5: short messages at the top right, over dialogs too, newest last, each wrapped to `TOAST_WIDTH`; each
+/// goes after `TOAST_TIME`.
 fn toasts(app: &App, buf: &mut Buffer) {
     use crate::app::ToastKind;
-    let x = pad(buf.width);
-    let room = buf.width.saturating_sub(2 * x);
+    let p = pad(buf.width);
+    let room = buf.width.saturating_sub(2 * p).min(TOAST_WIDTH);
     let mut y = 1;
     for t in &app.toasts {
-        if y >= buf.height || room < 6 {
+        if y >= buf.height || room < 8 {
             break;
         }
         let mark = match t.kind {
@@ -41,20 +45,54 @@ fn toasts(app: &App, buf: &mut Buffer) {
             ToastKind::Error => c().love,
             ToastKind::Info => c().accent,
         };
-        let text = first_line(&t.text);
-        let tw = (text.width() as u16 + 4).min(room);
+        let lines = wrap(t.text.trim_end(), (room - 4) as usize);
+        let tw = (lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 4).min(room);
+        let x = buf.width - p - tw;
         let bg = Style::default().on(c().overlay);
-        buf.fill(x, y, tw, 1, bg);
-        buf.set(x, y, Cell { ch: '┃', style: Style::fg(mark).on(c().overlay) });
-        buf.text(x + 2, y, tw.saturating_sub(3), text, theme::text().on(c().overlay));
-        y += 1;
+        for l in &lines {
+            if y >= buf.height {
+                break;
+            }
+            buf.fill(x, y, tw, 1, bg);
+            buf.set(x, y, Cell { ch: '┃', style: Style::fg(mark).on(c().overlay) });
+            buf.text(x + 2, y, tw.saturating_sub(3), l, theme::text().on(c().overlay));
+            y += 1;
+        }
     }
+}
+
+/// From the start until the engine server's settings arrive, in place of the TUI: the logo, what it waits for, and
+/// a bar of the steps done.
+fn loading(app: &App, buf: &mut Buffer) {
+    use crate::app::Link;
+    let (w, h) = (buf.width, buf.height);
+    let logo: [&str; 3] = ["█   █ █ █ █ ███ ███", "█    █  ██  █ █ █▄▄", "███  █  █ █ ███ ▄▄█"];
+    let top = h.saturating_sub(8) / 2;
+    for (i, l) in logo.iter().enumerate() {
+        let lw = l.chars().count() as u16;
+        buf.text(w.saturating_sub(lw) / 2, top + i as u16, lw, l, Style::fg(c().accent));
+    }
+    let (done, step, style) = match &app.link {
+        Link::Connecting => (1, "Starting the engine server…".to_string(), theme::muted()),
+        Link::Ready => (2, "Loading settings…".to_string(), theme::muted()),
+        Link::Lost(m) | Link::Failed(m) => (1, m.clone(), Style::fg(c().love)),
+    };
+    let cells: String = (0..12).map(|i| if i < done * 4 { '▰' } else { '▱' }).collect();
+    let centre = |s: &str| w.saturating_sub(s.width() as u16) / 2;
+    buf.text(centre(&cells), top + 5, w, &cells, Style::fg(c().accent));
+    let step: String = step.chars().take(w as usize).collect();
+    buf.text(centre(&step), top + 7, w, &step, style);
 }
 
 fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     let (w, h) = (buf.width, buf.height);
+    app.tab_hits.borrow_mut().clear();
     if w < 10 || h < 6 {
         buf.text(0, 0, w, "lykos", theme::text());
+        return None;
+    }
+    if app.loading {
+        loading(app, buf);
         return None;
     }
     let pad = pad(w);
@@ -323,6 +361,7 @@ fn tab_strip(app: &App, session: &Session, buf: &mut Buffer, x: u16, width: u16)
             break;
         }
         buf.text(at, 0, end - at, &label, style);
+        app.tab_hits.borrow_mut().push((at, (at + lw).min(end), id.clone()));
         at += lw;
     }
 }
@@ -484,14 +523,20 @@ struct Line {
     right_style: Style,
     /// A group's heading: never selected.
     heading: bool,
+    /// Pieces in their own colours, drawn in place of `left` and `right`.
+    runs: Vec<(String, Style)>,
 }
 
 fn line(text: impl Into<String>, style: Style) -> Line {
-    Line { left: text.into(), right: String::new(), style, right_style: style, heading: false }
+    Line { left: text.into(), right: String::new(), style, right_style: style, heading: false, runs: Vec::new() }
 }
 
 fn pair(left: impl Into<String>, right: impl Into<String>, style: Style, right_style: Style) -> Line {
-    Line { left: left.into(), right: right.into(), style, right_style, heading: false }
+    Line { left: left.into(), right: right.into(), style, right_style, heading: false, runs: Vec::new() }
+}
+
+fn runs(runs: Vec<(String, Style)>) -> Line {
+    Line { runs, ..line("", theme::text()) }
 }
 
 fn heading(text: &str) -> Line {
@@ -599,7 +644,8 @@ fn dialog(app: &App, buf: &mut Buffer) {
             (name.into(), lines, at, format!("{} select{extra} · {close}", k("dialog.select.submit")))
         }
         Dialog::Info { info } => {
-            let row = |a: &str, b: String| pair(a, b, theme::text(), theme::text());
+            // The label set apart from its value, as the palette sets an action apart from its keys.
+            let row = |a: &str, b: String| pair(a, b, theme::muted(), theme::text());
             let unknown = || "unknown".to_string();
             let usage = app.current().and_then(|s| s.usage.clone()).unwrap_or_default();
             let no_mcp = vec![line("No MCP servers", theme::text()), line("A Lykos session connects to none; Lykos is one itself (lykos mcp).", theme::muted())];
@@ -620,10 +666,11 @@ fn dialog(app: &App, buf: &mut Buffer) {
                     ];
                     // The context window as the prompt box shows it, with the tokens behind the percent.
                     let tokens = usage.context_tokens.map(|t| format!(" · {} tokens", group(t.round() as u64))).unwrap_or_default();
-                    rows.push(match context_bar(app) {
-                        Some((cells, pct, colour)) => pair("Context", format!("{cells} {pct}{tokens}"), theme::text(), Style::fg(colour)),
-                        None => row("Context", "unknown".into()),
-                    });
+                    // Before the first answer: the bar from the system prompt and tools, estimated; with no reading at
+                    // all, an empty bar.
+                    let tokens = if tokens.is_empty() { usage.head_tokens.map(|t| format!(" · ~{} tokens before a message", group(t.round() as u64))).unwrap_or_default() } else { tokens };
+                    let (cells, pct, colour) = context_bar(app).unwrap_or_else(|| (bar_cells(0.0), "0%".into(), c().accent));
+                    rows.push(pair("Context", format!("{cells} {pct}{tokens}"), theme::muted(), Style::fg(colour)));
                     rows.extend(no_mcp);
                     ("Status".into(), rows, None, close.clone())
                 }
@@ -706,6 +753,10 @@ fn dialog(app: &App, buf: &mut Buffer) {
             );
             ("Worktrees".into(), lines, at, keys)
         }
+        Dialog::Context { data, scroll } => {
+            scrolled = Some(*scroll);
+            ("Context Usage".into(), context_lines(app, data.as_ref()), None, format!("↑↓ scroll · {close}"))
+        }
         Dialog::Input { title, text, .. } => (title.clone(), vec![line(format!("{text}▏"), theme::text())], None, format!("{} confirm · {close}", k("dialog.select.submit"))),
         Dialog::Aside { title, answer, scroll } => {
             let (text, style) = match answer {
@@ -775,6 +826,13 @@ fn dialog(app: &App, buf: &mut Buffer) {
         } else {
             (l.style.on(c().surface), l.right_style.on(c().surface))
         };
+        if !l.runs.is_empty() {
+            let mut col = x + 2;
+            for (t, st) in &l.runs {
+                col = buf.text(col, ly, (x + 2 + width).saturating_sub(col), t, st.on(c().surface));
+            }
+            continue;
+        }
         let rw = (l.right.width() as u16).min(width);
         let lw = if rw == 0 { width } else { width.saturating_sub(rw + 2) };
         buf.text(x + 2, ly, lw, &l.left, style);
@@ -868,11 +926,107 @@ fn model_name(app: &App, model: &str) -> String {
 /// Cells in the context bar.
 const CONTEXT_CELLS: usize = 10;
 
-/// #58 item 14: the context window's use as filled cells, its percent, and a colour that warms as it fills.
-fn context_bar(app: &App) -> Option<(String, String, lykos_term::Color)> {
-    let p = app.current()?.usage.as_ref()?.context_percent?.clamp(0.0, 100.0);
+fn bar_cells(p: f64) -> String {
     let filled = ((p / 100.0) * CONTEXT_CELLS as f64).round() as usize;
-    let cells: String = (0..CONTEXT_CELLS).map(|i| if i < filled { '▰' } else { '▱' }).collect();
+    (0..CONTEXT_CELLS).map(|i| if i < filled { '▰' } else { '▱' }).collect()
+}
+
+/// Tokens as Claude Code's `/context` writes them: `4.9k`, `1m`.
+fn short(t: f64) -> String {
+    let (v, unit) = if t >= 1e6 {
+        (t / 1e6, "m")
+    } else if t >= 1e3 {
+        (t / 1e3, "k")
+    } else {
+        return format!("{}", t.round() as u64);
+    };
+    format!("{v:.1}").trim_end_matches(".0").to_string() + unit
+}
+
+/// `/context`'s window, after Claude Code's: a grid where each cell is a hundredth of the window, coloured by what
+/// fills it, the parts beside it, then what each part holds. The parts are estimates and the window says so.
+fn context_lines(app: &App, data: Option<&lykos_client::ContextBreakdown>) -> Vec<Line> {
+    let Some(d) = data else {
+        let why = match (app.current(), app.status()) {
+            (None, _) => "Open a session first",
+            (Some(_), Some(SessionStatus::Idle)) => "Loading…",
+            _ => "Shown once the session is idle",
+        };
+        return vec![line(why, theme::muted())];
+    };
+    let colours = [c().subtle, c().accent, c().gold, c().pine, c().love];
+    let window = d.window.filter(|w| *w > 0.0);
+    let used = d.measured.unwrap_or_else(|| d.parts.iter().map(|p| p.tokens).sum());
+    let pct = |t: f64| window.map_or(String::new(), |w| format!(" ({:.1}%)", t / w * 100.0).replace(".0%", "%"));
+    let mut cells: Vec<Style> = Vec::new();
+    if let Some(w) = window {
+        for (i, p) in d.parts.iter().enumerate() {
+            let n = if p.tokens > 0.0 { (p.tokens / w * 100.0).round().max(1.0) as usize } else { 0 };
+            cells.extend(std::iter::repeat_n(Style::fg(colours[i % colours.len()]), n));
+        }
+    }
+    cells.truncate(100);
+    let model = d.model.as_deref().map(|m| model_name(app, m)).unwrap_or_default();
+    let mut legend: Vec<Vec<(String, Style)>> = vec![
+        vec![(model, theme::text().bold())],
+        vec![(format!("{}/{} tokens{}", short(used), window.map_or("?".into(), short), pct(used)), theme::muted())],
+        vec![],
+        vec![("Estimated usage by category".into(), theme::muted())],
+    ];
+    for (i, p) in d.parts.iter().enumerate() {
+        legend.push(vec![("■ ".into(), Style::fg(colours[i % colours.len()])), (format!("{}: {} tokens{}", p.name, short(p.tokens), pct(p.tokens)), theme::text())]);
+    }
+    if let Some(w) = window {
+        let free = (w - used).max(0.0);
+        legend.push(vec![("□ ".into(), theme::muted()), (format!("Free space: {}{}", short(free), pct(free)), theme::text())]);
+    }
+    let mut out = Vec::new();
+    for r in 0..10.max(legend.len()) {
+        let mut row: Vec<(String, Style)> = Vec::new();
+        if r < 10 {
+            for col in 0..10 {
+                row.push(match cells.get(r * 10 + col) {
+                    Some(st) => ("■ ".into(), *st),
+                    None => ("□ ".into(), Style::fg(c().overlay)),
+                });
+            }
+        } else {
+            row.push((" ".repeat(20), theme::text()));
+        }
+        row.push(("  ".into(), theme::text()));
+        row.extend(legend.get(r).cloned().unwrap_or_default());
+        out.push(runs(row));
+    }
+    for p in d.parts.iter().filter(|p| p.count.is_some()) {
+        let n = p.count.unwrap_or(0);
+        let noun = match p.name.as_str() {
+            "Memory files" => "file",
+            "Messages" => "message",
+            "Skills" => "skill",
+            _ => "tool",
+        };
+        out.push(line("", theme::text()));
+        out.push(line(p.name.clone(), theme::text().bold()));
+        out.push(line(format!("└ {n} {noun}{} · {} tokens", if n == 1 { "" } else { "s" }, short(p.tokens)), theme::muted()));
+        for item in &p.items {
+            out.push(line(format!("  {} · {} tokens", item.name, short(item.tokens)), theme::muted()));
+        }
+    }
+    out.push(line("", theme::text()));
+    out.push(line(
+        if d.measured.is_some() { "The total is the model's count; each part is estimated at 4 characters a token." } else { "Estimated at 4 characters a token: the model has not answered yet." },
+        theme::muted(),
+    ));
+    out
+}
+
+/// #58 item 14: the context window's use as filled cells, its percent, and a colour that warms as it fills.
+/// Before the first answer, the system prompt and tools' estimate stands in for the reading.
+fn context_bar(app: &App) -> Option<(String, String, lykos_term::Color)> {
+    let u = app.current()?.usage.as_ref()?;
+    let head = || Some(u.head_tokens? / u.context_window.filter(|w| *w > 0.0)? * 100.0);
+    let p = u.context_percent.or_else(head)?.clamp(0.0, 100.0);
+    let cells = bar_cells(p);
     let colour = if p > 90.0 {
         c().love
     } else if p > 70.0 {
@@ -1078,7 +1232,7 @@ mod tests {
 
     fn with_request(app: &mut App, kind: &str, title: &str, detail: &str, patch: Option<&str>, options: &[(&str, &str, Option<&str>)]) {
         let options = options.iter().map(|(v, l, n)| lykos_client::RequestOption { value: (*v).into(), label: (*l).into(), note: n.map(Into::into) }).collect();
-        let request = lykos_client::RequestData { request_id: "r1".into(), kind: kind.into(), title: title.into(), detail: detail.into(), body: None, patch: patch.map(Into::into), options, assumption: Some("go on".into()) };
+        let request = lykos_client::RequestData { request_id: "r1".into(), kind: kind.into(), title: title.into(), detail: detail.into(), body: None, patch: patch.map(Into::into), options, assumption: Some("go on".into()), secret: false };
         app.on_event(&Event { event: "x".into(), session: "s1".into(), seq: 6, data: EventData::Request { request } });
     }
 
@@ -1256,6 +1410,27 @@ mod tests {
         draw(&app, &mut buf);
         let s = screen(&buf);
         assert!(s.contains("▰▱▱▱▱▱▱▱▱▱ 6% · 12,345 tokens"), "status shows the context bar\n{s}");
+        // `/context`'s window: the grid, the parts beside it, then what each holds.
+        let parts = vec![
+            lykos_client::ContextPart { name: "System prompt".into(), tokens: 4000.0, ..Default::default() },
+            lykos_client::ContextPart { name: "Memory files".into(), tokens: 300.0, count: Some(1), items: vec![lykos_client::ContextItem { name: "AGENTS.md".into(), tokens: 300.0 }] },
+        ];
+        let data = lykos_client::ContextBreakdown { model: Some("claude-opus".into()), window: Some(200000.0), measured: Some(12345.0), parts };
+        app.dialog = Some(Dialog::Context { data: Some(data), scroll: 0 });
+        let mut buf = Buffer::new(100, 40);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        for want in ["Context Usage", "■ □ □", "12.3k/200k tokens (6.2%)", "System prompt: 4k tokens (2%)", "Free space: 187.7k", "└ 1 file · 300 tokens", "AGENTS.md · 300 tokens"] {
+            assert!(s.contains(want), "missing {want:?} in\n{s}");
+        }
+        // A toast sits at the top right and wraps.
+        app.dialog = None;
+        app.toast(crate::app::ToastKind::Info, "a message long enough that it has to wrap onto a second line of the toast".into());
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        let row = s.lines().nth(1).unwrap();
+        assert!(row.find("a message").unwrap() > 40, "on the right\n{s}");
+        assert!(s.lines().nth(2).unwrap().contains("toast"), "wrapped\n{s}");
     }
 
     #[test]

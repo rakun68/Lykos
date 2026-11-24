@@ -26,6 +26,7 @@ pub enum Local {
     Themes,
     Connect,
     Status,
+    Context,
     Usage,
     Mcps,
     Debug,
@@ -33,7 +34,7 @@ pub enum Local {
     Run(&'static str),
 }
 
-pub const LOCAL: [(Local, &str, &str); 21] = [
+pub const LOCAL: [(Local, &str, &str); 23] = [
     (Local::Btw, "/btw", "Ask a side question; the answer stays out of the conversation"),
     (Local::Editor, "/editor", "Open the prompt in your editor"),
     (Local::Images, "/images", "View the images attached to the prompt"),
@@ -48,6 +49,8 @@ pub const LOCAL: [(Local, &str, &str); 21] = [
     (Local::Themes, "/themes", "Switch theme"),
     (Local::Connect, "/connect", "Connect a provider"),
     (Local::Status, "/status", "View status"),
+    (Local::Context, "/context", "What fills the context window"),
+    (Local::Usage, "/usage", "Tokens, cache and spend"),
     (Local::Mcps, "/mcps", "MCP servers"),
     (Local::Debug, "/debug", "View debug info"),
     (Local::Run("session.list"), "/sessions", "Switch session"),
@@ -68,9 +71,6 @@ pub fn bare(name: &str) -> Option<Local> {
         "/resume" => Some(Local::Run("session.list")),
         "/new" => Some(Local::Run("session.new")),
         "/rename" => Some(Local::Run("session.rename")),
-        // Reports the engine prints into the chat open as dialogs here: `/context` is `/status`'s alias.
-        "/context" => Some(Local::Status),
-        "/usage" => Some(Local::Usage),
         _ => None,
     }
 }

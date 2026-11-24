@@ -20,6 +20,8 @@ import { slashCandidates } from "../surface/commands.js";
 import type { AsideAnswer } from "../session/aside.js";
 import type { SessionOptions } from "../session/session-options.js";
 import { createEventUi } from "./event-ui.js";
+import { TranscriptEvents } from "./transcript-events.js";
+import type { ResumePreflight } from "../session/resume-preflight.js";
 import type { EventData, JobLogResult, RequestData, SessionStatus } from "./protocol.js";
 import type { JobRegistry } from "../tools/job-runner.js";
 
@@ -74,6 +76,13 @@ class QueuedLines implements LineSource {
     const w = this.waiting.shift();
     if (w) w(line);
     else this.lines.push(line);
+  }
+
+  /** Set once the child can open requests: a secret is asked as a request the client masks. */
+  secret: (() => Promise<string | null>) | undefined;
+
+  nextSecret(): Promise<string | null> {
+    return this.secret !== undefined ? this.secret() : this.next();
   }
 
   next(): Promise<string | null> {
@@ -240,11 +249,11 @@ export async function runSessionChild(
     emit({ type: "request", request: { requestId: current, ...data } });
     status("waiting");
   };
-  const answer = (): Promise<string | null> => {
+  const answer = (secret = false): Promise<string | null> => {
     const id = current;
     if (id === undefined) return Promise.resolve(null);
     const settle = (value: string | null): string | null => {
-      emit({ type: "request.resolved", requestId: id, answer: value ?? "" });
+      emit({ type: "request.resolved", requestId: id, answer: secret ? "" : (value ?? "") });
       status("running");
       return value;
     };
@@ -256,6 +265,14 @@ export async function runSessionChild(
     return new Promise((resolve) => answers.set(id, (v) => resolve(settle(v))));
   };
   const silent = { write: (): boolean => true };
+  // `/login <provider> --api-key` asks for the key here. `/login` runs only while the session is idle, so it is idle
+  // again once the key is in.
+  lines.secret = async () => {
+    open({ kind: "question", title: "API key", detail: "The key itself, $VAR to read an environment variable, or !command to run one.", options: [], secret: true });
+    const key = await answer(true);
+    status("idle");
+    return key;
+  };
 
   const gate = resolveApprovalGate({
     autoApprove: params.autoApprove === true,
@@ -322,10 +339,20 @@ export async function runSessionChild(
       : { status: "error", message: result.message };
   };
   /** P5 #42: `lykos resume` on these seams: the preflight's agreement is a question to the client. */
-  const resume = async (id: string, opts: { fork?: boolean; inputText?: string }): Promise<number> => {
+  const resume = async (id: string, opts: { fork?: boolean; inputText?: string; show?: boolean }): Promise<number> => {
     let refusal: string | undefined;
     const code = await runResume(params.cwd, ledgerPath ?? defaultLedgerPath(params.cwd), id, {
       ...(opts.fork === true ? { fork: true } : {}),
+      // A session opened from the list shows its conversation so far; a fork or a rewind in this process already has.
+      ...(opts.show === true
+        ? {
+            onPreflight: (pre: ResumePreflight) => {
+              const events = new TranscriptEvents(emit);
+              for (const r of pre.branch?.records ?? []) events.record(r);
+              events.endTurn();
+            },
+          }
+        : {}),
       ...(opts.inputText !== undefined ? { inputText: opts.inputText } : {}),
       confirm: async (preflight) => {
         open({ kind: "question", title: "Resume this session?", detail: preflight, options: [{ value: "y", label: "Resume" }, { value: "n", label: "Cancel" }] });
@@ -350,7 +377,7 @@ export async function runSessionChild(
 
   async function run(): Promise<number> {
     if (params.resume !== undefined) {
-      const code = await resume(params.resume, params.fork === true ? { fork: true } : {});
+      const code = await resume(params.resume, { ...(params.fork === true ? { fork: true } : {}), show: true });
       if (code === 0) send({ kind: "exit", ok: true });
       return code;
     }

@@ -100,6 +100,23 @@ process.on("message", (msg: ToChild) => {
         send({ kind: "status", status: "waiting" });
         break;
       }
+      if (msg.text === "/context") {
+        const context = {
+          model: "faux/scripted",
+          window: 200000,
+          measured: null,
+          parts: [
+            { name: "System prompt", tokens: 2100 },
+            { name: "Tools", tokens: 900, count: 7 },
+            { name: "Memory files", tokens: 300, count: 1, items: [{ name: "AGENTS.md", tokens: 300 }] },
+            { name: "Skills", tokens: 120, count: 2 },
+            { name: "Messages", tokens: 40, count: 2 },
+          ],
+        };
+        send({ kind: "event", data: { type: "report", command: "context", text: "context ? / 200000", context } });
+        send({ kind: "status", status: "idle" });
+        break;
+      }
       if (msg.text === "job" && jobs !== undefined) {
         const job = jobs.start({ command: ticking });
         send({ kind: "event", data: { type: "message.delta", text: `started ${job.id}` } });
@@ -128,7 +145,7 @@ process.on("message", (msg: ToChild) => {
         // A tool call and the usage after it, as a real turn sends them (the TUI's end-to-end test, #37).
         send({ kind: "event", data: { type: "tool.start", toolId: "t1", name: "read", summary: "README.md", args: { path: "README.md" } } });
         send({ kind: "event", data: { type: "tool.end", toolId: "t1", name: "read", ok: true, preview: "# Lykos" } });
-        const usage = { model: "faux/scripted", effort: "high", contextTokens: 12345, contextWindow: 200000, contextPercent: 6.2, runUsd: null, todayUsd: null, cacheHitRatio: 0.74, calls: 1,
+        const usage = { model: "faux/scripted", effort: "high", contextTokens: 12345, contextWindow: 200000, contextPercent: 6.2, headTokens: 3000, runUsd: null, todayUsd: null, cacheHitRatio: 0.74, calls: 1,
           tokens: { fresh: 1200, cacheRead: 3400, cacheWrite: 500, output: 230, reasoning: 0 },
           cache: { model: "faux/scripted", cachedTokens: 3400, writtenTokens: 500, ageSeconds: 4, pct: 0.74, status: "fresh" as const },
           alerts: [{ id: "budget.run", severity: "warn" as const, message: "run spend at 80% of its cap", remedy: "raise budget.run_usd" }],

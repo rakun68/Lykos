@@ -248,6 +248,8 @@ describe("a real session on the engine server", () => {
       await c.request("session.prompt", { session: first.id, text: "/undo" });
       const set = await until((e) => mine(first.id)(e) && e.data.type === "prompt.set", "prompt.set");
       assert.ok(set.data.type === "prompt.set" && set.data.text === "Reply with the word pong.");
+      await c.request("session.prompt", { session: first.id, text: "Say it again." });
+      await until((e) => mine(first.id)(e) && e.data.type === "turn.end" && events.filter((x) => mine(first.id)(x) && x.data.type === "turn.end").length === 2, "second turn.end");
       await c.request("session.close", { session: first.id });
       const closed = await until((e) => mine(first.id)(e) && e.data.type === "session.status" && e.data.session.status === "closed", "closed");
       const ledgerId = closed.data.type === "session.status" ? closed.data.session.ledgerSessionId! : "";
@@ -265,6 +267,10 @@ describe("a real session on the engine server", () => {
       }
       const booted = events.find(boot)!;
       assert.ok(booted.data.type === "session.status" && booted.data.session.ledgerSessionId === ledgerId, "the same ledger session continues");
+      // The conversation so far shows in the resumed session, without the turn the undo took back.
+      const said = events.filter((e) => mine(again.id)(e) && e.data.type === "message.user").map((e) => (e.data.type === "message.user" ? e.data.text : ""));
+      assert.deepEqual(said, ["Say it again."]);
+      assert.ok(events.some((e) => mine(again.id)(e) && e.data.type === "message.delta" && e.data.text === "again"), "the answer shows too");
       await c.request("session.close", { session: again.id });
       await until((e) => mine(again.id)(e) && e.data.type === "session.status" && e.data.session.status === "closed", "closed again");
       c.close();

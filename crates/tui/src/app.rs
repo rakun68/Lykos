@@ -121,6 +121,8 @@ pub enum Dialog {
     /// OpenCode `feature-plugins/prompt/btw.tsx`'s answer dialog.
     /// A `/btw` answer, or a slash command's report: its title, the text, how far it scrolled.
     Aside { title: String, answer: Result<String, String>, scroll: usize },
+    /// `/context`: what fills the context window, part by part; `None` until the session answers.
+    Context { data: Option<lykos_client::ContextBreakdown>, scroll: usize },
     /// OpenCode `command.palette.show`: every action, searched as typed.
     Palette { query: String, selected: usize },
     /// Every key, and the layer that set it.
@@ -321,6 +323,10 @@ pub struct App {
     pub exit_armed: Option<Instant>,
     /// The slash command this TUI last sent, and when: what a `report` event answers.
     reporting: Option<(String, Instant)>,
+    /// From the start until the engine server's settings arrive: the loading screen shows instead of the TUI.
+    pub loading: bool,
+    /// The session tabs as last drawn: each one's columns on the top row, and its session.
+    pub tab_hits: RefCell<Vec<(u16, u16, String)>>,
 }
 
 /// One palette row: an action (`id`), or a slash command (`slash`, with `id` empty).
@@ -432,6 +438,8 @@ impl App {
             toasts: Vec::new(),
             exit_armed: None,
             reporting: None,
+            loading: false,
+            tab_hits: RefCell::new(Vec::new()),
         }
     }
 
@@ -787,8 +795,13 @@ impl App {
             self.tabs.finished(&event.session, self.session.as_deref());
         }
         if Some(&event.session) == self.session.as_ref() {
-            if let EventData::Report { text, .. } = &event.data {
-                self.on_report(text);
+            if let EventData::Report { text, context, .. } = &event.data {
+                if let (Some(data), Some(Dialog::Context { scroll, .. })) = (context, &self.dialog) {
+                    self.dialog = Some(Dialog::Context { data: Some(data.clone()), scroll: *scroll });
+                    self.reporting = None;
+                } else {
+                    self.on_report(text);
+                }
                 return Vec::new();
             }
             // An undone prompt comes back to be edited (P5 #42).
@@ -839,6 +852,7 @@ impl App {
             }
             Err(e) => vec![format!("key bindings: {e}")],
         };
+        self.loading = false;
         if !problems.is_empty() {
             self.notice = Some(problems.join("; "));
         }
@@ -929,7 +943,10 @@ impl App {
     /// A session command a list runs, sent as if typed: it takes effect on the next request.
     fn command(&mut self, text: String) -> Vec<Action> {
         match self.live() {
-            Some(session) => vec![Action::Prompt { session, text }],
+            Some(session) => {
+                self.reporting = text.starts_with('/').then(|| (text.split_whitespace().next().unwrap_or("").to_string(), Instant::now()));
+                vec![Action::Prompt { session, text }]
+            }
             None => {
                 self.toast(ToastKind::Warning, "Open a session first".into());
                 Vec::new()
@@ -1580,14 +1597,12 @@ impl App {
         out
     }
 
-    /// `/login` signs in to an OAuth provider from here; an API key is typed in a terminal, where it is not shown.
+    /// `/login` signs in to an OAuth provider, or asks for an API key in a request whose answer is masked.
     fn connect(&mut self, name: &str) -> Vec<Action> {
         let oauth = self.options.as_ref().and_then(|o| o.providers.iter().find(|p| p.name == name)).is_some_and(|p| p.auth.contains("oauth"));
-        if oauth {
-            return self.command(format!("/login {name}"));
-        }
-        self.toast(ToastKind::Info, format!("{name} takes an API key: run `lykos login {name} --api-key` in a terminal"));
-        Vec::new()
+        // An API key is asked for in a request the prompt box masks.
+        self.dialog = None;
+        self.command(if oauth { format!("/login {name}") } else { format!("/login {name} --api-key") })
     }
 
     /// `local.tsx` `model.cycle` and `cycleFavorite`: the next model of the list after the one in use, wrapping.
@@ -1736,8 +1751,8 @@ impl App {
 
     pub fn on_scroll(&mut self, up: bool, rows: usize) {
         self.settle();
-        if let Some(Dialog::Aside { scroll, .. }) = &mut self.dialog {
-            *scroll = if up { scroll.saturating_sub(rows) } else { scroll.saturating_add(rows) };
+        if let Some(Dialog::Aside { scroll, .. } | Dialog::Context { scroll, .. }) = &mut self.dialog {
+            *scroll = if up { scroll.saturating_sub(rows) } else { scroll.saturating_add(rows).min(200) };
             return;
         }
         // The output view counts from its end.
@@ -1778,6 +1793,13 @@ impl App {
                 return Vec::new();
             }
             _ => {}
+        }
+        // A click on a session's tab shows it.
+        if let (MouseEventKind::Down(MouseButton::Left), None, 0) = (m.kind, &self.dialog, m.row) {
+            let hit = self.tab_hits.borrow().iter().find(|(x0, x1, _)| (*x0..*x1).contains(&m.column)).map(|t| t.2.clone());
+            if hit.is_some() {
+                return self.show(hit);
+            }
         }
         if self.dialog.is_none() {
             if let Some(out) = self.transcript_mouse(&m) {
@@ -2139,6 +2161,15 @@ impl App {
                     self.dialog = None;
                 }
             }
+            Dialog::Context { .. } => {
+                if has("dialog.select.submit") {
+                    self.dialog = None;
+                } else if prev || has("dialog.select.page_up") {
+                    self.on_scroll(true, if prev { 1 } else { page });
+                } else if next || has("dialog.select.page_down") {
+                    self.on_scroll(false, if next { 1 } else { page });
+                }
+            }
             Dialog::Help { scroll } => {
                 let scroll = if prev {
                     scroll.saturating_sub(1)
@@ -2487,12 +2518,22 @@ impl App {
             Local::Themes => return self.open_list(List::Themes { initial: theme::c().name }),
             Local::Connect => return self.open_list(List::Providers),
             Local::Status => self.dialog = Some(Dialog::Info { info: Info::Status }),
+            Local::Context => return self.open_context(),
             Local::Usage => self.dialog = Some(Dialog::Info { info: Info::Usage }),
             Local::Mcps => self.dialog = Some(Dialog::Info { info: Info::Mcp }),
             Local::Debug => self.dialog = Some(Dialog::Info { info: Info::Debug }),
             Local::Run(id) => return self.run_session(id).unwrap_or_default(),
         }
         Vec::new()
+    }
+
+    /// `/context`: the window opens at once and fills when the idle session answers.
+    fn open_context(&mut self) -> Vec<Action> {
+        self.dialog = Some(Dialog::Context { data: None, scroll: 0 });
+        match (self.session.clone(), self.status()) {
+            (Some(session), Some(SessionStatus::Idle)) if self.link == Link::Ready => vec![Action::Prompt { session, text: "/context".into() }],
+            _ => Vec::new(),
+        }
     }
 
     /// OpenCode `component/prompt/index.tsx`: up first moves through the input's rows; on the top row it goes to
@@ -2832,7 +2873,7 @@ mod tests {
 
     fn request(app: &mut App, seq: u64, kind: &str, title: &str, options: &[(&str, &str)]) {
         let options = options.iter().map(|(v, l)| lykos_client::RequestOption { value: (*v).into(), label: (*l).into(), note: None }).collect();
-        let request = lykos_client::RequestData { request_id: format!("r{seq}"), kind: kind.into(), title: title.into(), detail: "ls".into(), body: None, patch: None, options, assumption: None };
+        let request = lykos_client::RequestData { request_id: format!("r{seq}"), kind: kind.into(), title: title.into(), detail: "ls".into(), body: None, patch: None, options, assumption: None, secret: false };
         app.on_event(&Event { event: "request".into(), session: "s1".into(), seq, data: EventData::Request { request } });
     }
 
@@ -3202,10 +3243,9 @@ mod tests {
         typed(&mut app, "/effort low");
         app.menu = None;
         assert_eq!(sent(&press(&mut app, key(KeyCode::Enter))), ["/effort low"]);
-        // A provider with a browser sign-in signs in from here; an API key is typed in a terminal.
+        // A provider with a browser sign-in signs in from here; an API key is asked for here too, masked.
         assert_eq!(sent(&app.connect("anthropic")), ["/login anthropic"]);
-        assert!(app.connect("openai").is_empty());
-        assert!(said(&app).unwrap().contains("lykos login openai --api-key"));
+        assert_eq!(sent(&app.connect("openai")), ["/login openai --api-key"]);
     }
 
     #[test]
@@ -3256,6 +3296,17 @@ mod tests {
         app.started("s2".into());
         session_event(&mut app, "s2", 1, SessionStatus::Idle, "L2", "second");
         app
+    }
+
+    #[test]
+    fn a_click_on_a_tab_shows_its_session() {
+        let mut app = two_tabs();
+        crate::view::draw(&app, &mut lykos_term::Buffer::new(100, 30));
+        let (x0, _, id) = app.tab_hits.borrow()[0].clone();
+        assert_eq!(id, "s1");
+        let click = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x0 + 1, row: 0, modifiers: KeyModifiers::NONE };
+        app.on_mouse(click, Instant::now());
+        assert_eq!(app.session.as_deref(), Some("s1"));
     }
 
     #[test]
@@ -3641,12 +3692,21 @@ two
     }
 
     #[test]
-    fn context_is_status_and_usage_opens_its_dialog() {
+    fn context_opens_its_window_and_fills_it_and_usage_opens_its_dialog() {
         let mut app = idle();
         typed(&mut app, "/context");
         press(&mut app, key(KeyCode::Esc));
-        press(&mut app, key(KeyCode::Enter));
-        assert!(matches!(app.dialog, Some(Dialog::Info { info: Info::Status })));
+        assert_eq!(sent(&press(&mut app, key(KeyCode::Enter))), ["/context"], "the session is asked");
+        assert_eq!(app.dialog, Some(Dialog::Context { data: None, scroll: 0 }));
+        let data = lykos_client::ContextBreakdown {
+            model: Some("m1".into()),
+            window: Some(1000.0),
+            measured: None,
+            parts: vec![lykos_client::ContextPart { name: "Tools".into(), tokens: 200.0, count: Some(3), items: Vec::new() }],
+        };
+        let report = EventData::Report { command: "context".into(), text: "context".into(), context: Some(data.clone()) };
+        app.on_event(&Event { event: "report".into(), session: "s1".into(), seq: 90, data: report });
+        assert_eq!(app.dialog, Some(Dialog::Context { data: Some(data), scroll: 0 }));
         app.dialog = None;
         typed(&mut app, "/usage");
         press(&mut app, key(KeyCode::Esc));
@@ -3658,7 +3718,7 @@ two
     fn a_commands_report_is_a_popup_or_a_toast_and_one_nobody_asked_for_is_left_out() {
         let mut app = idle();
         let report = |app: &mut App, seq, text: &str| {
-            app.on_event(&Event { event: "report".into(), session: "s1".into(), seq, data: EventData::Report { command: "session".into(), text: text.into() } });
+            app.on_event(&Event { event: "report".into(), session: "s1".into(), seq, data: EventData::Report { command: "session".into(), text: text.into(), context: None } });
         };
         report(&mut app, 10, "replayed");
         assert!(app.dialog.is_none() && app.toasts.is_empty(), "not asked for here");
