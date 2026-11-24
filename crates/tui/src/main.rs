@@ -6,6 +6,7 @@ mod editor;
 mod history;
 mod keymap;
 mod menu;
+mod mini;
 mod paste;
 mod prefs;
 mod stash;
@@ -26,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::Event as TermEvent;
 use lykos_client::{Client, Event, EventData, Options, SessionOptions, SessionStatus, SessionSummary, Update};
-use lykos_term::{Terminal, TerminalGuard};
+use lykos_term::{Buffer, Style, Terminal, TerminalGuard};
 use serde_json::{json, Value};
 
 use app::{Action, App, Link, Then};
@@ -66,21 +67,27 @@ struct Args {
     cwd: String,
     model: Option<String>,
     trust: bool,
+    mini: bool,
+    session: Option<String>,
 }
 
-const HELP: &str = "lykos-tui [--cwd DIR] [--model PROVIDER/MODEL] [--trust-workspace]\n\
+const HELP: &str = "lykos-tui [--cwd DIR] [--model PROVIDER/MODEL] [--trust-workspace] [--mini] [-s ID]\n\
   --cwd DIR            the workspace (default: the current directory)\n\
   --model M            the model for new sessions (default: the config's)\n\
-  --trust-workspace    start sessions in a workspace not yet trusted\n";
+  --trust-workspace    start sessions in a workspace not yet trusted\n\
+  --mini               no full screen: the transcript goes into the terminal's scrollback\n\
+  -s, --session ID     resume the ledger session ID\n";
 
 fn args() -> Result<Args, String> {
-    let mut out = Args { cwd: String::new(), model: None, trust: false };
+    let mut out = Args { cwd: String::new(), model: None, trust: false, mini: false, session: None };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--cwd" => out.cwd = it.next().ok_or("--cwd needs a directory")?,
             "--model" => out.model = Some(it.next().ok_or("--model needs a model")?),
             "--trust-workspace" => out.trust = true,
+            "--mini" => out.mini = true,
+            "-s" | "--session" => out.session = Some(it.next().ok_or("--session needs a session id")?),
             "-h" | "--help" => return Err(HELP.into()),
             "-V" | "--version" => return Err(format!("lykos-tui {}\n", env!("CARGO_PKG_VERSION"))),
             other => return Err(format!("unknown argument: {other}\n{HELP}")),
@@ -110,9 +117,17 @@ fn main() {
 
 fn run(args: Args) -> io::Result<()> {
     let (w, h) = crossterm::terminal::size()?;
-    let guard = TerminalGuard::enter()?;
-    let mut term = Terminal::new(io::stdout(), w, h);
+    let guard = if args.mini { TerminalGuard::enter_inline()? } else { TerminalGuard::enter()? };
+    let mut term = if args.mini {
+        let row = crossterm::cursor::position().map_or(h.saturating_sub(1), |(_, y)| y);
+        Terminal::inline(io::stdout(), w, h, row, 6)
+    } else {
+        Terminal::new(io::stdout(), w, h)
+    };
+    let mut mini = args.mini.then(mini::Mini::default);
     let mut app = App::new(args.cwd.clone());
+    app.mini = args.mini;
+    app.resume = args.session.clone();
     app.history = history::History::load(Some(PathBuf::from(&args.cwd).join(".lykos").join("history.json")));
     app.stash = stash::Stash::load(state_dir().map(|d| d.join("prompt-stash.jsonl")));
     app.prefs = prefs::Prefs::load(state_dir().map(|d| d.join("state.json")));
@@ -125,7 +140,10 @@ fn run(args: Args) -> io::Result<()> {
         drop(guard);
         return Ok(());
     }
-    term.draw(|b| view::draw(&app, b))?;
+    if mini.is_some() {
+        entry_splash(&mut term, &app.cwd);
+    }
+    frame(&mut term, &app, &mut mini)?;
 
     let (tx, rx) = mpsc::channel::<Msg>();
     let input = Arc::new(Input { pause: AtomicBool::new(false), parked: AtomicBool::new(false) });
@@ -180,7 +198,7 @@ fn run(args: Args) -> io::Result<()> {
                 term.resize(w, h);
                 continue;
             }
-            app.input_cols = view::input_cols(&app, term.size().0);
+            app.input_cols = view::input_cols(&app, term.screen().0);
             actions.extend(handle(&mut app, msg, term.size().1 as usize));
         }
         if app.animating() && last_tick.elapsed() >= TICK {
@@ -220,10 +238,55 @@ fn run(args: Args) -> io::Result<()> {
         if quit {
             break;
         }
-        term.draw(|b| view::draw(&app, b))?;
+        frame(&mut term, &app, &mut mini)?;
+    }
+    if mini.is_some() {
+        frame(&mut term, &app, &mut mini)?;
+        term.leave()?;
+        exit_splash(&mut term, &app);
     }
     drop(guard);
     Ok(())
+}
+
+/// A frame: the whole screen, or in mini mode the rows done changing into the scrollback and the footer under them.
+fn frame(term: &mut Terminal<io::Stdout>, app: &App, mini: &mut Option<mini::Mini>) -> io::Result<()> {
+    let Some(m) = mini else {
+        term.draw(|b| view::draw(app, b))?;
+        return Ok(());
+    };
+    let (w, h) = term.screen();
+    let pad = view::pad(w);
+    let (print, live) = m.take(app, w.saturating_sub(2 * pad) as usize);
+    if !print.is_empty() {
+        let mut rows = Buffer::new(w, print.len() as u16);
+        for (i, row) in print.iter().enumerate() {
+            view::paint_row(&mut rows, pad, i as u16, w.saturating_sub(2 * pad), row);
+        }
+        term.print_above(&rows);
+    }
+    term.set_footer(view::mini_height(app, w, h, live.len()));
+    term.draw(|b| view::draw_mini(app, b, &live, h))?;
+    Ok(())
+}
+
+/// `mini/splash.ts` `entrySplash`: a blank row, then the name, the version and the directory.
+fn entry_splash(term: &mut Terminal<io::Stdout>, cwd: &str) {
+    let w = term.screen().0;
+    let mut rows = Buffer::new(w, 2);
+    let col = rows.text(0, 1, w, "▪ lykos mini", Style::fg(theme::c().accent));
+    rows.text(col, 1, w.saturating_sub(col), &format!(" v{} · {cwd}", env!("CARGO_PKG_VERSION")), theme::muted());
+    term.print_above(&rows);
+}
+
+/// `mini/splash.ts` `buildExit`: the session's title and the command that continues it.
+fn exit_splash(term: &mut Terminal<io::Stdout>, app: &App) {
+    let Some(s) = app.current() else { return };
+    let Some(id) = &s.summary.ledger_session_id else { return };
+    let title = s.summary.title.clone().unwrap_or_else(|| "New session".into());
+    let w = term.writer();
+    let _ = write!(w, "\r\n  Session  \x1b[1m{title}\x1b[0m\r\n  Continue \x1b[1mlykos-tui --mini -s {id}\x1b[0m\r\n");
+    let _ = w.flush();
 }
 
 fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {

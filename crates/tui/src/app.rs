@@ -275,6 +275,10 @@ pub struct App {
     /// The message the message keys last went to.
     nav: Option<usize>,
     pub selection: Option<Selection>,
+    /// `--mini`: the transcript goes into the terminal's scrollback (`mini.rs`).
+    pub mini: bool,
+    /// `-s`: the ledger session to resume once connected.
+    pub resume: Option<String>,
 }
 
 impl App {
@@ -317,6 +321,8 @@ impl App {
             opened: BTreeMap::new(),
             nav: None,
             selection: None,
+            mini: false,
+            resume: None,
         }
     }
 
@@ -535,7 +541,11 @@ impl App {
 
     pub fn connected(&mut self) -> Vec<Action> {
         self.link = Link::Ready;
-        self.flush()
+        let mut out = self.flush();
+        if let Some(id) = self.resume.take() {
+            out.extend(self.open_session(&id, None));
+        }
+        out
     }
 
     /// `session.start` answered: this is the session the prompt goes to once it is idle.

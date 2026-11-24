@@ -439,9 +439,12 @@ fn tool_icon(name: &str) -> char {
 pub struct Block {
     pub rows: Vec<Row>,
     pub heads: Vec<(usize, GroupId)>,
-    /// The item it starts with, and whether it stands alone.
+    /// The items it holds, whether it stands alone, and whether it is done changing: an item follows it or the
+    /// session stopped, and nothing in it runs.
     pub first: usize,
+    pub last: usize,
     pub leaf: bool,
+    pub done: bool,
 }
 
 /// The transcript as laid out for one frame: its blocks in order and where each starts.
@@ -519,10 +522,12 @@ pub fn layout(cache: &RefCell<Cache>, session: &Session, look: Look, width: usiz
     for node in nodes(items, look) {
         let (first, last) = (node.first(), node.last());
         let sig = opened_sig(&ctx, &node);
-        let settled = last + 1 < items.len() && !(first..=last).any(|i| ctx.active(i));
+        let quiet = !(first..=last).any(|i| ctx.active(i));
+        let settled = last + 1 < items.len() && quiet;
+        let done = (last + 1 < items.len() || !running) && quiet;
         let kept = cache.blocks.get(&first).filter(|(l, s, _)| settled && *l == last && *s == sig).map(|(_, _, b)| b.clone());
         let block = kept.unwrap_or_else(|| {
-            let mut b = Block { first, leaf: matches!(node, Node::Leaf(_)), ..Block::default() };
+            let mut b = Block { first, last, leaf: matches!(node, Node::Leaf(_)), done, ..Block::default() };
             render(&ctx, &node, 0, &mut b.rows, &mut b.heads);
             if matches!(node, Node::Group { .. }) && !b.rows.is_empty() {
                 b.rows.push(Row::blank());

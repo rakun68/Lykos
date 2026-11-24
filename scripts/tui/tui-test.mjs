@@ -65,7 +65,19 @@ try {
   await step("the prompt starts a session and its reply streams in", () => s.screen().split("hello there").length - 1 >= 2);
   await step("the session goes idle", () => s.screen().includes(work.slice(-20)) && !s.screen().includes("esc interrupt"));
   await submit("tool");
-  await step("a tool call shows with its icon", () => s.screen().includes("→ read README.md"));
+  await step("a tool call folds into its activity line at low verbosity", () => s.screen().includes("+ 1 read"));
+  // The palette's verbosity entry: low, medium, high, and back to low.
+  const verbosity = async (now) => {
+    await key("ctrl+p");
+    await type("verbosity");
+    await step(`the palette offers Verbosity: ${now}`, () => s.screen().includes(`Verbosity: ${now}`));
+    await key("enter");
+  };
+  await verbosity("Low");
+  await verbosity("Medium");
+  await step("a tool call shows with its icon at high verbosity", () => s.screen().includes("→ read README.md"));
+  await verbosity("High");
+  await step("back to low", () => s.screen().includes("+ 1 read"));
   await step("model, effort and context use update", () => s.screen().includes("faux/scripted · high") && s.screen().includes("12,345 tokens · 6% used"));
   await submit("hold");
   await step("a running turn offers esc interrupt", () => s.screen().includes("esc interrupt"));

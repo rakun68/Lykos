@@ -30,7 +30,7 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
         buf.text(0, 0, w, "lykos", theme::text());
         return None;
     }
-    let pad: u16 = if w < 44 { 1 } else { 2 };
+    let pad = pad(w);
     let cursor = match app.current() {
         None => home(app, buf, pad),
         Some(session) => session_screen(app, session, buf, pad),
@@ -44,9 +44,8 @@ fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
 
 /// The input's width at this screen width: what up and down move through.
 pub fn input_cols(app: &App, w: u16) -> usize {
-    let pad: u16 = if w < 44 { 1 } else { 2 };
-    let width = w.saturating_sub(2 * pad);
-    input_width(if app.current().is_none() { width.min(75) } else { width })
+    let width = w.saturating_sub(2 * pad(w));
+    input_width(if app.current().is_none() && !app.mini { width.min(75) } else { width })
 }
 
 /// `routes/home.tsx`: the logo and the prompt box centred, the prompt at most 75 columns wide.
@@ -118,17 +117,7 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         for (i, r) in (start..total - scroll).enumerate() {
             let Some(row) = lay.row(r) else { continue };
             let y = 1 + i as u16;
-            if let Some(bg) = row.bg {
-                buf.fill(x, y, text_w, 1, bg);
-            }
-            if let Some(bar) = row.bar {
-                buf.set(x, y, Cell { ch: '┃', style: bar });
-            }
-            let style = match row.bg {
-                Some(bg) => Style { bg: bg.bg, ..row.style },
-                None => row.style,
-            };
-            buf.text(x + row.indent, y, text_w.saturating_sub(row.indent), &row.text, style);
+            paint_row(buf, x, y, text_w, row);
             // A selection shows reversed.
             if let Some(((r0, c0), (r1, c1))) = sel.filter(|((r0, _), (r1, _))| (*r0..=*r1).contains(&r)) {
                 let from = if r == r0 { c0 } else { 0 };
@@ -162,6 +151,66 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         }
     }
     prompt_box(app, buf, pad, prompt_y, inner_w, h)
+}
+
+/// One transcript row: its background, its bar in the first column, its text from its indent.
+pub fn paint_row(buf: &mut Buffer, x: u16, y: u16, width: u16, row: &Row) {
+    if let Some(bg) = row.bg {
+        buf.fill(x, y, width, 1, bg);
+    }
+    if let Some(bar) = row.bar {
+        buf.set(x, y, Cell { ch: '┃', style: bar });
+    }
+    let style = match row.bg {
+        Some(bg) => Style { bg: bg.bg, ..row.style },
+        None => row.style,
+    };
+    buf.text(x + row.indent, y, width.saturating_sub(row.indent), &row.text, style);
+}
+
+/// The screen's side padding at width `w`.
+pub fn pad(w: u16) -> u16 {
+    if w < 44 {
+        1
+    } else {
+        2
+    }
+}
+
+/// Mini mode's footer holds at most this many of the rows still changing.
+const LIVE_ROWS: usize = 4;
+
+/// Mini mode's footer height (`mini/footer.ts` `applyHeight`): the rows still changing, the completion list and the
+/// prompt box; with a dialog open, two thirds of the screen.
+pub fn mini_height(app: &App, w: u16, screen_h: u16, live: usize) -> u16 {
+    if app.dialog.is_some() {
+        return (screen_h * 2 / 3).max(12);
+    }
+    let menu = app.menu.as_ref().map_or(0, |m| m.entries.len()) as u16;
+    live.min(LIVE_ROWS) as u16 + menu + prompt_height(app, w.saturating_sub(2 * pad(w)), screen_h)
+}
+
+/// Mini mode's footer: the rows still changing, then the prompt box and its footer line, on the terminal's own
+/// background.
+pub fn draw_mini(app: &App, buf: &mut Buffer, live: &[Row], screen_h: u16) -> Option<(u16, u16)> {
+    app.frame.set(None);
+    if app.dialog.is_some() {
+        dialog(app, buf);
+        return None;
+    }
+    let w = buf.width;
+    let (pad, inner) = (pad(w), w.saturating_sub(2 * pad(w)));
+    let live = &live[live.len().saturating_sub(LIVE_ROWS)..];
+    for (i, row) in live.iter().enumerate() {
+        paint_row(buf, pad, i as u16, inner, row);
+    }
+    let menu = app.menu.as_ref().map_or(0, |m| m.entries.len()) as u16;
+    let y = live.len() as u16 + menu;
+    let cursor = prompt_box(app, buf, pad, y, inner, screen_h);
+    if app.current().is_none() {
+        footer_line(app, buf, pad, y + prompt_height(app, inner, screen_h) - 1, inner, 0);
+    }
+    cursor
 }
 
 /// The box's top edge: the session's title, or with more than one tab open, every tab's (OpenCode

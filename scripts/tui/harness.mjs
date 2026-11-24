@@ -26,10 +26,10 @@ export function keyBytes(key) {
 }
 
 export class TuiSession {
-  constructor(command, args = [], { cols = 120, rows = 40, cwd = process.cwd(), env = {} } = {}) {
+  constructor(command, args = [], { cols = 120, rows = 40, cwd = process.cwd(), env = {}, scrollback = 0 } = {}) {
     this.cols = cols;
     this.rows = rows;
-    this.term = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 0 });
+    this.term = new Terminal({ cols, rows, allowProposedApi: true, scrollback });
     this.exit = null;
     this.waiters = new Set();
     this.bytes = 0;
@@ -64,6 +64,14 @@ export class TuiSession {
     const b = this.term.buffer.active;
     const out = [];
     for (let i = 0; i < this.rows; i++) out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "");
+    return out.join("\n").replace(/\s+$/, "");
+  }
+
+  /** The scrollback and the screen as text, oldest row first: what an inline program (`--mini`) printed. */
+  all() {
+    const b = this.term.buffer.active;
+    const out = [];
+    for (let i = 0; i < b.length; i++) out.push(b.getLine(i)?.translateToString(true) ?? "");
     return out.join("\n").replace(/\s+$/, "");
   }
 
