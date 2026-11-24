@@ -1,38 +1,22 @@
 //! The two screens, drawn into a cell buffer. Layout follows OpenCode's TUI at `4332e24`: the home screen
 //! (`routes/home.tsx`), the session screen (`routes/session/index.tsx`), the prompt box (`component/prompt/index.tsx`)
 //! and its metadata row (`component/prompt/metadata.tsx`). Differences are listed in #37's closing comment.
-use lykos_client::{Item, Session, SessionStatus, ToolState};
+use std::rc::Rc;
+
+use lykos_client::{Item, Session, SessionStatus};
 use lykos_term::{Attr, Buffer, Cell, Style};
 
-use crate::app::{App, Dialog, Info, InputArea, Link, List, Row as ListRow};
+use crate::app::{App, Dialog, Frame, Info, InputArea, Link, List, Row as ListRow};
 use crate::editor::{Chip, Editor};
 use crate::keymap;
 use crate::menu::Menu;
 use crate::theme::{self, c};
+use crate::transcript::{self, Block, Row, SPINNER};
 use crate::wrap::wrap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /// One transcript row: where it starts, its text, its style, and an optional bar in the first column.
-struct Row {
-    indent: u16,
-    text: String,
-    style: Style,
-    bar: Option<Style>,
-    bg: Option<Style>,
-}
-
-impl Row {
-    fn plain(indent: u16, text: String, style: Style) -> Row {
-        Row { indent, text, style, bar: None, bg: None }
-    }
-
-    fn blank() -> Row {
-        Row::plain(0, String::new(), Style::default())
-    }
-}
-
 /// Draws the frame and returns where the cursor goes.
 pub fn draw(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     let cursor = draw_screen(app, buf);
@@ -68,6 +52,7 @@ pub fn input_cols(app: &App, w: u16) -> usize {
 /// `routes/home.tsx`: the logo and the prompt box centred, the prompt at most 75 columns wide.
 fn home(app: &App, buf: &mut Buffer, pad: u16) -> Option<(u16, u16)> {
     let (w, h) = (buf.width, buf.height);
+    app.frame.set(None);
     let width = (w - 2 * pad).min(75);
     let x = (w - width) / 2;
     let prompt = prompt_height(app, width, h);
@@ -98,20 +83,43 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
     if box_h >= 3 {
         buf.border(pad - 1, 0, inner_w + 2, box_h, Style::fg(c().overlay));
         tab_strip(app, session, buf, pad + 1, inner_w.saturating_sub(4));
-        let (rows, starts) = transcript(app, session, inner_w.saturating_sub(2));
+        let bar = app.prefs.scrollbar;
+        let text_w = inner_w.saturating_sub(2 + u16::from(bar));
+        let opened = app.opened.get(&session.summary.id);
+        let mut lay = transcript::layout(&app.layout_cache, session, app.look(), text_w as usize, app.tick, opened);
+        // What is not the session's: its start, and the prompts waiting for the turn.
+        let mut tail = Block { first: usize::MAX, ..Block::default() };
+        if session.summary.status == SessionStatus::Starting {
+            tail.rows.push(Row::plain(3, format!("{} starting the session", spinner(app)), theme::muted()));
+        }
+        for q in &app.queue {
+            tail.rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
+        }
+        if !tail.rows.is_empty() {
+            lay.starts.push(lay.total);
+            lay.total += tail.rows.len();
+            lay.blocks.push(Rc::new(tail));
+        }
+        let total = lay.total;
         let view_h = box_h.saturating_sub(2) as usize;
-        let max_scroll = rows.len().saturating_sub(view_h);
-        // The timeline's jump: the prompt's first row at the top.
-        if let Some(at) = app.jump.take().and_then(|i| starts.get(i).copied()) {
-            app.jumped.set(Some(rows.len().saturating_sub(view_h + at).min(max_scroll)));
+        let max_scroll = total.saturating_sub(view_h);
+        // A jump (the timeline, the message keys): the message's first row at the top, an answer's with the row
+        // above it (`message-navigation.ts`).
+        if let Some(i) = app.jump.take() {
+            if let Some(at) = lay.item_row(i) {
+                let at = if matches!(session.items.get(i), Some(Item::Assistant(_))) { at.saturating_sub(1) } else { at };
+                app.jumped.set(Some(total.saturating_sub(view_h + at).min(max_scroll)));
+            }
         }
         let scroll = app.scroll_now().min(max_scroll);
-        let start = rows.len().saturating_sub(view_h + scroll);
-        for (i, row) in rows[start..rows.len() - scroll].iter().enumerate() {
+        let start = total.saturating_sub(view_h + scroll);
+        let x = pad + 1;
+        let sel = app.selection.map(|s| s.ordered());
+        for (i, r) in (start..total - scroll).enumerate() {
+            let Some(row) = lay.row(r) else { continue };
             let y = 1 + i as u16;
-            let x = pad + 1;
             if let Some(bg) = row.bg {
-                buf.fill(x, y, inner_w.saturating_sub(2), 1, bg);
+                buf.fill(x, y, text_w, 1, bg);
             }
             if let Some(bar) = row.bar {
                 buf.set(x, y, Cell { ch: '┃', style: bar });
@@ -120,8 +128,33 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
                 Some(bg) => Style { bg: bg.bg, ..row.style },
                 None => row.style,
             };
-            buf.text(x + row.indent, y, inner_w.saturating_sub(2 + row.indent), &row.text, style);
+            buf.text(x + row.indent, y, text_w.saturating_sub(row.indent), &row.text, style);
+            // A selection shows reversed.
+            if let Some(((r0, c0), (r1, c1))) = sel.filter(|((r0, _), (r1, _))| (*r0..=*r1).contains(&r)) {
+                let from = if r == r0 { c0 } else { 0 };
+                let to = if r == r1 { c1 + 1 } else { text_w as usize };
+                for col in from..to.min(text_w as usize) {
+                    let mut cell = *buf.get(x + col as u16, y);
+                    cell.style.attr = cell.style.attr.with(Attr::REVERSE);
+                    if cell.ch == '\0' {
+                        cell.ch = ' ';
+                    }
+                    buf.set(x + col as u16, y, cell);
+                }
+            }
         }
+        // `session.toggle.scrollbar`: the thumb shows where the view is in the whole.
+        if bar && total > view_h && view_h > 0 {
+            let sx = x + text_w;
+            let thumb = (view_h * view_h / total).max(1);
+            let at = start * (view_h - thumb) / max_scroll.max(1);
+            for i in 0..view_h {
+                let on = (at..at + thumb).contains(&i);
+                buf.set(sx, 1 + i as u16, Cell { ch: if on { '┃' } else { '│' }, style: Style::fg(if on { c().muted } else { c().overlay }) });
+            }
+        }
+        app.frame.set(Some(Frame { x, y: 1, width: text_w, height: view_h as u16, top: start }));
+        app.laid.replace(Some(Rc::new(lay)));
         if scroll > 0 {
             let label = " Jump to latest ↓ (ctrl+alt+g) ";
             let lw = label.chars().count() as u16;
@@ -154,6 +187,15 @@ fn tab_strip(app: &App, session: &Session, buf: &mut Buffer, x: u16, width: u16)
         }
         buf.text(at, 0, end - at, &label, style);
         at += lw;
+    }
+}
+
+/// A spinner frame, or `⋯` with animations off (`component/spinner.tsx`).
+fn spinner(app: &App) -> char {
+    if app.prefs.animations {
+        SPINNER[(app.tick % 10) as usize]
+    } else {
+        '⋯'
     }
 }
 
@@ -313,7 +355,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
                 .map(|d| {
                     let source = app.keymap.source(d.id);
                     let right = if source == "default" { app.keymap.keys(d.id) } else { format!("{} · {}", app.keymap.keys(d.id), layer_name(source)) };
-                    (columns(d.title, &right, inner), theme::text())
+                    (columns(&app.title(d), &right, inner), theme::text())
                 })
                 .collect();
             let title = if query.is_empty() { "Commands  type to search".to_string() } else { format!("Commands  {query}") };
@@ -545,14 +587,14 @@ fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16
     let left_w = width.saturating_sub(rw + 2);
     match &app.link {
         Link::Connecting => {
-            let s = format!("{} connecting to the engine server", SPINNER[(app.tick % 10) as usize]);
+            let s = format!("{} connecting to the engine server", spinner(app));
             buf.text(x + 1, y, left_w, &s, theme::muted());
         }
         Link::Failed(m) | Link::Lost(m) => {
             buf.text(x + 1, y, left_w, m, Style::fg(c().love));
         }
         Link::Ready if app.running() => {
-            let mut col = buf.text(x + 1, y, left_w, &SPINNER[(app.tick % 10) as usize].to_string(), Style::fg(c().accent));
+            let mut col = buf.text(x + 1, y, left_w, &spinner(app).to_string(), Style::fg(c().accent));
             col = buf.text(col + 1, y, left_w, "esc", if app.armed.is_some() { Style::fg(c().gold) } else { theme::text() });
             let rest = if app.armed.is_some() { " again to interrupt" } else { " interrupt" };
             buf.text(col, y, left_w, rest, if app.armed.is_some() { Style::fg(c().gold) } else { theme::muted() });
@@ -572,7 +614,7 @@ fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, pad: u16
     }
     // btw.tsx's footer slot: `/btw` and a spinner while an aside waits.
     if app.asides > 0 && app.link == Link::Ready {
-        let label = format!("{} /btw", SPINNER[(app.tick % 10) as usize]);
+        let label = format!("{} /btw", spinner(app));
         let lw = label.chars().count() as u16;
         if lw + rw + 4 <= width {
             buf.text(x + width - rw - lw - 3, y, lw, &label, Style::fg(c().accent));
@@ -604,77 +646,6 @@ fn group(n: u64) -> String {
         out.push(ch);
     }
     out
-}
-
-/// The transcript as rows, oldest first, and the row each item starts on.
-fn transcript(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<usize>) {
-    let w = width as usize;
-    let mut rows = Vec::new();
-    let mut starts = Vec::with_capacity(session.items.len());
-    let user_bg = Style::default().on(c().surface);
-    for item in &session.items {
-        starts.push(rows.len());
-        match item {
-            // A user message: a bar in the accent colour on a raised background, padded a row above and below.
-            Item::User(text) | Item::Followup(text) => {
-                let bar = Style::fg(if matches!(item, Item::User(_)) { c().accent } else { c().muted }).on(c().surface);
-                rows.push(Row { indent: 0, text: String::new(), style: theme::text(), bar: Some(bar), bg: Some(user_bg) });
-                for line in wrap(text, w.saturating_sub(3)) {
-                    rows.push(Row { indent: 2, text: line, style: theme::text(), bar: Some(bar), bg: Some(user_bg) });
-                }
-                rows.push(Row { indent: 0, text: String::new(), style: theme::text(), bar: Some(bar), bg: Some(user_bg) });
-                rows.push(Row::blank());
-            }
-            Item::Assistant(text) => {
-                for line in wrap(text.trim_end(), w.saturating_sub(3)) {
-                    rows.push(Row::plain(3, line, theme::text()));
-                }
-                rows.push(Row::blank());
-            }
-            Item::Thinking(text) => {
-                let style = Style { fg: c().muted, attr: Attr::ITALIC, ..Style::default() };
-                for line in wrap(&format!("Thinking: {}", text.trim()), w.saturating_sub(3)) {
-                    rows.push(Row::plain(3, line, style));
-                }
-                rows.push(Row::blank());
-            }
-            Item::Tool { name, summary, state, .. } => {
-                let (icon, style) = match state {
-                    ToolState::Running => (SPINNER[(app.tick % 10) as usize], Style::fg(c().accent)),
-                    ToolState::Ok => (tool_icon(name), theme::muted()),
-                    ToolState::Error => ('✗', Style::fg(c().love)),
-                };
-                let label = format!("{icon} {name} {summary}");
-                for line in wrap(&label, w.saturating_sub(3)) {
-                    rows.push(Row::plain(3, line, style));
-                }
-            }
-            Item::System(text) => {
-                for line in wrap(text, w.saturating_sub(3)) {
-                    rows.push(Row::plain(3, line, theme::muted()));
-                }
-            }
-        }
-    }
-    if session.summary.status == SessionStatus::Starting {
-        rows.push(Row::plain(3, format!("{} starting the session", SPINNER[(app.tick % 10) as usize]), theme::muted()));
-    }
-    for q in &app.queue {
-        rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
-    }
-    (rows, starts)
-}
-
-/// `routes/session/index.tsx`'s inline tool icons: `→` reads, `←` writes, `✱` searches, `%` the web, `$` a shell.
-fn tool_icon(name: &str) -> char {
-    match name {
-        "read" | "ls" => '→',
-        "write" | "edit" | "ast_edit" => '←',
-        "grep" | "find" | "glob" | "search" | "ast_grep" => '✱',
-        "web_fetch" | "web_search" => '%',
-        "bash" | "powershell" => '$',
-        _ => '⚙',
-    }
 }
 
 #[cfg(test)]
@@ -782,8 +753,13 @@ mod tests {
 
     #[test]
     fn the_session_screen_shows_model_effort_context_and_the_turn() {
-        let app = app_with_session();
+        let mut app = app_with_session();
         let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("Running read…"), "low verbosity folds the tool into its activity
+{s}");
+        app.prefs.verbosity = crate::transcript::Verbosity::High;
         draw(&app, &mut buf);
         let s = screen(&buf);
         for want in ["Fix it", "On it.", "read src/main.rs", "claude-opus · high", "12,345 tokens · 6% used", "esc interrupt"] {
@@ -837,7 +813,7 @@ mod tests {
             println!("{name}: p50 {} us, p95 {} us, max {} us (n={})", t[t.len() / 2], t[t.len() * 95 / 100], t[t.len() - 1], t.len());
         };
         let keys = [KeyCode::Char('a'), KeyCode::Char('b'), KeyCode::Left, KeyCode::Backspace, KeyCode::Up, KeyCode::Down, KeyCode::Right];
-        let mut run = |app: &mut App, frame: &mut dyn FnMut(&App)| {
+        let run = |app: &mut App, frame: &mut dyn FnMut(&App)| {
             let mut out = Vec::new();
             for i in 0..210 {
                 let t = Instant::now();

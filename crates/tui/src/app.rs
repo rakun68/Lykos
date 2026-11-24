@@ -1,7 +1,9 @@
 //! What the TUI holds and how keys and server events change it. No terminal and no server here: a key or an
 //! event goes in, and out come the requests to make (`Action`), which `main` sends. Behaviour follows OpenCode's
 //! TUI at `4332e24` (`packages/tui/src`), read from source; each place says which file.
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -16,6 +18,7 @@ use crate::prefs::Prefs;
 use crate::stash::Stash;
 use crate::tabs::Tabs;
 use crate::theme;
+use crate::transcript::{self, Cache, GroupId, Layout, Look};
 
 /// A request for the server, or for the terminal, made by `main`.
 #[derive(Clone, Debug, PartialEq)]
@@ -176,6 +179,38 @@ pub struct Search {
     pub index: usize,
 }
 
+/// Where the transcript was last drawn: its area, and the layout row at its top.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Frame {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub top: usize,
+}
+
+/// A transcript selection: the layout row and column pressed, and where the mouse is now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Selection {
+    pub anchor: (usize, usize),
+    pub head: (usize, usize),
+    pub dragged: bool,
+}
+
+impl Selection {
+    pub fn ordered(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+}
+
+/// OpenCode's `terminal.copy` default: a selection is copied as the mouse lets go, except on Windows, where a right
+/// click or ctrl+c copies it (`app.tsx`).
+const COPY_ON_SELECT: bool = !cfg!(windows);
+
 /// Where the input was last drawn, so the mouse can find a character.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InputArea {
@@ -231,6 +266,15 @@ pub struct App {
     /// The transcript item the timeline jumps to, and the scroll the view found for it.
     pub jump: Cell<Option<usize>>,
     pub jumped: Cell<Option<usize>>,
+    /// The transcript's kept blocks (P5 #44), the layout the last frame drew, and where.
+    pub layout_cache: RefCell<Cache>,
+    pub laid: RefCell<Option<Rc<Layout>>>,
+    pub frame: Cell<Option<Frame>>,
+    /// Groups a click opened or closed, per session.
+    pub opened: BTreeMap<String, BTreeMap<GroupId, bool>>,
+    /// The message the message keys last went to.
+    nav: Option<usize>,
+    pub selection: Option<Selection>,
 }
 
 impl App {
@@ -267,6 +311,197 @@ impl App {
             worktrees: None,
             jump: Cell::new(None),
             jumped: Cell::new(None),
+            layout_cache: RefCell::new(Cache::default()),
+            laid: RefCell::new(None),
+            frame: Cell::new(None),
+            opened: BTreeMap::new(),
+            nav: None,
+            selection: None,
+        }
+    }
+
+    /// What the transcript toggles set.
+    pub fn look(&self) -> Look {
+        let p = &self.prefs;
+        Look { show_thinking: p.show_thinking, grouping: p.grouping, verbosity: p.verbosity, animations: p.animations }
+    }
+
+    /// A palette title, where OpenCode's says what the action will do (`routes/session/index.tsx`, `app.tsx`).
+    pub fn title(&self, d: &keymap::Def) -> String {
+        let p = &self.prefs;
+        let pick = |on: bool, yes: &str, no: &str| if on { yes.to_string() } else { no.to_string() };
+        match d.id {
+            "session.toggle.thinking" => pick(p.show_thinking, "Collapse thinking", "Expand thinking"),
+            "session.toggle.exploration_grouping" => pick(p.grouping, "Show tool calls individually", "Group related tool calls"),
+            "session.verbosity.cycle" => {
+                let name = p.verbosity.name();
+                format!("Verbosity: {}{}", name[..1].to_uppercase(), &name[1..])
+            }
+            "app.toggle.animations" => pick(p.animations, "Disable animations", "Enable animations"),
+            "app.toggle.diffwrap" => pick(p.diff_wrap, "Disable diff wrapping", "Enable diff wrapping"),
+            _ => d.title.to_string(),
+        }
+    }
+
+    /// The prompts and answers the message keys move between, and the layout row each starts on.
+    fn messages(&self, user_only: bool) -> Vec<(usize, usize)> {
+        let (Some(s), Some(lay)) = (self.current(), self.laid.borrow().clone()) else { return Vec::new() };
+        lay.blocks
+            .iter()
+            .zip(&lay.starts)
+            .filter(|(b, _)| b.leaf)
+            .filter_map(|(b, &y)| match s.items.get(b.first)? {
+                Item::User(t) | Item::Followup(t) if !t.trim().is_empty() => Some((b.first, y)),
+                Item::Assistant(t) if !user_only && !t.trim().is_empty() => Some((b.first, y)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `findMessageBoundary`: from the message last gone to, else from the top of the view.
+    fn goto_message(&mut self, next: bool, user_only: bool) -> Vec<Action> {
+        let msgs = self.messages(user_only);
+        let top = self.frame.get().map_or(0, |f| f.top);
+        let target = match self.nav.and_then(|n| msgs.iter().position(|(i, _)| *i == n)) {
+            Some(k) if next => msgs.get(k + 1),
+            Some(k) => k.checked_sub(1).and_then(|k| msgs.get(k)),
+            None if next => msgs.iter().find(|(_, y)| *y > top),
+            None => msgs.iter().rev().find(|(_, y)| *y < top),
+        };
+        if let Some(&(i, _)) = target {
+            self.nav = Some(i);
+            self.jump.set(Some(i));
+        }
+        Vec::new()
+    }
+
+    /// The transcript's own actions (P5 #44), as OpenCode's `routes/session/index.tsx` and `app.tsx` run them.
+    fn run_view(&mut self, id: &str) -> Option<Vec<Action>> {
+        let p = &mut self.prefs;
+        match id {
+            "session.message.next" => return Some(self.goto_message(true, false)),
+            "session.message.previous" => return Some(self.goto_message(false, false)),
+            "session.message.user.next" => return Some(self.goto_message(true, true)),
+            "session.message.user.previous" => return Some(self.goto_message(false, true)),
+            "session.messages_last_user" => {
+                let last = self.current()?.items.iter().rposition(|it| matches!(it, Item::User(t) | Item::Followup(t) if !t.trim().is_empty()));
+                if let Some(i) = last {
+                    self.nav = Some(i);
+                    self.jump.set(Some(i));
+                }
+                return Some(Vec::new());
+            }
+            "messages.copy" => {
+                let last = self.current().and_then(|s| s.items.iter().rev().find_map(|it| if let Item::Assistant(t) = it { Some(t.trim().to_string()) } else { None }));
+                return Some(match last {
+                    None => {
+                        self.notice = Some("No assistant messages found".into());
+                        Vec::new()
+                    }
+                    Some(t) if t.is_empty() => {
+                        self.notice = Some("No text content found in last assistant message".into());
+                        Vec::new()
+                    }
+                    Some(t) => {
+                        self.notice = Some("Message copied to clipboard!".into());
+                        vec![Action::Copy(t)]
+                    }
+                });
+            }
+            "session.toggle.thinking" => p.show_thinking = !p.show_thinking,
+            "session.toggle.scrollbar" => p.scrollbar = !p.scrollbar,
+            "session.toggle.exploration_grouping" => p.grouping = !p.grouping,
+            "session.verbosity.cycle" => p.verbosity = p.verbosity.next(),
+            "app.toggle.animations" => p.animations = !p.animations,
+            "app.toggle.diffwrap" => p.diff_wrap = !p.diff_wrap,
+            _ => return None,
+        }
+        self.prefs.save();
+        Some(Vec::new())
+    }
+
+    /// The selected transcript text, by columns, each row's trailing spaces left off.
+    fn selected_text(&self) -> String {
+        let (Some(sel), Some(lay)) = (self.selection, self.laid.borrow().clone()) else { return String::new() };
+        let ((r0, c0), (r1, c1)) = sel.ordered();
+        let mut out = Vec::new();
+        for r in r0..=r1 {
+            let Some(row) = lay.row(r) else { continue };
+            let (from, to) = (if r == r0 { c0 } else { 0 }, if r == r1 { c1 + 1 } else { usize::MAX });
+            let mut line = String::new();
+            let mut col = row.indent as usize;
+            for ch in row.text.chars() {
+                if col >= from && col < to {
+                    line.push(ch);
+                }
+                col += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            }
+            out.push(line.trim_end().to_string());
+        }
+        out.join("\n")
+    }
+
+    /// `Selection.copy`: the text to the clipboard; the selection stays.
+    fn copy_selection(&mut self) -> Vec<Action> {
+        let text = self.selected_text();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        self.notice = Some("Copied to clipboard".into());
+        vec![Action::Copy(text)]
+    }
+
+    /// `handleSelectionKey`: with a selection, ctrl+c copies it where a release did not; esc clears it, as does any
+    /// other key, which then goes on. Returns the key's actions when the selection took it.
+    fn selection_key(&mut self, key: &KeyEvent) -> Option<Vec<Action>> {
+        self.selection?;
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if !COPY_ON_SELECT {
+                let out = self.copy_selection();
+                if !out.is_empty() {
+                    return Some(out);
+                }
+            }
+            self.selection = None;
+            return None;
+        }
+        let had = !self.selected_text().is_empty();
+        self.selection = None;
+        (key.code == KeyCode::Esc && had).then(Vec::new)
+    }
+
+    /// The transcript under the mouse: a click on a group's line opens or closes it, a drag selects.
+    fn transcript_mouse(&mut self, m: &MouseEvent) -> Option<Vec<Action>> {
+        let f = self.frame.get()?;
+        let inside = m.column >= f.x && m.column < f.x + f.width && m.row >= f.y && m.row < f.y + f.height;
+        let at = |m: &MouseEvent| (f.top + m.row.clamp(f.y, f.y + f.height.saturating_sub(1)).saturating_sub(f.y) as usize, m.column.saturating_sub(f.x).min(f.width.saturating_sub(1)) as usize);
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) if inside => {
+                self.selection = Some(Selection { anchor: at(m), head: at(m), dragged: false });
+                self.clicks = None;
+                Some(Vec::new())
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let sel = self.selection.as_mut()?;
+                sel.head = at(m);
+                sel.dragged = true;
+                Some(Vec::new())
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let sel = self.selection?;
+                if !sel.dragged {
+                    self.selection = None;
+                    let head = self.laid.borrow().as_ref().and_then(|l| l.head_at(sel.anchor.0));
+                    if let (Some(id), Some(sid)) = (head, self.session.clone()) {
+                        let open = self.opened.get(&sid).and_then(|o| o.get(&id).copied()).unwrap_or_else(|| transcript::default_open(self.look(), id.1));
+                        self.opened.entry(sid).or_default().insert(id, !open);
+                    }
+                    return Some(Vec::new());
+                }
+                Some(if COPY_ON_SELECT { self.copy_selection() } else { Vec::new() })
+            }
+            MouseEventKind::Down(MouseButton::Right) if !COPY_ON_SELECT && self.selection.is_some() => Some(self.copy_selection()),
+            _ => None,
         }
     }
 
@@ -768,6 +1003,9 @@ impl App {
 
     /// The session actions (P5 #42), as OpenCode's `app.tsx` and `routes/session/index.tsx` run them.
     fn run_session(&mut self, id: &str) -> Option<Vec<Action>> {
+        if let Some(out) = self.run_view(id) {
+            return Some(out);
+        }
         let current = self.session.clone();
         let out = match id {
             // OpenCode opens the home screen; the next prompt starts the session.
@@ -1190,17 +1428,29 @@ impl App {
             return;
         }
         self.scroll = if up { self.scroll.saturating_add(rows) } else { self.scroll.saturating_sub(rows) };
+        self.nav = None;
     }
 
     /// The old TUI's mouse in the prompt box: a click puts the cursor, a drag selects, a double click selects a
     /// word and a triple click the whole prompt. The wheel scrolls the transcript.
-    pub fn on_mouse(&mut self, m: MouseEvent, now: Instant) {
+    pub fn on_mouse(&mut self, m: MouseEvent, now: Instant) -> Vec<Action> {
         match m.kind {
-            MouseEventKind::ScrollUp => return self.on_scroll(true, 3),
-            MouseEventKind::ScrollDown => return self.on_scroll(false, 3),
+            MouseEventKind::ScrollUp => {
+                self.on_scroll(true, 3);
+                return Vec::new();
+            }
+            MouseEventKind::ScrollDown => {
+                self.on_scroll(false, 3);
+                return Vec::new();
+            }
             _ => {}
         }
-        let Some(area) = self.input_area.get() else { return };
+        if self.dialog.is_none() {
+            if let Some(out) = self.transcript_mouse(&m) {
+                return out;
+            }
+        }
+        let Some(area) = self.input_area.get() else { return Vec::new() };
         let inside = m.column >= area.x && m.column < area.x + area.width && m.row >= area.y && m.row < area.y + area.height;
         let rows = self.editor.layout(area.width as usize);
         let row = area.first + m.row.saturating_sub(area.y).min(area.height.saturating_sub(1)) as usize;
@@ -1230,6 +1480,7 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) if self.clicks.is_some() => self.editor.click(at, true),
             _ => {}
         }
+        Vec::new()
     }
 
     /// Keys, as OpenCode binds them by default (`config/keybind.ts`), then the old TUI's that do not collide.
@@ -1238,6 +1489,9 @@ impl App {
             return Vec::new();
         }
         self.settle();
+        if let Some(out) = self.selection_key(&key) {
+            return out;
+        }
         if let Some(at) = self.leader.take() {
             if now.duration_since(at) < LEADER_WINDOW {
                 for id in self.keymap.matches(&key, true) {
@@ -1287,6 +1541,9 @@ impl App {
     /// Runs an action (`keymap::DEFS`) where it applies; `None` where it does not, so the key's next action is tried.
     /// The comments name OpenCode's actions where Lykos's differ.
     fn run(&mut self, id: &str, now: Instant, page: usize) -> Option<Vec<Action>> {
+        if let Some(out) = self.run_view(id) {
+            return Some(out);
+        }
         if id.starts_with("session.") || id == "open.menu" {
             if let Some(out) = self.run_session(id) {
                 return Some(out);
@@ -1334,8 +1591,14 @@ impl App {
             "session.line.down" => self.on_scroll(false, 1),
             "session.half.page.up" => self.on_scroll(true, (page / 2).max(1)),
             "session.half.page.down" => self.on_scroll(false, (page / 2).max(1)),
-            "session.first" => self.scroll = usize::MAX / 2,
-            "session.last" => self.scroll = 0,
+            "session.first" => {
+                self.scroll = usize::MAX / 2;
+                self.nav = None;
+            }
+            "session.last" => {
+                self.scroll = 0;
+                self.nav = None;
+            }
             "session.queued_prompts" => return Some(self.run_local(Local::Queue)),
             // The question is typed after it.
             "session.aside" => {
@@ -2524,6 +2787,124 @@ mod tests {
         typed(&mut app, "er");
         let out = press(&mut app, key(KeyCode::Enter));
         assert_eq!(calls(&out), [("session.rename", json!({ "cwd": "/w", "ledgerSessionId": "L0", "title": "older" }))]);
+    }
+
+    /// A session of `n` prompts and answers, drawn once at 80x20 so the message keys have a layout.
+    fn conversation(n: usize) -> App {
+        let mut app = idle();
+        let mut seq = 2;
+        for i in 0..n {
+            event(&mut app, "s1", seq, EventData::MessageUser { text: format!("prompt {i}") });
+            event(&mut app, "s1", seq + 1, EventData::MessageDelta { text: format!("answer {i}") });
+            event(&mut app, "s1", seq + 2, EventData::MessageEnd);
+            seq += 3;
+        }
+        draw(&app);
+        app
+    }
+
+    fn draw(app: &App) -> lykos_term::Buffer {
+        let mut buf = lykos_term::Buffer::new(80, 20);
+        crate::view::draw(app, &mut buf);
+        buf
+    }
+
+    #[test]
+    fn the_message_keys_step_from_the_view_then_from_the_message_gone_to() {
+        let mut app = conversation(10);
+        let now = Instant::now();
+        // From the bottom, the previous message is the last one starting above the view's top.
+        app.run("session.message.previous", now, 10);
+        let first = app.jump.get().expect("a jump");
+        assert!(matches!(app.current().unwrap().items[first], Item::User(_) | Item::Assistant(_)));
+        draw(&app);
+        app.run("session.message.previous", now, 10);
+        assert_eq!(app.jump.get(), Some(first - 1), "the next step is from the message gone to");
+        app.run("session.message.user.previous", now, 10);
+        let user = app.jump.get().unwrap();
+        assert!(matches!(app.current().unwrap().items[user], Item::User(_)) && user < first - 1);
+        app.run("session.message.user.next", now, 10);
+        assert_eq!(app.jump.get(), Some(user + 2));
+        app.run("session.messages_last_user", now, 10);
+        assert_eq!(app.jump.get(), Some(18), "prompt 9");
+        app.on_scroll(true, 3);
+        assert_eq!(app.nav, None, "scrolling forgets the message gone to");
+    }
+
+    #[test]
+    fn copy_takes_the_last_answer_and_says_when_there_is_none() {
+        let mut app = idle();
+        let now = Instant::now();
+        assert_eq!(app.run("messages.copy", now, 10).unwrap(), Vec::new());
+        assert_eq!(app.notice.as_deref(), Some("No assistant messages found"));
+        event(&mut app, "s1", 2, EventData::MessageUser { text: "hi".into() });
+        event(&mut app, "s1", 3, EventData::MessageDelta { text: "  hello  ".into() });
+        assert_eq!(app.run("messages.copy", now, 10).unwrap(), vec![Action::Copy("hello".into())]);
+        assert_eq!(app.notice.as_deref(), Some("Message copied to clipboard!"));
+        assert!(crate::menu::LOCAL.iter().any(|(l, name, _)| *name == "/copy" && *l == Local::Run("messages.copy")));
+    }
+
+    #[test]
+    fn the_toggles_flip_and_their_titles_say_what_they_will_do() {
+        let mut app = idle();
+        let def = |id: &str| keymap::DEFS.iter().find(|d| d.id == id).unwrap();
+        let now = Instant::now();
+        assert_eq!(app.title(def("session.verbosity.cycle")), "Verbosity: Low");
+        app.run("session.verbosity.cycle", now, 10);
+        assert_eq!(app.title(def("session.verbosity.cycle")), "Verbosity: Medium");
+        assert_eq!(app.title(def("session.toggle.thinking")), "Expand thinking");
+        app.run("session.toggle.thinking", now, 10);
+        assert_eq!((app.prefs.show_thinking, app.title(def("session.toggle.thinking"))), (true, "Collapse thinking".to_string()));
+        app.run("session.toggle.exploration_grouping", now, 10);
+        assert_eq!(app.title(def("session.toggle.exploration_grouping")), "Group related tool calls");
+        app.run("app.toggle.animations", now, 10);
+        assert_eq!(app.title(def("app.toggle.animations")), "Enable animations");
+        app.run("session.toggle.scrollbar", now, 10);
+        assert!(app.prefs.scrollbar);
+        let s: String = draw(&app).cells.iter().map(|c| c.ch).collect();
+        assert!(s.contains('│'), "the scrollbar draws");
+    }
+
+    #[test]
+    fn a_click_opens_a_group_and_a_drag_selects_and_copies() {
+        let mut app = idle();
+        event(&mut app, "s1", 2, EventData::MessageUser { text: "go".into() });
+        event(&mut app, "s1", 3, EventData::ToolStart { tool_id: "t1".into(), name: "bash".into(), summary: "ls".into(), args: Value::Null });
+        event(&mut app, "s1", 4, EventData::ToolEnd { tool_id: "t1".into(), name: "bash".into(), ok: true, preview: None, diff: None });
+        event(&mut app, "s1", 5, EventData::MessageDelta { text: "done here".into() });
+        draw(&app);
+        let f = app.frame.get().unwrap();
+        let lay = app.laid.borrow().clone().unwrap();
+        let head = (0..lay.total).find(|r| lay.head_at(*r).is_some()).expect("the activity's line");
+        let at = |r: usize, col: u16| (f.x + col, f.y + (r - f.top) as u16);
+        let mouse = |kind, (column, row): (u16, u16)| MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE };
+        let (x, y) = at(head, 2);
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), (x, y)), Instant::now());
+        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), (x, y)), Instant::now());
+        assert_eq!(app.opened["s1"].values().copied().collect::<Vec<_>>(), [true], "the click opened it");
+        let s: String = draw(&app).cells.iter().map(|c| c.ch).collect();
+        assert!(s.contains("$ bash ls"), "its tool shows {s}");
+        // Select "done" on the answer's row.
+        let lay = app.laid.borrow().clone().unwrap();
+        let f = app.frame.get().unwrap();
+        let row = (0..lay.total).find(|r| lay.row(*r).is_some_and(|x| x.text.contains("done here"))).unwrap();
+        let indent = lay.row(row).unwrap().indent;
+        let at = |col: u16| (f.x + indent + col, f.y + (row - f.top) as u16);
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), at(0)), Instant::now());
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), at(3)), Instant::now());
+        let up = app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), at(3)), Instant::now());
+        if COPY_ON_SELECT {
+            assert_eq!(up, vec![Action::Copy("done".into())]);
+        } else {
+            assert_eq!(up, Vec::new(), "on Windows the release keeps the selection");
+            assert_eq!(press(&mut app, ctrl('c')), vec![Action::Copy("done".into())]);
+            assert!(app.selection.is_some(), "ctrl+c copies and keeps the selection");
+            assert_eq!(app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Right), at(0)), Instant::now()), vec![Action::Copy("done".into())]);
+        }
+        assert_eq!(app.notice.as_deref(), Some("Copied to clipboard"));
+        assert_eq!(press(&mut app, key(KeyCode::Esc)), Vec::new());
+        assert_eq!(app.selection, None, "esc clears it");
+        assert!(app.editor.text().is_empty());
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub struct Session {
 }
 
 impl Session {
-    fn new(summary: SessionSummary) -> Self {
+    pub fn new(summary: SessionSummary) -> Self {
         Session { summary, items: Vec::new(), usage: None, requests: Vec::new(), commands: Vec::new(), last_seq: 0, open_assistant: false, open_thinking: false }
     }
 

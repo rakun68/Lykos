@@ -11,6 +11,7 @@ mod prefs;
 mod stash;
 mod tabs;
 mod theme;
+mod transcript;
 mod view;
 mod wrap;
 
@@ -229,10 +230,7 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
     match msg {
         Msg::Input(TermEvent::Key(k)) => app.on_key(k, Instant::now(), (height / 2).max(1)),
         Msg::Input(TermEvent::Paste(text)) => app.on_paste(&text),
-        Msg::Input(TermEvent::Mouse(m)) => {
-            app.on_mouse(m, Instant::now());
-            Vec::new()
-        }
+        Msg::Input(TermEvent::Mouse(m)) => app.on_mouse(m, Instant::now()),
         Msg::Input(_) => Vec::new(),
         Msg::Server(Update::Event(e)) => app.on_event(&e),
         Msg::Server(Update::Disconnected(m)) => {
