@@ -4,7 +4,7 @@
 use lykos_client::{Item, Session, SessionStatus, ToolState};
 use lykos_term::{Attr, Buffer, Cell, Style};
 
-use crate::app::{App, Dialog, Info, InputArea, Link, List};
+use crate::app::{App, Dialog, Info, InputArea, Link, List, Row as ListRow};
 use crate::editor::{Chip, Editor};
 use crate::keymap;
 use crate::menu::Menu;
@@ -97,13 +97,15 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
     let box_h = prompt_y.saturating_sub(1);
     if box_h >= 3 {
         buf.border(pad - 1, 0, inner_w + 2, box_h, Style::fg(c().overlay));
-        let title = session.summary.title.as_deref().unwrap_or("New session");
-        let title: String = format!(" {} ", first_line(title));
-        buf.text(pad + 1, 0, inner_w.saturating_sub(4), &title, theme::subtle().bold());
-        let rows = transcript(app, session, inner_w.saturating_sub(2));
+        tab_strip(app, session, buf, pad + 1, inner_w.saturating_sub(4));
+        let (rows, starts) = transcript(app, session, inner_w.saturating_sub(2));
         let view_h = box_h.saturating_sub(2) as usize;
         let max_scroll = rows.len().saturating_sub(view_h);
-        let scroll = app.scroll.min(max_scroll);
+        // The timeline's jump: the prompt's first row at the top.
+        if let Some(at) = app.jump.take().and_then(|i| starts.get(i).copied()) {
+            app.jumped.set(Some(rows.len().saturating_sub(view_h + at).min(max_scroll)));
+        }
+        let scroll = app.scroll_now().min(max_scroll);
         let start = rows.len().saturating_sub(view_h + scroll);
         for (i, row) in rows[start..rows.len() - scroll].iter().enumerate() {
             let y = 1 + i as u16;
@@ -127,6 +129,32 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         }
     }
     prompt_box(app, buf, pad, prompt_y, inner_w, h)
+}
+
+/// The box's top edge: the session's title, or with more than one tab open, every tab's (OpenCode
+/// `component/session-tabs.tsx`): the one shown bold, an unread one marked.
+fn tab_strip(app: &App, session: &Session, buf: &mut Buffer, x: u16, width: u16) {
+    let title_of = |id: &str| app.store.sessions.get(id).and_then(|s| s.summary.title.clone()).unwrap_or_else(|| "New session".into());
+    if app.tabs.open.len() < 2 {
+        let title = session.summary.title.as_deref().unwrap_or("New session");
+        buf.text(x, 0, width, &format!(" {} ", first_line(title)), theme::subtle().bold());
+        return;
+    }
+    let mut at = x;
+    let end = x + width;
+    for (i, id) in app.tabs.open.iter().enumerate() {
+        let shown = app.session.as_deref() == Some(id.as_str());
+        let mark = if app.tabs.unread.contains(id) { "• " } else { "" };
+        let title: String = first_line(&title_of(id)).chars().take(24).collect();
+        let label = format!(" {mark}{} {title} ", i + 1);
+        let style = if shown { Style::fg(c().accent).bold() } else { theme::subtle() };
+        let lw = label.width() as u16;
+        if at >= end {
+            break;
+        }
+        buf.text(at, 0, end - at, &label, style);
+        at += lw;
+    }
 }
 
 fn first_line(s: &str) -> &str {
@@ -317,23 +345,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
             (format!("Image {} of {}", index + 1, images.len()), vec![(path, theme::text())], None, keys)
         }
         Dialog::List { list, query, selected } => {
-            let rows = app.list_rows(list, query);
-            let mut lines = Vec::new();
-            let mut at = None;
-            let mut group = "";
-            for (i, r) in rows.iter().enumerate() {
-                // `dialog-select.tsx` heads each category; a search shows none.
-                if !r.group.is_empty() && r.group != group {
-                    lines.push((r.group.clone(), theme::text().bold()));
-                }
-                group = &r.group;
-                if i == *selected {
-                    at = Some(lines.len());
-                }
-                let mark = if r.current { "● " } else { "  " };
-                let right = if r.favorite { format!("{} *", r.detail) } else { r.detail.clone() };
-                lines.push((columns(&format!("{mark}{}", r.title), &right, inner), theme::text()));
-            }
+            let (mut lines, at) = select_lines(&app.list_rows(list, query), *selected, inner);
             let (name, empty, extra) = match list {
                 List::Models => ("Select model", "No models: open a session first, or connect a provider", format!(" · {} favorite · {} providers", k("model.dialog.favorite"), k("model.dialog.provider"))),
                 List::Efforts => ("Select thinking effort", "This model has no effort levels, or no session is open", String::new()),
@@ -395,6 +407,44 @@ fn dialog(app: &App, buf: &mut Buffer) {
                 ),
             }
         }
+        Dialog::Sessions { query, selected, all, confirm } => {
+            let (mut lines, at) = select_lines(&app.session_rows(query, confirm.as_deref()), *selected, inner);
+            if lines.is_empty() {
+                lines.push((if app.past.is_none() { "Loading sessions…" } else { "No sessions" }.to_string(), theme::muted()));
+            }
+            let name = if *all { "Sessions  every project" } else { "Sessions" };
+            let title = if query.is_empty() { format!("{name}  Search sessions") } else { format!("{name}  {query}") };
+            let keys = format!(
+                "{} open · {} delete · {} rename · {} pin · {} {} · {close}",
+                k("dialog.select.submit"),
+                k("session.delete"),
+                k("session.list.rename"),
+                k("session.pin.toggle"),
+                k("session.list.all"),
+                if *all { "this project" } else { "all projects" }
+            );
+            (title, lines, at, keys)
+        }
+        Dialog::Timeline { query, selected } => {
+            let (lines, at) = select_lines(&app.timeline_rows(query), *selected, inner);
+            let title = if query.is_empty() { "Timeline  Search timeline".to_string() } else { format!("Timeline  {query}") };
+            (title, lines, at, format!("{} jump · {close}", k("dialog.select.submit")))
+        }
+        Dialog::Worktrees { selected, .. } => {
+            let (mut lines, at) = select_lines(&app.worktree_rows(), *selected, inner);
+            if lines.is_empty() {
+                lines.push((if app.worktrees.is_none() { "Loading worktrees…" } else { "No worktrees available" }.to_string(), theme::muted()));
+            }
+            let keys = format!(
+                "{} move · {} new · {} delete · {} refresh · {close}",
+                k("dialog.select.submit"),
+                k("dialog.move_session.new"),
+                k("dialog.move_session.delete"),
+                k("dialog.move_session.refresh")
+            );
+            ("Worktrees".into(), lines, at, keys)
+        }
+        Dialog::Input { title, text, .. } => (title.clone(), vec![(format!("{text}▏"), theme::text())], None, format!("{} confirm · {close}", k("dialog.select.submit"))),
         Dialog::Aside { question, answer, scroll } => {
             let (text, style) = match answer {
                 Ok(a) => (a.as_str(), theme::text()),
@@ -423,6 +473,27 @@ fn dialog(app: &App, buf: &mut Buffer) {
         }
     }
     buf.text(x + 2, y + dh - 1, dw.saturating_sub(4), &keys, theme::muted().on(c().surface));
+}
+
+/// A select dialog's rows (`dialog-select.tsx`): each category headed (a search shows none), the row in use
+/// marked, a favorite or pinned one starred. Returns the lines and the selected row's line.
+fn select_lines(rows: &[ListRow], selected: usize, inner: usize) -> (Vec<(String, Style)>, Option<usize>) {
+    let mut lines = Vec::new();
+    let mut at = None;
+    let mut group = "";
+    for (i, r) in rows.iter().enumerate() {
+        if !r.group.is_empty() && r.group != group {
+            lines.push((r.group.clone(), theme::text().bold()));
+        }
+        group = &r.group;
+        if i == selected {
+            at = Some(lines.len());
+        }
+        let mark = if r.current { "● " } else { "  " };
+        let right = if r.favorite { format!("{} *", r.detail) } else { r.detail.clone() };
+        lines.push((columns(&format!("{mark}{}", r.title), &right, inner), theme::text()));
+    }
+    (lines, at)
 }
 
 /// `left`, then `right` against the right edge of `width` columns; `left` is cut short to make room.
@@ -535,12 +606,14 @@ fn group(n: u64) -> String {
     out
 }
 
-/// The transcript as rows, oldest first.
-fn transcript(app: &App, session: &Session, width: u16) -> Vec<Row> {
+/// The transcript as rows, oldest first, and the row each item starts on.
+fn transcript(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<usize>) {
     let w = width as usize;
     let mut rows = Vec::new();
+    let mut starts = Vec::with_capacity(session.items.len());
     let user_bg = Style::default().on(c().surface);
     for item in &session.items {
+        starts.push(rows.len());
         match item {
             // A user message: a bar in the accent colour on a raised background, padded a row above and below.
             Item::User(text) | Item::Followup(text) => {
@@ -589,7 +662,7 @@ fn transcript(app: &App, session: &Session, width: u16) -> Vec<Row> {
     for q in &app.queue {
         rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
     }
-    rows
+    (rows, starts)
 }
 
 /// `routes/session/index.tsx`'s inline tool icons: `→` reads, `←` writes, `✱` searches, `%` the web, `$` a shell.
@@ -690,7 +763,7 @@ mod tests {
         let s = screen(&buf);
         assert!(s.contains("Press ctrl+p to see all available actions"), "{s}");
         assert!(s.contains("Leader") && s.contains("ctrl+x · default"), "{s}");
-        app.dialog = Some(Dialog::Help { scroll: 60 });
+        app.dialog = Some(Dialog::Help { scroll: 105 });
         draw(&app, &mut buf);
         assert!(screen(&buf).contains("Undo in input"), "scrolled to the input actions");
     }

@@ -5,7 +5,8 @@ use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use lykos_client::{Event, EventData, Session, SessionOptions, SessionStatus, Store};
+use lykos_client::{Event, EventData, History as Past, HistoryRow, Item, Session, SessionOptions, SessionStatus, Store, Worktree};
+use serde_json::{json, Value};
 
 use crate::editor::{Chip, Editor};
 use crate::history::History;
@@ -13,6 +14,7 @@ use crate::keymap::{self, Keymap};
 use crate::menu::{self, Local, Menu, Pick, Trigger};
 use crate::prefs::Prefs;
 use crate::stash::Stash;
+use crate::tabs::Tabs;
 use crate::theme;
 
 /// A request for the server, or for the terminal, made by `main`.
@@ -34,7 +36,45 @@ pub enum Action {
     Editor(String),
     /// Asks the session what the lists show (`session.options`); the answer comes back as `App::on_options`.
     Options { session: String },
+    /// Any other request; its answer comes back as `App::on_reply` with `then` (P5 #42).
+    Call { method: &'static str, params: Value, then: Then },
     Quit,
+}
+
+/// What an answer to `Action::Call` is for.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Then {
+    /// `sessions.history`, for the session list.
+    History,
+    /// `sessions.history`, to go to the parent or a child of the session shown.
+    Navigate(Nav),
+    /// `session.start` or `session.move`: the session to show. A move names the tab it replaces.
+    Started { replaces: Option<String> },
+    /// A write whose answer is shown as it is.
+    Notice(&'static str),
+    /// An archive or rename from the session list: the list again.
+    Refresh { all: bool },
+    /// `session.export`.
+    Exported,
+    /// `worktree.list`.
+    Worktrees,
+    /// A worktree created or removed: the list again.
+    WorktreesChanged,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Nav {
+    Parent,
+    /// The first child; then the next (1) or previous (-1) of the session's siblings.
+    Child(isize),
+}
+
+/// What a one-line input dialog is for.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Purpose {
+    Rename { id: String, cwd: String, all: Option<bool> },
+    Worktree,
+    Cd,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +111,14 @@ pub enum Dialog {
     List { list: List, query: String, selected: usize },
     /// OpenCode's status, usage, MCP and debug dialogs.
     Info { info: Info },
+    /// `dialog-session-list.tsx`: `confirm` is the row a first delete press armed.
+    Sessions { query: String, selected: usize, all: bool, confirm: Option<String> },
+    /// `dialog-timeline.tsx`: the session's prompts, newest first.
+    Timeline { query: String, selected: usize },
+    /// `dialog-workspaces.tsx`.
+    Worktrees { selected: usize, confirm: Option<String> },
+    /// A line typed: a session's new name, a worktree's name, a directory.
+    Input { title: String, text: String, purpose: Purpose },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -174,6 +222,15 @@ pub struct App {
     pub tick: u64,
     starting: bool,
     clicks: Option<(Instant, u16, u16, u8)>,
+    /// The open session tabs (P5 #42).
+    pub tabs: Tabs,
+    /// The session list's rows, once `sessions.history` answered.
+    pub past: Option<Past>,
+    /// The worktrees dialog's rows, once `worktree.list` answered.
+    pub worktrees: Option<Vec<Worktree>>,
+    /// The transcript item the timeline jumps to, and the scroll the view found for it.
+    pub jump: Cell<Option<usize>>,
+    pub jumped: Cell<Option<usize>>,
 }
 
 impl App {
@@ -205,6 +262,11 @@ impl App {
             tick: 0,
             starting: false,
             clicks: None,
+            tabs: Tabs::default(),
+            past: None,
+            worktrees: None,
+            jump: Cell::new(None),
+            jumped: Cell::new(None),
         }
     }
 
@@ -244,8 +306,45 @@ impl App {
     /// `session.start` answered: this is the session the prompt goes to once it is idle.
     pub fn started(&mut self, id: String) -> Vec<Action> {
         self.starting = false;
+        self.tabs.open(&id);
         self.session = Some(id);
+        self.scroll = 0;
         self.flush()
+    }
+
+    /// Shows another open session: its tab, its transcript from the newest row, and its lists.
+    fn activate(&mut self, id: String) -> Vec<Action> {
+        if self.session.as_ref() == Some(&id) {
+            return Vec::new();
+        }
+        self.tabs.open(&id);
+        self.session = Some(id);
+        self.scroll = 0;
+        self.options = None;
+        self.armed = None;
+        self.live().map(|session| vec![Action::Options { session }]).unwrap_or_default()
+    }
+
+    fn show(&mut self, id: Option<String>) -> Vec<Action> {
+        match id {
+            Some(id) => self.activate(id),
+            None => Vec::new(),
+        }
+    }
+
+    /// The scroll in effect: where the timeline jumped, until a key or the wheel moves it.
+    pub fn scroll_now(&self) -> usize {
+        self.jumped.get().unwrap_or(self.scroll)
+    }
+
+    fn settle(&mut self) {
+        if let Some(s) = self.jumped.take() {
+            self.scroll = s;
+        }
+    }
+
+    fn ledger_id(&self) -> Option<String> {
+        self.current().and_then(|s| s.summary.ledger_session_id.clone())
     }
 
     /// A request failed. `prompt` is the text of a `session.prompt` that did not go through.
@@ -262,7 +361,15 @@ impl App {
 
     pub fn on_event(&mut self, event: &Event) -> Vec<Action> {
         self.store.apply(event);
+        if matches!(event.data, EventData::TurnEnd) {
+            self.tabs.finished(&event.session, self.session.as_deref());
+        }
         if Some(&event.session) == self.session.as_ref() {
+            // An undone prompt comes back to be edited (P5 #42).
+            if let EventData::PromptSet { text } = &event.data {
+                self.editor.set(text);
+                return self.refresh_menu();
+            }
             if let EventData::SessionStatus { session } = &event.data {
                 if session.status != SessionStatus::Running && session.status != SessionStatus::Waiting {
                     self.armed = None;
@@ -459,23 +566,7 @@ impl App {
             }
         }
         let before = (query.clone(), selected);
-        if has("dialog.select.prev") {
-            selected = if n == 0 { 0 } else { (selected + n - 1) % n };
-        } else if has("dialog.select.next") {
-            selected = if n == 0 { 0 } else { (selected + 1) % n };
-        } else if has("dialog.select.page_up") {
-            selected = selected.saturating_sub(page);
-        } else if has("dialog.select.page_down") {
-            selected = (selected + page).min(n.saturating_sub(1));
-        } else if key.code == KeyCode::Backspace {
-            query.pop();
-            selected = 0;
-        } else if let KeyCode::Char(c) = key.code {
-            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
-                query.push(c);
-                selected = 0;
-            }
-        }
+        select(key, ids, Some(&mut query), &mut selected, n, page);
         // `dialog-theme-list.tsx`: the theme under the cursor shows at once; with an empty query, the first again.
         if let List::Themes { initial } = list {
             if (query.clone(), selected) != before {
@@ -484,6 +575,457 @@ impl App {
             }
         }
         self.dialog = Some(Dialog::List { list, query, selected });
+        Vec::new()
+    }
+
+    /// `dialog-session-list.tsx`: root sessions, not archived; Pinned, then by day ("Today", else the date), newest
+    /// first. A search ranks the titles. Lykos groups by the UTC day the session started.
+    pub fn session_rows(&self, query: &str, confirm: Option<&str>) -> Vec<Row> {
+        let Some(past) = &self.past else { return Vec::new() };
+        let me = self.ledger_id();
+        let today = today_utc();
+        let delete = self.keymap.first("session.delete");
+        let make = |r: &HistoryRow, group: String| {
+            let title = if confirm == Some(r.id.as_str()) { format!("Press {delete} again to confirm") } else { r.title.clone().unwrap_or_else(|| "Untitled session".into()) };
+            let time = r.started_utc.get(11..16).unwrap_or_default().to_string();
+            let detail = match &r.project_name {
+                Some(p) => format!("{p} · {time}"),
+                None => time,
+            };
+            Row { value: r.id.clone(), title, detail, group, current: me.as_deref() == Some(r.id.as_str()), favorite: self.prefs.pinned.contains(&r.id) }
+        };
+        let roots = past.rows.iter().filter(|r| r.parent_session_id.is_none() && !r.archived);
+        if !query.is_empty() {
+            let mut scored: Vec<(u32, Row)> = roots.filter_map(|r| Some((menu::score(query, r.title.as_deref().unwrap_or_default())?, make(r, String::new())))).collect();
+            scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+            return scored.into_iter().map(|(_, r)| r).collect();
+        }
+        let roots: Vec<&HistoryRow> = roots.collect();
+        let mut out: Vec<Row> = self.prefs.pinned.iter().filter_map(|p| roots.iter().find(|r| &r.id == p)).map(|r| make(r, "Pinned".into())).collect();
+        for r in roots.iter().filter(|r| !self.prefs.pinned.contains(&r.id)) {
+            let day = r.started_utc.get(..10).unwrap_or_default();
+            out.push(make(r, if day == today { "Today".into() } else { day.to_string() }));
+        }
+        out
+    }
+
+    /// `dialog-timeline.tsx`: the session's prompts, newest first; the value is the transcript item.
+    pub fn timeline_rows(&self, query: &str) -> Vec<Row> {
+        let Some(s) = self.current() else { return Vec::new() };
+        let rows = s.items.iter().enumerate().rev().filter_map(|(i, it)| match it {
+            Item::User(t) => Some(Row { value: i.to_string(), title: t.lines().next().unwrap_or_default().to_string(), detail: String::new(), group: String::new(), current: false, favorite: false }),
+            _ => None,
+        });
+        if query.is_empty() {
+            return rows.collect();
+        }
+        let mut scored: Vec<(u32, Row)> = rows.filter_map(|r| Some((menu::score(query, &r.title)?, r))).collect();
+        scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+        scored.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// `dialog-workspaces.tsx`: the project's worktrees, the one the session runs in marked.
+    pub fn worktree_rows(&self) -> Vec<Row> {
+        let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_lowercase();
+        let cwd = norm(self.current().map_or(self.cwd.as_str(), |s| s.summary.cwd.as_str()));
+        self.worktrees
+            .iter()
+            .flatten()
+            .map(|w| {
+                let mut detail = w.branch.clone().unwrap_or_else(|| "detached".into());
+                if w.main {
+                    detail.push_str(" · main checkout");
+                }
+                if w.sessions {
+                    detail.push_str(" · in use");
+                }
+                Row { value: w.path.clone(), title: w.path.clone(), detail, group: String::new(), current: norm(&w.path) == cwd, favorite: false }
+            })
+            .collect()
+    }
+
+    fn history_call(&self, all: bool, then: Then) -> Action {
+        Action::Call { method: "sessions.history", params: json!({ "cwd": self.cwd, "all": all }), then }
+    }
+
+    fn worktrees_call(&self) -> Action {
+        Action::Call { method: "worktree.list", params: json!({ "cwd": self.cwd }), then: Then::Worktrees }
+    }
+
+    fn open_sessions(&mut self, all: bool) -> Vec<Action> {
+        self.past = None;
+        self.dialog = Some(Dialog::Sessions { query: String::new(), selected: 0, all, confirm: None });
+        vec![self.history_call(all, Then::History)]
+    }
+
+    fn open_worktrees(&mut self) -> Vec<Action> {
+        self.worktrees = None;
+        self.dialog = Some(Dialog::Worktrees { selected: 0, confirm: None });
+        vec![self.worktrees_call()]
+    }
+
+    /// A session of the list: its tab when it runs here, else resumed (`session.start` with `resume`).
+    fn open_session(&mut self, id: &str, cwd: Option<String>) -> Vec<Action> {
+        let live = self.past.as_ref().and_then(|p| p.live.get(id)).cloned();
+        if let Some(sid) = live.filter(|sid| self.store.sessions.get(sid).is_some_and(|s| s.summary.status != SessionStatus::Closed)) {
+            return self.activate(sid);
+        }
+        self.starting = true;
+        vec![Action::Call { method: "session.start", params: json!({ "cwd": cwd.unwrap_or_else(|| self.cwd.clone()), "origin": "tui", "resume": id }), then: Then::Started { replaces: None } }]
+    }
+
+    /// An answer to `Action::Call`.
+    pub fn on_reply(&mut self, then: Then, result: Result<Value, String>) -> Vec<Action> {
+        let v = match result {
+            Ok(v) => v,
+            Err(e) => {
+                if matches!(then, Then::Started { .. }) {
+                    self.starting = false;
+                }
+                self.notice = Some(e);
+                return Vec::new();
+            }
+        };
+        match then {
+            Then::History => match serde_json::from_value::<Past>(v) {
+                Ok(p) => self.past = Some(p),
+                Err(e) => self.notice = Some(format!("the session list: {e}")),
+            },
+            Then::Navigate(nav) => {
+                self.past = serde_json::from_value(v).ok();
+                return self.navigate(nav);
+            }
+            Then::Started { replaces } => {
+                if let Some(old) = replaces {
+                    self.tabs.close(&old);
+                }
+                return self.started(v["id"].as_str().unwrap_or_default().to_string());
+            }
+            Then::Notice(text) => self.notice = Some(text.into()),
+            Then::Refresh { all } => return vec![self.history_call(all, Then::History)],
+            Then::Exported => self.notice = Some(format!("Exported to {}", v["path"].as_str().unwrap_or_default())),
+            Then::Worktrees => match serde_json::from_value(v) {
+                Ok(w) => self.worktrees = Some(w),
+                Err(e) => self.notice = Some(format!("the worktrees: {e}")),
+            },
+            Then::WorktreesChanged => return vec![self.worktrees_call()],
+        }
+        Vec::new()
+    }
+
+    /// `session.parent` and `session.child.*`: the ledger's parent and child sessions.
+    fn navigate(&mut self, nav: Nav) -> Vec<Action> {
+        let (Some(me), Some(past)) = (self.ledger_id(), self.past.clone()) else { return Vec::new() };
+        let row = |id: &str| past.rows.iter().find(|r| r.id == id).cloned();
+        let target = match nav {
+            Nav::Parent => row(&me).and_then(|r| r.parent_session_id),
+            Nav::Child(0) => past.rows.iter().find(|r| r.parent_session_id.as_deref() == Some(me.as_str())).map(|r| r.id.clone()),
+            Nav::Child(step) => {
+                let parent = row(&me).and_then(|r| r.parent_session_id);
+                let siblings: Vec<&HistoryRow> = past.rows.iter().filter(|r| parent.is_some() && r.parent_session_id == parent).collect();
+                siblings.iter().position(|r| r.id == me).map(|i| siblings[(i as isize + step).rem_euclid(siblings.len() as isize) as usize].id.clone())
+            }
+        };
+        match target {
+            Some(id) => {
+                let cwd = row(&id).and_then(|r| r.project_path);
+                self.open_session(&id, cwd)
+            }
+            None => {
+                self.notice = Some(if nav == Nav::Parent { "This session has no parent" } else { "No child sessions" }.into());
+                Vec::new()
+            }
+        }
+    }
+
+    /// `session.copy`: the transcript as Markdown.
+    fn transcript_text(&self) -> String {
+        let Some(s) = self.current() else { return String::new() };
+        let mut out = Vec::new();
+        for it in &s.items {
+            match it {
+                Item::User(t) | Item::Followup(t) => out.push(format!("## User\n\n{t}")),
+                Item::Assistant(t) => out.push(format!("## Assistant\n\n{}", t.trim_end())),
+                Item::Tool { name, summary, .. } => out.push(format!("**Tool: {name}** {summary}")),
+                Item::Thinking(_) | Item::System(_) => {}
+            }
+        }
+        out.join("\n\n") + "\n"
+    }
+
+    /// The session actions (P5 #42), as OpenCode's `app.tsx` and `routes/session/index.tsx` run them.
+    fn run_session(&mut self, id: &str) -> Option<Vec<Action>> {
+        let current = self.session.clone();
+        let out = match id {
+            // OpenCode opens the home screen; the next prompt starts the session.
+            "session.new" => {
+                self.session = None;
+                self.scroll = 0;
+                Vec::new()
+            }
+            "session.list" => self.open_sessions(false),
+            "open.menu" => self.open_sessions(true),
+            "session.tab.next" => self.show(self.tabs.cycle(current.as_deref(), 1, false)),
+            "session.tab.previous" => self.show(self.tabs.cycle(current.as_deref(), -1, false)),
+            "session.tab.next_unread" => self.show(self.tabs.cycle(current.as_deref(), 1, true)),
+            "session.tab.previous_unread" => self.show(self.tabs.cycle(current.as_deref(), -1, true)),
+            "session.tab.history.back" => {
+                let back = self.tabs.step_history(true);
+                self.show(back)
+            }
+            "session.tab.history.forward" => {
+                let forward = self.tabs.step_history(false);
+                self.show(forward)
+            }
+            "session.tab.close" => {
+                let Some(id) = current else { return Some(Vec::new()) };
+                let next = self.tabs.close(&id);
+                self.session = None;
+                self.show(next)
+            }
+            "session.tab.reopen" => {
+                let next = self.tabs.reopen();
+                self.show(next)
+            }
+            "session.timeline" => {
+                if self.timeline_rows("").is_empty() {
+                    self.notice = Some("No messages yet".into());
+                } else {
+                    self.dialog = Some(Dialog::Timeline { query: String::new(), selected: 0 });
+                }
+                Vec::new()
+            }
+            "session.rename" => match self.ledger_id() {
+                Some(id) => {
+                    let text = self.current().and_then(|s| s.summary.title.clone()).unwrap_or_default();
+                    self.dialog = Some(Dialog::Input { title: "Rename session".into(), text, purpose: Purpose::Rename { id, cwd: self.cwd.clone(), all: None } });
+                    Vec::new()
+                }
+                None => self.need_session(),
+            },
+            "session.fork" => self.command("/fork".into()),
+            "session.compact" => self.command("/compact".into()),
+            "session.undo" => self.command("/undo".into()),
+            "session.redo" => self.command("/redo".into()),
+            "session.copy" => {
+                if self.current().is_none() {
+                    return Some(self.need_session());
+                }
+                self.notice = Some("Copied to clipboard".into());
+                vec![Action::Copy(self.transcript_text())]
+            }
+            "session.copy.id" => match self.ledger_id() {
+                Some(id) => {
+                    self.notice = Some("Session ID copied to clipboard!".into());
+                    vec![Action::Copy(id)]
+                }
+                None => self.need_session(),
+            },
+            // P22's Markdown, as `lykos export` writes it, to a file in the workspace named after the session.
+            "session.export" => match self.ledger_id() {
+                Some(id) => {
+                    let file = format!("session-{id}.md");
+                    vec![Action::Call { method: "session.export", params: json!({ "cwd": self.cwd, "ledgerSessionId": id, "file": file }), then: Then::Exported }]
+                }
+                None => self.need_session(),
+            },
+            "session.move" => self.open_worktrees(),
+            "session.cd" => match self.live() {
+                Some(_) => {
+                    let text = self.current().map(|s| s.summary.cwd.clone()).unwrap_or_default();
+                    self.dialog = Some(Dialog::Input { title: "Change working directory".into(), text, purpose: Purpose::Cd });
+                    Vec::new()
+                }
+                None => self.need_session(),
+            },
+            "session.parent" | "session.child.first" | "session.child.next" | "session.child.previous" => {
+                if self.ledger_id().is_none() {
+                    return Some(self.need_session());
+                }
+                let nav = match id {
+                    "session.parent" => Nav::Parent,
+                    "session.child.first" => Nav::Child(0),
+                    "session.child.next" => Nav::Child(1),
+                    _ => Nav::Child(-1),
+                };
+                vec![self.history_call(false, Then::Navigate(nav))]
+            }
+            _ => {
+                let n: usize = id.strip_prefix("session.tab.select.")?.parse().ok()?;
+                let tab = self.tabs.open.get(n.checked_sub(1)?).cloned();
+                self.show(tab)
+            }
+        };
+        Some(out)
+    }
+
+    fn need_session(&mut self) -> Vec<Action> {
+        self.notice = Some("Open a session first".into());
+        Vec::new()
+    }
+
+    /// The session list's keys: open, delete (archive) on a second press, rename, pin, every project. The dialog's
+    /// four fields come in as they are.
+    #[allow(clippy::too_many_arguments)]
+    fn sessions_key(&mut self, key: &KeyEvent, ids: &[&str], mut query: String, mut selected: usize, mut all: bool, confirm: Option<String>, page: usize) -> Vec<Action> {
+        let has = |id: &str| ids.contains(&id);
+        let rows = self.session_rows(&query, confirm.as_deref());
+        let chosen = rows.get(selected).cloned();
+        let cwd_of = |app: &App, id: &str| app.past.as_ref().and_then(|p| p.rows.iter().find(|r| r.id == id)).and_then(|r| r.project_path.clone());
+        if has("dialog.close") {
+            self.dialog = None;
+            return Vec::new();
+        }
+        if has("dialog.select.submit") {
+            let Some(r) = chosen else { return Vec::new() };
+            self.dialog = None;
+            let cwd = cwd_of(self, &r.value);
+            return self.open_session(&r.value, cwd);
+        }
+        if has("session.delete") {
+            let Some(r) = chosen else { return Vec::new() };
+            if confirm.as_deref() != Some(r.value.as_str()) {
+                self.dialog = Some(Dialog::Sessions { query, selected, all, confirm: Some(r.value) });
+                return Vec::new();
+            }
+            // Nothing is deleted: the session is archived, and stays in `lykos session --all`.
+            let cwd = cwd_of(self, &r.value).unwrap_or_else(|| self.cwd.clone());
+            if let Some(p) = self.past.as_mut() {
+                p.rows.retain(|x| x.id != r.value);
+            }
+            self.dialog = Some(Dialog::Sessions { query, selected: selected.min(rows.len().saturating_sub(2)), all, confirm: None });
+            return vec![Action::Call { method: "session.archive", params: json!({ "cwd": cwd, "ledgerSessionId": r.value }), then: Then::Refresh { all } }];
+        }
+        if has("session.list.rename") {
+            let Some(r) = chosen else { return Vec::new() };
+            let cwd = cwd_of(self, &r.value).unwrap_or_else(|| self.cwd.clone());
+            let text = self.past.as_ref().and_then(|p| p.rows.iter().find(|x| x.id == r.value)).and_then(|x| x.title.clone()).unwrap_or_default();
+            self.dialog = Some(Dialog::Input { title: "Rename session".into(), text, purpose: Purpose::Rename { id: r.value, cwd, all: Some(all) } });
+            return Vec::new();
+        }
+        if has("session.pin.toggle") {
+            if let Some(r) = chosen {
+                self.prefs.toggle_pin(&r.value);
+            }
+            self.dialog = Some(Dialog::Sessions { query, selected, all, confirm: None });
+            return Vec::new();
+        }
+        if has("session.list.all") {
+            all = !all;
+            self.past = None;
+            self.dialog = Some(Dialog::Sessions { query, selected: 0, all, confirm: None });
+            return vec![self.history_call(all, Then::History)];
+        }
+        select(key, ids, Some(&mut query), &mut selected, rows.len(), page);
+        self.dialog = Some(Dialog::Sessions { query, selected, all, confirm: None });
+        Vec::new()
+    }
+
+    fn timeline_key(&mut self, key: &KeyEvent, ids: &[&str], mut query: String, mut selected: usize, page: usize) -> Vec<Action> {
+        let rows = self.timeline_rows(&query);
+        if ids.contains(&"dialog.close") {
+            self.dialog = None;
+        } else if ids.contains(&"dialog.select.submit") {
+            self.dialog = None;
+            if let Some(i) = rows.get(selected).and_then(|r| r.value.parse().ok()) {
+                self.jumped.set(None);
+                self.jump.set(Some(i));
+            }
+        } else {
+            select(key, ids, Some(&mut query), &mut selected, rows.len(), page);
+            self.dialog = Some(Dialog::Timeline { query, selected });
+        }
+        Vec::new()
+    }
+
+    /// The worktrees dialog's keys: move the session (enter too), new, delete on a second press, refresh.
+    fn worktrees_key(&mut self, key: &KeyEvent, ids: &[&str], mut selected: usize, confirm: Option<String>, page: usize) -> Vec<Action> {
+        let has = |id: &str| ids.contains(&id);
+        let rows = self.worktree_rows();
+        let chosen = rows.get(selected).cloned();
+        if has("dialog.close") {
+            self.dialog = None;
+            return Vec::new();
+        }
+        if has("dialog.select.submit") || has("dialog.move_session.move") {
+            let Some(r) = chosen else { return Vec::new() };
+            let Some(session) = self.live() else { return self.need_session() };
+            self.dialog = None;
+            if r.current {
+                return Vec::new();
+            }
+            return vec![Action::Call { method: "session.move", params: json!({ "session": session, "cwd": r.value }), then: Then::Started { replaces: Some(session) } }];
+        }
+        if has("dialog.move_session.new") {
+            self.dialog = Some(Dialog::Input { title: "New worktree".into(), text: String::new(), purpose: Purpose::Worktree });
+            return Vec::new();
+        }
+        if has("dialog.move_session.delete") {
+            let Some(r) = chosen else { return Vec::new() };
+            if r.detail.contains("main checkout") {
+                self.notice = Some("The project's own checkout is not removed from here".into());
+                return Vec::new();
+            }
+            if confirm.as_deref() != Some(r.value.as_str()) {
+                self.notice = Some(format!("Press {} again to remove {}; its branch and commits stay", self.keymap.first("dialog.move_session.delete"), r.value));
+                self.dialog = Some(Dialog::Worktrees { selected, confirm: Some(r.value) });
+                return Vec::new();
+            }
+            self.dialog = Some(Dialog::Worktrees { selected: 0, confirm: None });
+            return vec![Action::Call { method: "worktree.remove", params: json!({ "cwd": self.cwd, "path": r.value }), then: Then::WorktreesChanged }];
+        }
+        if has("dialog.move_session.refresh") {
+            self.dialog = Some(Dialog::Worktrees { selected, confirm: None });
+            return vec![self.worktrees_call()];
+        }
+        select(key, ids, None, &mut selected, rows.len(), page);
+        self.dialog = Some(Dialog::Worktrees { selected, confirm: None });
+        Vec::new()
+    }
+
+    fn input_key(&mut self, key: &KeyEvent, ids: &[&str], title: String, mut text: String, purpose: Purpose) -> Vec<Action> {
+        if ids.contains(&"dialog.close") {
+            self.dialog = match purpose {
+                Purpose::Worktree => Some(Dialog::Worktrees { selected: 0, confirm: None }),
+                _ => None,
+            };
+            return Vec::new();
+        }
+        if ids.contains(&"dialog.select.submit") {
+            let value = text.trim().to_string();
+            if value.is_empty() {
+                return Vec::new();
+            }
+            self.dialog = None;
+            return match purpose {
+                Purpose::Rename { id, cwd, all } => {
+                    let then = match all {
+                        Some(all) => {
+                            self.dialog = Some(Dialog::Sessions { query: String::new(), selected: 0, all, confirm: None });
+                            Then::Refresh { all }
+                        }
+                        None => Then::Notice("Session renamed"),
+                    };
+                    vec![Action::Call { method: "session.rename", params: json!({ "cwd": cwd, "ledgerSessionId": id, "title": value }), then }]
+                }
+                Purpose::Worktree => {
+                    self.dialog = Some(Dialog::Worktrees { selected: 0, confirm: None });
+                    vec![Action::Call { method: "worktree.create", params: json!({ "cwd": self.cwd, "name": value }), then: Then::WorktreesChanged }]
+                }
+                Purpose::Cd => match self.live() {
+                    Some(session) => vec![Action::Call { method: "session.move", params: json!({ "session": session, "cwd": value }), then: Then::Started { replaces: Some(session) } }],
+                    None => self.need_session(),
+                },
+            };
+        }
+        if key.code == KeyCode::Backspace {
+            text.pop();
+        } else if let KeyCode::Char(c) = key.code {
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+                text.push(c);
+            }
+        }
+        self.dialog = Some(Dialog::Input { title, text, purpose });
         Vec::new()
     }
 
@@ -629,6 +1171,7 @@ impl App {
     }
 
     pub fn on_scroll(&mut self, up: bool, rows: usize) {
+        self.settle();
         if let Some(Dialog::Aside { scroll, .. }) = &mut self.dialog {
             *scroll = if up { scroll.saturating_sub(rows) } else { scroll.saturating_add(rows) };
             return;
@@ -681,6 +1224,7 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return Vec::new();
         }
+        self.settle();
         if let Some(at) = self.leader.take() {
             if now.duration_since(at) < LEADER_WINDOW {
                 for id in self.keymap.matches(&key, true) {
@@ -730,6 +1274,11 @@ impl App {
     /// Runs an action (`keymap::DEFS`) where it applies; `None` where it does not, so the key's next action is tried.
     /// The comments name OpenCode's actions where Lykos's differ.
     fn run(&mut self, id: &str, now: Instant, page: usize) -> Option<Vec<Action>> {
+        if id.starts_with("session.") || id == "open.menu" {
+            if let Some(out) = self.run_session(id) {
+                return Some(out);
+            }
+        }
         let w = self.input_cols.max(1);
         let e = &mut self.editor;
         match id {
@@ -871,8 +1420,13 @@ impl App {
         if let Dialog::Palette { query, selected } = dialog {
             return self.palette_key(key, &ids, query, selected, now, page);
         }
-        if let Dialog::List { list, query, selected } = dialog {
-            return self.list_key(key, &ids, list, query, selected, page);
+        match dialog {
+            Dialog::List { list, query, selected } => return self.list_key(key, &ids, list, query, selected, page),
+            Dialog::Sessions { query, selected, all, confirm } => return self.sessions_key(key, &ids, query, selected, all, confirm, page),
+            Dialog::Timeline { query, selected } => return self.timeline_key(key, &ids, query, selected, page),
+            Dialog::Worktrees { selected, confirm } => return self.worktrees_key(key, &ids, selected, confirm, page),
+            Dialog::Input { title, text, purpose } => return self.input_key(key, &ids, title, text, purpose),
+            _ => {}
         }
         if has("dialog.close") {
             self.dialog = None;
@@ -881,7 +1435,7 @@ impl App {
         let step = |sel: usize, n: usize, up: bool| if n == 0 { 0 } else if up { (sel + n - 1) % n } else { (sel + 1) % n };
         let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
-            Dialog::Palette { .. } | Dialog::List { .. } => {}
+            Dialog::Palette { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
             Dialog::Info { info } => {
                 if info == Info::Debug && has("debug.copy") {
                     let text = self.debug_rows().iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
@@ -1188,6 +1742,7 @@ impl App {
             Local::Status => self.dialog = Some(Dialog::Info { info: Info::Status }),
             Local::Mcps => self.dialog = Some(Dialog::Info { info: Info::Mcp }),
             Local::Debug => self.dialog = Some(Dialog::Info { info: Info::Debug }),
+            Local::Run(id) => return self.run_session(id).unwrap_or_default(),
         }
         Vec::new()
     }
@@ -1316,6 +1871,46 @@ impl App {
         self.asides += 1;
         vec![Action::Aside { session, text: question }]
     }
+}
+
+/// A list dialog's movement and search keys: up and down wrap, pages stop at the ends, and typing (with `query`)
+/// searches from the top.
+fn select(key: &KeyEvent, ids: &[&str], query: Option<&mut String>, selected: &mut usize, n: usize, page: usize) {
+    let has = |id: &str| ids.contains(&id);
+    if has("dialog.select.prev") {
+        *selected = if n == 0 { 0 } else { (*selected + n - 1) % n };
+    } else if has("dialog.select.next") {
+        *selected = if n == 0 { 0 } else { (*selected + 1) % n };
+    } else if has("dialog.select.page_up") {
+        *selected = selected.saturating_sub(page);
+    } else if has("dialog.select.page_down") {
+        *selected = (*selected + page).min(n.saturating_sub(1));
+    } else if let Some(query) = query {
+        if key.code == KeyCode::Backspace {
+            query.pop();
+            *selected = 0;
+        } else if let KeyCode::Char(c) = key.code {
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+                query.push(c);
+                *selected = 0;
+            }
+        }
+    }
+}
+
+/// Today's UTC date as `YYYY-MM-DD` (Howard Hinnant's `civil_from_days`).
+fn today_utc() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 #[cfg(test)]
@@ -1550,7 +2145,7 @@ mod tests {
         app.on_keybinds(Ok(serde_json::json!({ "keybinds": {
             "input.submit": { "value": "ctrl+s", "source": "project (C:/w/.lykos/config.yaml)" },
             "app.exit": { "value": false, "source": "global (C:/u/.lykos/config.yaml)" },
-            "leader": { "value": "ctrl+o", "source": "global (C:/u/.lykos/config.yaml)" },
+            "leader": { "value": "ctrl+q", "source": "global (C:/u/.lykos/config.yaml)" },
             "prompt.editor": { "value": ["<leader>e", "f4"], "source": "project (C:/w/.lykos/config.yaml)" },
         }})));
         assert_eq!(app.notice, None);
@@ -1559,11 +2154,11 @@ mod tests {
         assert_eq!(press(&mut app, ctrl('s')), vec![Action::Prompt { session: "s1".into(), text: "hi".into() }]);
         assert_eq!(press(&mut app, ctrl('c')), vec![], "exit unbound: ctrl+c on an empty prompt does nothing");
         assert_eq!(press(&mut app, key(KeyCode::F(4))), vec![Action::Editor(String::new())]);
-        press(&mut app, ctrl('o'));
+        press(&mut app, ctrl('q'));
         assert_eq!(press(&mut app, key(KeyCode::Char('e'))), vec![Action::Editor(String::new())], "the new leader");
         press(&mut app, ctrl('x'));
         assert_eq!(press(&mut app, key(KeyCode::Char('e'))), vec![], "ctrl+x is no longer the leader");
-        assert_eq!(app.keymap.keys("prompt.editor"), "ctrl+o e, f4");
+        assert_eq!(app.keymap.keys("prompt.editor"), "ctrl+q e, f4");
         assert_eq!(app.keymap.source("input.submit"), "project (C:/w/.lykos/config.yaml)");
         app.on_keybinds(Ok(serde_json::json!({ "keybinds": { "nope": { "value": "ctrl+q", "source": "project (p)" } } })));
         assert_eq!(app.notice.as_deref(), Some("unknown keybind nope (project (p))"));
@@ -1785,5 +2380,162 @@ mod tests {
         assert_eq!(app.prefs.theme.as_deref(), Some("catppuccin-latte"));
         app.run("theme.switch_mode", Instant::now(), 10);
         assert_eq!(theme::c().name, "catppuccin-mocha");
+    }
+
+    fn session_event(app: &mut App, id: &str, seq: u64, status: SessionStatus, ledger: &str, title: &str) -> Vec<Action> {
+        let summary = SessionSummary {
+            id: id.into(),
+            cwd: "/w".into(),
+            status,
+            model: "m1".into(),
+            title: Some(title.into()),
+            started_at: "2026-11-23T00:00:00Z".into(),
+            origin: "tui".into(),
+            ledger_session_id: Some(ledger.into()),
+        };
+        app.on_event(&Event { event: "session.status".into(), session: id.into(), seq, data: EventData::SessionStatus { session: summary } })
+    }
+
+    fn event(app: &mut App, id: &str, seq: u64, data: EventData) -> Vec<Action> {
+        app.on_event(&Event { event: String::new(), session: id.into(), seq, data })
+    }
+
+    fn calls(out: &[Action]) -> Vec<(&'static str, Value)> {
+        out.iter().filter_map(|a| if let Action::Call { method, params, .. } = a { Some((*method, params.clone())) } else { None }).collect()
+    }
+
+    fn two_tabs() -> App {
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.started("s1".into());
+        session_event(&mut app, "s1", 1, SessionStatus::Idle, "L1", "first");
+        app.started("s2".into());
+        session_event(&mut app, "s2", 1, SessionStatus::Idle, "L2", "second");
+        app
+    }
+
+    #[test]
+    fn tabs_cycle_close_to_the_neighbour_reopen_and_mark_a_finished_turn_unread() {
+        let mut app = two_tabs();
+        assert_eq!(app.tabs.open, ["s1", "s2"]);
+        assert_eq!(app.session.as_deref(), Some("s2"));
+        event(&mut app, "s1", 2, EventData::TurnEnd);
+        assert!(app.tabs.unread.contains("s1"), "a turn that ended out of sight is unread");
+        let out = press(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert_eq!(app.session.as_deref(), Some("s1"));
+        assert_eq!(out, vec![Action::Options { session: "s1".into() }], "the lists are asked for the tab shown");
+        assert!(app.tabs.unread.is_empty());
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('w')));
+        assert_eq!(app.tabs.open, ["s2"]);
+        assert_eq!(app.session.as_deref(), Some("s2"));
+        press(&mut app, KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL | KeyModifiers::SHIFT));
+        assert_eq!(app.tabs.open, ["s1", "s2"], "reopened where it was");
+        assert_eq!(app.session.as_deref(), Some("s1"));
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('2')));
+        assert_eq!(app.session.as_deref(), Some("s2"));
+        // A new session: the home screen, and the next prompt starts one.
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('n')));
+        assert!(app.session.is_none());
+        typed(&mut app, "hi");
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![Action::Start]);
+    }
+
+    #[test]
+    fn undo_redo_fork_and_compact_run_the_sessions_commands_and_an_undone_prompt_comes_back() {
+        let mut app = idle();
+        for (k, cmd) in [('u', "/undo"), ('r', "/redo"), ('c', "/compact")] {
+            press(&mut app, ctrl('x'));
+            assert_eq!(sent(&press(&mut app, key(KeyCode::Char(k)))), [cmd]);
+        }
+        assert_eq!(sent(&app.run("session.fork", Instant::now(), 10).unwrap()), ["/fork"]);
+        event(&mut app, "s1", 2, EventData::PromptSet { text: "do it again".into() });
+        assert_eq!(app.editor.text(), "do it again");
+    }
+
+    #[test]
+    fn the_session_list_groups_pins_resumes_renames_and_archives_on_a_second_press() {
+        let mut app = two_tabs();
+        press(&mut app, ctrl('x'));
+        let out = press(&mut app, key(KeyCode::Char('l')));
+        assert_eq!(calls(&out), [("sessions.history", json!({ "cwd": "/w", "all": false }))]);
+        let today = format!("{}T09:30:00Z", today_utc());
+        let history = json!({
+            "rows": [
+                { "id": "L2", "title": "second", "startedUtc": today, "endedUtc": null, "model": null, "parentSessionId": null, "archived": false, "resumable": true, "projectPath": null, "projectName": null },
+                { "id": "L1", "title": "first", "startedUtc": "2026-01-02T08:00:00Z", "endedUtc": null, "model": null, "parentSessionId": null, "archived": false, "resumable": true, "projectPath": null, "projectName": null },
+                { "id": "L0", "title": "old", "startedUtc": "2026-01-01T08:00:00Z", "endedUtc": "2026-01-01T09:00:00Z", "model": null, "parentSessionId": null, "archived": false, "resumable": true, "projectPath": null, "projectName": null },
+                { "id": "C1", "title": "a subagent", "startedUtc": "2026-01-01T08:10:00Z", "endedUtc": null, "model": null, "parentSessionId": "L0", "archived": false, "resumable": false, "projectPath": null, "projectName": null }
+            ],
+            "live": { "L1": "s1", "L2": "s2" }
+        });
+        app.on_reply(Then::History, Ok(history));
+        let rows = app.session_rows("", None);
+        let groups: Vec<(&str, &str)> = rows.iter().map(|r| (r.value.as_str(), r.group.as_str())).collect();
+        assert_eq!(groups, [("L2", "Today"), ("L1", "2026-01-02"), ("L0", "2026-01-01")], "root sessions only, by day");
+        assert!(rows[0].current, "the session shown is marked");
+        // Pin the third: it moves to the top under Pinned.
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, ctrl('f'));
+        assert_eq!(app.session_rows("", None)[0].group, "Pinned");
+        assert_eq!(app.session_rows("", None)[0].value, "L0");
+        // A live session is its tab; one that is not is resumed. The selection stayed on the third row: L1.
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.session.as_deref(), Some("s1"));
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('l')));
+        app.on_reply(Then::History, Ok(json!({ "rows": [{ "id": "L0", "title": "old", "startedUtc": "2026-01-01T08:00:00Z", "endedUtc": null, "model": null, "parentSessionId": null, "archived": false, "resumable": true, "projectPath": "/p", "projectName": null }], "live": {} })));
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert_eq!(calls(&out), [("session.start", json!({ "cwd": "/p", "origin": "tui", "resume": "L0" }))]);
+        assert_eq!(app.on_reply(Then::Started { replaces: None }, Ok(json!({ "id": "s3" }))), vec![]);
+        assert_eq!(app.tabs.open, ["s1", "s2", "s3"]);
+        // Delete arms on the first press and archives on the second.
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('l')));
+        app.on_reply(Then::History, Ok(json!({ "rows": [{ "id": "L0", "title": "old", "startedUtc": "2026-01-01T08:00:00Z", "endedUtc": null, "model": null, "parentSessionId": null, "archived": false, "resumable": true, "projectPath": null, "projectName": null }], "live": {} })));
+        assert!(calls(&press(&mut app, ctrl('d'))).is_empty());
+        assert!(app.session_rows("", Some("L0"))[0].title.starts_with("Press ctrl+d again"));
+        let out = press(&mut app, ctrl('d'));
+        assert_eq!(calls(&out), [("session.archive", json!({ "cwd": "/w", "ledgerSessionId": "L0" }))]);
+        // Rename from the list.
+        app.on_reply(Then::History, Ok(json!({ "rows": [{ "id": "L0", "title": "old", "startedUtc": "2026-01-01T08:00:00Z", "endedUtc": null, "model": null, "parentSessionId": null, "archived": false, "resumable": true, "projectPath": null, "projectName": null }], "live": {} })));
+        press(&mut app, ctrl('r'));
+        typed(&mut app, "er");
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert_eq!(calls(&out), [("session.rename", json!({ "cwd": "/w", "ledgerSessionId": "L0", "title": "older" }))]);
+    }
+
+    #[test]
+    fn the_timeline_jumps_to_a_prompt_and_copy_export_and_the_worktrees_ask_the_server() {
+        let mut app = idle();
+        event(&mut app, "s1", 2, EventData::MessageUser { text: "first prompt".into() });
+        event(&mut app, "s1", 3, EventData::MessageDelta { text: "answer".into() });
+        event(&mut app, "s1", 4, EventData::MessageUser { text: "second prompt".into() });
+        press(&mut app, ctrl('x'));
+        press(&mut app, key(KeyCode::Char('g')));
+        let titles: Vec<String> = app.timeline_rows("").into_iter().map(|r| r.title).collect();
+        assert_eq!(titles, ["second prompt", "first prompt"], "newest first");
+        press(&mut app, key(KeyCode::Down));
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.jump.get(), Some(0), "the first prompt's item");
+        let out = app.run("session.copy", Instant::now(), 10).unwrap();
+        assert!(matches!(&out[..], [Action::Copy(t)] if t.starts_with("## User\n\nfirst prompt") && t.contains("## Assistant\n\nanswer")));
+        session_event(&mut app, "s1", 5, SessionStatus::Idle, "L9", "t");
+        assert_eq!(app.run("session.copy.id", Instant::now(), 10).unwrap(), vec![Action::Copy("L9".into())]);
+        assert_eq!(app.notice.as_deref(), Some("Session ID copied to clipboard!"));
+        press(&mut app, ctrl('x'));
+        let out = press(&mut app, key(KeyCode::Char('x')));
+        assert_eq!(calls(&out), [("session.export", json!({ "cwd": "/w", "ledgerSessionId": "L9", "file": "session-L9.md" }))]);
+        let out = app.run("session.move", Instant::now(), 10).unwrap();
+        assert_eq!(calls(&out), [("worktree.list", json!({ "cwd": "/w" }))]);
+        app.on_reply(Then::Worktrees, Ok(json!([{ "path": "/w", "branch": "main", "head": "abc", "main": true, "sessions": true }, { "path": "/t/one", "branch": "lykos/one", "head": "def", "main": false }])));
+        press(&mut app, key(KeyCode::Down));
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert_eq!(calls(&out), [("session.move", json!({ "session": "s1", "cwd": "/t/one" }))]);
+        assert_eq!(app.on_reply(Then::Started { replaces: Some("s1".into()) }, Ok(json!({ "id": "s5" }))), vec![]);
+        assert_eq!(app.tabs.open, ["s5"], "the moved session replaces its tab");
     }
 }

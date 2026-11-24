@@ -100,7 +100,7 @@ impl Session {
             EventData::Request { request } => self.requests.push(request.clone()),
             EventData::RequestResolved { request_id, .. } => self.requests.retain(|r| &r.request_id != request_id),
             EventData::Commands { commands } => self.commands = commands.clone(),
-            EventData::Unknown => {}
+            EventData::PromptSet { .. } | EventData::Unknown => {}
         }
     }
 }

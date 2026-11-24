@@ -9,6 +9,7 @@ mod menu;
 mod paste;
 mod prefs;
 mod stash;
+mod tabs;
 mod theme;
 mod view;
 mod wrap;
@@ -27,7 +28,7 @@ use lykos_client::{Client, Event, EventData, Options, SessionOptions, SessionSta
 use lykos_term::{Terminal, TerminalGuard};
 use serde_json::{json, Value};
 
-use app::{Action, App, Link};
+use app::{Action, App, Link, Then};
 
 /// One frame of the spinner.
 const TICK: Duration = Duration::from_millis(80);
@@ -47,6 +48,8 @@ enum Msg {
     Keybinds(Result<Value, String>),
     /// `session.options`' answer.
     Options(Result<SessionOptions, String>),
+    /// An `Action::Call`'s answer.
+    Reply(Then, Result<Value, String>),
 }
 
 /// The input thread reads the terminal unless `pause` is set, and says so in `parked`: the external editor owns
@@ -259,6 +262,7 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             app.on_options(result);
             Vec::new()
         }
+        Msg::Reply(then, result) => app.on_reply(then, result),
     }
 }
 
@@ -393,6 +397,13 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
             Action::Options { session } => Ok(Msg::Options(
                 client.request("session.options", json!({ "session": session })).map_err(|e| e.to_string()).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())),
             )),
+            Action::Call { method, params, then } => {
+                let mut params = params.clone();
+                if *method == "session.start" && args.trust {
+                    params["trust"] = Value::Bool(true);
+                }
+                Ok(Msg::Reply(then.clone(), client.request(method, params).map_err(|e| e.to_string())))
+            }
             Action::Quit => return,
             // The main loop does these itself.
             Action::Aside { .. } | Action::ListFiles | Action::Copy(_) | Action::Editor(_) => continue,

@@ -16,7 +16,7 @@ It never writes its own state to `.pi/`.
   run/                         The engine server: engine.key, engine.log, engine.sock (Linux)
   projects.json                Registry of known projects and roots
   tui/prompt-stash.jsonl       lykos-tui's stashed prompts, the last 50 (`LYKOS_TUI_DIR` moves tui/)
-  tui/state.json               lykos-tui's theme, recent models (the last 10) and favorite models
+  tui/state.json               lykos-tui's theme, recent models (the last 10), favorite models and pinned sessions
 
 .lykos/                        Project-local state (gitignored except tracked policies)
   config.yaml                  Project configuration overrides

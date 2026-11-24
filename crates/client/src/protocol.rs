@@ -166,9 +166,47 @@ pub enum EventData {
     /// The slash commands the session runs, sent once it has booted.
     #[serde(rename = "commands")]
     Commands { commands: Vec<CommandInfo> },
+    /// The session put text back in the prompt: an undone prompt (P5 #42).
+    #[serde(rename = "prompt.set")]
+    PromptSet { text: String },
     /// An event a newer server sends that this client does not know: kept in order, shown as nothing.
     #[serde(other)]
     Unknown,
+}
+
+/// One row of `sessions.history` (`lykos/server/history.ts`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryRow {
+    pub id: String,
+    pub title: Option<String>,
+    pub started_utc: String,
+    pub ended_utc: Option<String>,
+    pub model: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub archived: bool,
+    pub resumable: bool,
+    pub project_path: Option<String>,
+    pub project_name: Option<String>,
+}
+
+/// `sessions.history`' answer: the rows, and the live sessions by ledger id.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct History {
+    pub rows: Vec<HistoryRow>,
+    pub live: std::collections::BTreeMap<String, String>,
+}
+
+/// One row of `worktree.list`: a worktree of the project, the main checkout first.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Worktree {
+    pub path: String,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub main: bool,
+    /// A session runs there.
+    #[serde(default)]
+    pub sessions: bool,
 }
 
 /// One event; `seq` counts from 1 per session.

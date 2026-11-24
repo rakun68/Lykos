@@ -24,9 +24,11 @@ pub enum Local {
     Status,
     Mcps,
     Debug,
+    /// A session action (`keymap::DEFS`), P5 #42.
+    Run(&'static str),
 }
 
-pub const LOCAL: [(Local, &str, &str); 15] = [
+pub const LOCAL: [(Local, &str, &str); 19] = [
     (Local::Btw, "/btw", "Ask a side question; the answer stays out of the conversation"),
     (Local::Editor, "/editor", "Open the prompt in your editor"),
     (Local::Images, "/images", "View the images attached to the prompt"),
@@ -43,6 +45,10 @@ pub const LOCAL: [(Local, &str, &str); 15] = [
     (Local::Status, "/status", "View status"),
     (Local::Mcps, "/mcps", "MCP servers"),
     (Local::Debug, "/debug", "View debug info"),
+    (Local::Run("session.list"), "/sessions", "Switch session"),
+    (Local::Run("open.menu"), "/open", "Open session or project"),
+    (Local::Run("session.timeline"), "/timeline", "Jump to message"),
+    (Local::Run("session.move"), "/worktrees", "Manage workspaces"),
 ];
 
 /// The session's own commands typed bare open their list; with an argument they go to the session.
@@ -52,6 +58,9 @@ pub fn bare(name: &str) -> Option<Local> {
         "/effort" => Some(Local::Effort),
         "/specialist" => Some(Local::Agents),
         "/login" => Some(Local::Connect),
+        "/resume" => Some(Local::Run("session.list")),
+        "/new" => Some(Local::Run("session.new")),
+        "/rename" => Some(Local::Run("session.rename")),
         _ => None,
     }
 }

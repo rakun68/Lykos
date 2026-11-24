@@ -1,6 +1,7 @@
 // Drives the built TUI in a real pty against the real TypeScript engine server and its scripted session child
 // (P5 #37, #38): a prompt starts a session and its reply streams in; Esc twice interrupts; `/` and `@` complete;
-// a queued prompt waits for the turn; /btw answers aside; stash and history recall; ctrl+c quits.
+// a queued prompt waits for the turn; /btw answers aside; stash and history recall; sessions and tabs (#42);
+// ctrl+c quits.
 //
 //   cargo build --release -p lykos-tui && node scripts/tui/tui-test.mjs [binary]
 import assert from "node:assert/strict";
@@ -40,6 +41,12 @@ const type = async (text) => {
   for (const k of text) {
     s.write(k);
     await new Promise((r) => setTimeout(r, 30));
+  }
+};
+const key = async (...keys) => {
+  for (const k of keys) {
+    s.press(k);
+    await new Promise((r) => setTimeout(r, 60));
   }
 };
 const submit = async (text) => {
@@ -109,6 +116,21 @@ try {
   s.press("enter");
   await step("/stash pop brings it back", () => s.screen().includes("keep") && !s.screen().includes("/stash"));
   s.press("ctrl+c");
+  // Sessions and tabs (P5 #42): a new session opens the home screen, its first prompt opens a second tab, the
+  // tabs switch, the session list opens, and a closed tab's neighbour shows.
+  const top = () => s.screen().split("\n")[0];
+  await key("ctrl+x", "n");
+  await step("a new session opens the home screen", () => s.screen().includes("Ask anything") && !s.screen().includes("hello there"));
+  await submit("second session");
+  await step("its first prompt opens a second tab", () => /1 .+2 /.test(top()));
+  s.write("\x1b[1;3A");
+  await step("alt+up shows the first tab", () => s.screen().includes("hello there"));
+  await key("ctrl+x", "l");
+  await step("the session list opens", () => s.screen().includes("Sessions  Search sessions"));
+  s.press("esc");
+  await step("esc closes it", () => !s.screen().includes("Search sessions"));
+  await key("ctrl+x", "w");
+  await step("closing the tab shows its neighbour", () => !/1 .+2 /.test(top()) && s.screen().includes("second session"));
   s.write("bye");
   await step("bye is typed", () => s.screen().includes("bye"));
   // One key at a time, as a person types: ConPTY delivers only the first of two ctrl+c bytes sent together.

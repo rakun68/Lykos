@@ -1,6 +1,6 @@
 //! What the pickers remember across runs, as OpenCode keeps it at `4332e24`: the recent models (newest first, at
 //! most 10) and the favorites (`model-preference.ts`), and the theme (`context/theme.tsx`, in its kv store).
-//! Lykos keeps the three in one file, `~/.lykos/tui/state.json`. What does not parse is skipped.
+//! The session list's pins (`dialog-session-list.tsx`, P5 #42) are ledger session ids. Lykos keeps them in one file, `~/.lykos/tui/state.json`. What does not parse is skipped.
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
@@ -14,6 +14,8 @@ pub struct Prefs {
     /// `provider/id`, newest first.
     pub recent: Vec<String>,
     pub favorite: Vec<String>,
+    /// Pinned sessions' ledger ids, newest pin first.
+    pub pinned: Vec<String>,
 }
 
 fn names(v: &Value) -> Vec<String> {
@@ -25,7 +27,7 @@ impl Prefs {
         let v: Value = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
         let mut recent = names(&v["recent"]);
         recent.truncate(RECENT);
-        Prefs { path, theme: v["theme"].as_str().map(str::to_string), recent, favorite: names(&v["favorite"]) }
+        Prefs { path, theme: v["theme"].as_str().map(str::to_string), recent, favorite: names(&v["favorite"]), pinned: names(&v["pinned"]) }
     }
 
     /// `recentModels`: to the front, once, and at most ten.
@@ -46,6 +48,16 @@ impl Prefs {
         self.save();
     }
 
+    /// `session.pin.toggle`.
+    pub fn toggle_pin(&mut self, id: &str) {
+        let had = self.pinned.iter().any(|m| m == id);
+        self.pinned.retain(|m| m != id);
+        if !had {
+            self.pinned.insert(0, id.to_string());
+        }
+        self.save();
+    }
+
     pub fn set_theme(&mut self, name: &str) {
         self.theme = Some(name.to_string());
         self.save();
@@ -56,7 +68,7 @@ impl Prefs {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let v = json!({ "theme": self.theme, "recent": self.recent, "favorite": self.favorite });
+        let v = json!({ "theme": self.theme, "recent": self.recent, "favorite": self.favorite, "pinned": self.pinned });
         let _ = std::fs::write(path, format!("{v}\n"));
     }
 }
@@ -78,10 +90,12 @@ mod tests {
         p.toggle_favorite("p/b");
         p.toggle_favorite("p/a");
         p.set_theme("rose-pine");
+        p.toggle_pin("s1");
         let again = Prefs::load(Some(path));
         assert_eq!(again.recent.len(), RECENT);
         assert_eq!(&again.recent[..3], ["p/m5", "p/m11", "p/m10"]);
         assert_eq!(again.favorite, ["p/b"]);
+        assert_eq!(again.pinned, ["s1"]);
         assert_eq!(again.theme.as_deref(), Some("rose-pine"));
         let _ = std::fs::remove_dir_all(dir);
     }

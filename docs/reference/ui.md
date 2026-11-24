@@ -279,6 +279,61 @@ Where the lists differ from OpenCode on purpose:
 - The debug dialog has no date row.
 - `/usage` and `/thinking` stay the session's commands.
 
+**Sessions and tabs (#42).** OpenCode's session list, tabs, timeline and session actions. The list,
+rename, archive, export and worktrees go to the engine server (`sessions.history`, `session.rename`,
+`session.archive`, `session.export`, `session.move`, `worktree.*`,
+[engine-server.md](engine-server.md)); fork, compact, undo and redo go to the session as `/fork`,
+`/compact`, `/undo` and `/redo` (section 2.2).
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+X N` | New session: the home screen; the next prompt starts it in a new tab |
+| `Ctrl+X L`; `Ctrl+O` | The session list of this project; of every project |
+| `Alt+Up`, `Alt+Down`, `Ctrl+Shift+Tab`, `Ctrl+Tab` | Previous, next tab, wrapping |
+| `Alt+Shift+Up`, `Alt+Shift+Down` | Previous, next unread tab: a session whose turn ended out of sight |
+| `Ctrl+X W`; `Ctrl+Shift+T` | Close the tab (the session keeps running on the server); reopen the last closed, where it was |
+| `Ctrl+X 1` to `Ctrl+X 0`, `Ctrl+1` to `Ctrl+0` | Tab 1 to 10 |
+| `Ctrl+X G` | The timeline: the session's prompts, newest first; `Enter` scrolls to one |
+| `Ctrl+X C`; `Ctrl+X U`; `Ctrl+X R` | Compact; undo the last prompt, back into the box; redo |
+| `Ctrl+X X` | Export: P22's Markdown, as `lykos export` writes it, to `session-<id>.md` in the workspace |
+
+TUI commands: `/sessions` (bare `/resume` too) the list, `/open` every project's, `/timeline`,
+`/worktrees`; bare `/new` and `/rename` run the TUI's, and with an argument go to the session.
+
+The session list shows root sessions that are not archived: Pinned first, then by the UTC day they
+started (`Today`, else the date), newest first, the one shown marked `●` and a pinned one `*`.
+Typing filters by title. `Enter` shows the session's tab when it runs here, and resumes it otherwise
+(the resume's preflight question shows as a request). `Ctrl+D` twice archives it: the ledger row and
+transcript stay, `lykos session --all` lists it, and a resume clears the archive. `Ctrl+R` renames it,
+`Ctrl+F` pins it (kept in `state.json`), `Ctrl+A` switches between this project and every project.
+
+Manage workspaces (`/worktrees`) lists the
+project's worktrees. `Enter` or `Ctrl+M` moves the session there: it closes and resumes in that
+directory under the same ledger session. `Ctrl+A` creates a worktree, at
+`~/.lykos/worktrees/<project id>/<name>` on the branch `lykos/<name>`; `Ctrl+D` twice removes one,
+committing work left in it onto its branch first; `Ctrl+R` refreshes. A worktree session writes the
+main checkout's ledger, so removing the worktree leaves its sessions listed and resumable.
+`session.cd` moves the session to a directory typed in.
+
+No key by default, the palette runs them: rename, fork, copy the transcript (Markdown), copy the
+session id, manage workspaces, change directory, tab history back and forward, and the parent and
+child sessions (`session.parent`, `session.child.first`, `.next`, `.previous`, from the ledger's
+parent links).
+
+Where sessions and tabs differ from OpenCode on purpose:
+
+- Delete archives; nothing is deleted.
+- Fork forks at the current point (P22's `/fork`), not from a chosen message.
+- Worktrees are on a `lykos/<name>` branch, not detached, and removal commits what was left in them.
+- The parent and child keys (OpenCode's arrows) and tab history forward (`Ctrl+I`, which a terminal
+  sends as `Tab`) are unbound; `session.rename` has no key in the prompt, where `Ctrl+R` searches
+  history.
+- The session list groups by UTC day and shows the start time; there is no server-side search and
+  no quick-switch slots (they share `Ctrl+X 1` to `9` with the tabs).
+- Export writes Markdown only, to the workspace, named after the session; there are no export options.
+- The timeline shows no times: the transcript keeps none per message.
+- Closing a tab leaves its session running until the server's idle timeout.
+
 Where it differs from OpenCode on purpose: the context use is always on screen rather than in a
 sidebar, the metadata row has no specialist name, the footer shows the
 workspace without its git branch (reading it would cost a process at startup), and

@@ -144,6 +144,8 @@ _Avoid_: worker, delegate, worker run, sandbox run, delegated run
 **Worktree**:
 In a delegated session, the checkout Lykos makes outside the project for one writing call, on a
 `lykos/` branch named from the session id. It is removed when the call ends and the branch stays.
+In `lykos-tui`, a named one made from Manage workspaces, at `~/.lykos/worktrees/<project id>/<name>`
+on `lykos/<name>`, that a session moves to; removing it commits what was left onto its branch.
 _Avoid_: sandbox copy, scratch checkout, clone
 
 **Write in place**:
@@ -560,6 +562,16 @@ _Avoid_: landing page, start screen
 **Session screen**:
 What `lykos-tui` shows once a session runs: its transcript in one box, the prompt box under it.
 _Avoid_: chat view, conversation pane
+
+**Session tab**:
+One session open in `lykos-tui`, named on the transcript box's top edge. Closing it leaves the session
+running; it is unread when a turn ends while another tab is shown.
+_Avoid_: window, pane, buffer
+
+**Archived session**:
+A session the TUI's session list deleted: its ledger row has `archived_utc`, it stays in
+`lykos session --all` and resumable, and a resume clears the archive. Nothing is deleted.
+_Avoid_: deleted session, trashed session
 
 **Aside**:
 A side question asked with `/btw`, answered from the session's context with no tools. It enters no
