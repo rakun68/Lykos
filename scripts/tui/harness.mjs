@@ -26,7 +26,7 @@ export function keyBytes(key) {
 }
 
 export class TuiSession {
-  constructor(command, args = [], { cols = 120, rows = 40, cwd = process.cwd(), env = {}, scrollback = 0 } = {}) {
+  constructor(command, args = [], { cols = 120, rows = 40, cwd = process.cwd(), env = {}, scrollback = 0, answerQueries = false } = {}) {
     this.cols = cols;
     this.rows = rows;
     this.term = new Terminal({ cols, rows, allowProposedApi: true, scrollback });
@@ -34,12 +34,25 @@ export class TuiSession {
     this.waiters = new Set();
     this.bytes = 0;
     this.spawnedAt = performance.now();
-    this.proc = pty.spawn(command, args, { name: "xterm-256color", cols, rows, cwd, env: { ...process.env, ...env } });
+    this.proc = pty.spawn(command, args, { name: "xterm-256color", cols, rows, cwd, env: Object.fromEntries(Object.entries({ ...process.env, ...env }).filter(([, v]) => v !== undefined)) });
     this.proc.onData((data) => {
       this.bytes += data.length;
       // The callback runs once xterm has parsed the chunk, so a waiter sees the screen the chunk made.
       this.term.write(data, () => this.check());
     });
+    // A real terminal answers a program's queries (device attributes, cursor position); some TUIs wait for the
+    // answer before their first frame. Off by default: the existing tests ran without it.
+    if (answerQueries) {
+      this.term.onData((reply) => this.exit === null && this.proc.write(reply));
+      // xterm-headless leaves the colour queries (OSC 10 and 11) unanswered; OpenTUI waits for them. Answer as a
+      // dark terminal does: white on black.
+      for (const [code, rgb] of [[10, "ffff/ffff/ffff"], [11, "0000/0000/0000"]]) {
+        this.term.parser.registerOscHandler(code, (data) => {
+          if (data === "?" && this.exit === null) this.proc.write(`\x1b]${code};rgb:${rgb}\x07`);
+          return true;
+        });
+      }
+    }
     this.proc.onExit((e) => {
       this.exit = e;
       this.check();
