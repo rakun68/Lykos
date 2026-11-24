@@ -540,6 +540,8 @@ workspace without its git branch (reading it would cost a process at startup), a
 - `/btw` takes its question on the command line; there is no question dialog.
 - On Windows, ConPTY drops the bracketed-paste markers, so keys that arrive together (two or more
   already waiting, then gaps under 15 ms) are read as one paste and its returns as newlines.
+- A paste into a dialog's search or text field (the palette, a list, sessions, the timeline, a name)
+  types it there on one line; a dialog that answers keys, such as a confirmation, takes none of it.
 - Undo keeps at most 16 MiB of snapshots, so a large paste cannot hold memory without bound.
 
 1 MB in the prompt (in-process, release build, 2026-11-23, Windows 10:
@@ -552,7 +554,10 @@ chip, 10.60 ms with 1 MB of text; the paste reaches the screen as a chip in 40 m
 Speed (rule 10): `node scripts/tui/gate.mjs target/release/lykos-tui.exe --ready "Ask anything"`
 holds startup, keystroke latency, frame time, idle CPU, peak memory and binary size against
 `bench/tui-limits.json`. `node scripts/tui/tui-test.mjs` drives it end to end in a pty against the
-real server and the scripted session child.
+real server and the scripted session child. `node scripts/tui/mcp-session.mjs` runs a person's first
+session (`lykos`, trust, a prompt, the palette, `/help`, quit) through the TUI-testing MCP server
+[tui-mcp](https://github.com/nvms/tui-mcp) 1.2.3 (MIT): every key is sent and every check is read
+with its tools (`TUI_MCP` names its `src/server.js`, else `npx -y tui-mcp@1.2.3` runs it).
 
 **The P5 demonstration (#56), 2026-11-24.** `node scripts/tui/compare.mjs --runs 5` measures each TUI in a
 real pty in this repository, with nothing sent to a model: startup from spawn to the input box on screen,

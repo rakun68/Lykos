@@ -1567,7 +1567,22 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: &str) -> Vec<Action> {
-        if self.dialog.is_some() {
+        if let Some(dialog) = &mut self.dialog {
+            // A paste into a dialog's search or text field types its text there, on one line. A dialog that answers
+            // keys (a prompt, a confirmation) takes none of it, so a paste never answers one. On Windows, keys that
+            // arrive together are read as a paste (`paste.rs`), so this is also fast typing into a search.
+            let line: String = text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|c| !c.is_control()).collect();
+            match dialog {
+                Dialog::Palette { query, selected }
+                | Dialog::List { query, selected, .. }
+                | Dialog::Timeline { query, selected }
+                | Dialog::Sessions { query, selected, confirm: None, .. } => {
+                    query.push_str(&line);
+                    *selected = 0;
+                }
+                Dialog::Input { text, .. } => text.push_str(&line),
+                _ => {}
+            }
             return Vec::new();
         }
         if self.terms.focused && self.terminal_shown() {
@@ -2678,6 +2693,20 @@ mod tests {
         press(&mut app, ctrl('u'));
         assert_eq!(app.editor.text(), "after");
         assert!(app.queue.is_empty() && app.dialog.is_none());
+    }
+
+    #[test]
+    fn a_paste_into_a_dialog_types_into_its_search_and_never_answers_a_prompt() {
+        let mut app = idle();
+        press(&mut app, ctrl('p'));
+        app.on_paste("sel\nall");
+        assert!(matches!(&app.dialog, Some(Dialog::Palette { query, selected: 0 }) if query == "sel all"));
+        app.dialog = Some(Dialog::Worktrees { selected: 0, confirm: Some("w".into()) });
+        app.on_paste("y");
+        assert_eq!(app.dialog, Some(Dialog::Worktrees { selected: 0, confirm: Some("w".into()) }), "a confirmation takes no paste");
+        app.dialog = Some(Dialog::Sessions { query: String::new(), selected: 0, all: false, confirm: Some("s".into()) });
+        app.on_paste("y");
+        assert!(matches!(&app.dialog, Some(Dialog::Sessions { query, .. }) if query.is_empty()));
     }
 
     #[test]
