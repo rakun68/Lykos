@@ -448,6 +448,18 @@ The transcript (#44) follows OpenCode's `routes/session/grouping/` and `message-
   only adjacent thoughts (while thinking is hidden) and adjacent reads and searches (while grouping
   is on); high opens those groups. A click on a group's line opens or closes it.
 - **Thinking:** hidden by default; shown, each thought is muted italic text under a `Thought` line.
+- **Markdown:** an answer is drawn, not shown as source (`markdown.rs`, no dependency). Headings lose their `#`
+  and take a colour a level (the first underlined); `**bold**` is bold in a warmer colour; `*italic*`,
+  `~~struck~~` (SGR 9), `<u>underline</u>` and `++underline++` take their attribute; `==marked==` and `` `code` ``
+  take a background. Links (`[text](url)`, `<url>`, a bare `https://`) are underlined in the accent, and a click
+  opens them in the system's browser (`http`, `https` and `mailto` only). Lists get bullets by depth, task
+  boxes `☐`/`☑`, quotes a bar (GitHub's `[!NOTE]` and the rest a label), `---` a rule, tables a box that fits the
+  width. A fenced code block has a background, its language above it, and its syntax coloured (C-like,
+  `#`-comment and SQL-like languages, HTML and XML, CSS, diffs). The inline HTML a model writes (`<b>`, `<i>`,
+  `<s>`, `<mark>`, `<a href>`, `<sub>`, `<sup>`, `<br>`, `<img>`, `<h1>`…, `<details>`) and entities are drawn
+  too. LaTeX (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) loses its delimiters and takes a background of its own;
+  what has a character is drawn as it (`\pi` → π, `\leq` → ≤, `x^2` → x², `x_1` → x₁, `\frac{a}{b}` → a/b,
+  `\sqrt{x}` → √x, `\mathbb{R}` → ℝ), and a display formula is centred. `$5 and $10` stays as it is.
 - **The turn's word:** while the model works, a word from `BUSY_WORDS` (`transcript.rs`: `Prowling`, `Noodling`,
   `Hornswoggling`…) stands where `Thinking` would, the same one a turn in the transcript and beside the spinner in
   the footer (`⠋ Prowling… esc interrupt`).

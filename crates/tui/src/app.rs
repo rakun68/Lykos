@@ -36,6 +36,8 @@ pub enum Action {
     ListFiles,
     /// Puts text on the system clipboard (OSC 52).
     Copy(String),
+    /// Opens a link of the transcript in the system's browser.
+    OpenUrl(String),
     /// Opens the prompt in the external editor; its text comes back as `App::edited_externally`.
     Editor(String),
     /// Asks the session what the lists show (`session.options`); the answer comes back as `App::on_options`.
@@ -703,6 +705,11 @@ impl App {
                 let sel = self.selection?;
                 if !sel.dragged {
                     self.selection = None;
+                    // A click on a link opens it.
+                    let url = self.laid.borrow().as_ref().and_then(|l| l.row(sel.anchor.0)).and_then(|r| r.link_at(sel.anchor.1)).map(str::to_string);
+                    if let Some(url) = url {
+                        return Some(vec![Action::OpenUrl(url)]);
+                    }
                     let head = self.laid.borrow().as_ref().and_then(|l| l.head_at(sel.anchor.0));
                     if let (Some(id), Some(sid)) = (head, self.session.clone()) {
                         let open = self.opened.get(&sid).and_then(|o| o.get(&id).copied()).unwrap_or_else(|| transcript::default_open(self.look(), id.1));
@@ -4475,6 +4482,27 @@ mod tests {
         assert!(app.prefs.scrollbar);
         let s: String = draw(&app).cells.iter().map(|c| c.ch).collect();
         assert!(s.contains('│'), "the scrollbar draws");
+    }
+
+    #[test]
+    fn an_answer_is_drawn_as_markdown_and_a_click_on_its_link_opens_it() {
+        let mut app = idle();
+        event(&mut app, "s1", 2, EventData::MessageUser { text: "go".into() });
+        event(&mut app, "s1", 3, EventData::MessageDelta { text: "## Done\nsee **the** [docs](https://example.com) now".into() });
+        let s: String = draw(&app).cells.iter().map(|c| c.ch).collect();
+        assert!(s.contains("Done") && !s.contains("## Done") && s.contains("see the docs now"), "{s}");
+        let lay = app.laid.borrow().clone().unwrap();
+        let f = app.frame.get().unwrap();
+        let row = (0..lay.total).find(|r| lay.row(*r).is_some_and(|x| x.text.contains("docs"))).unwrap();
+        let r = lay.row(row).unwrap();
+        let col = r.indent + r.text.find("docs").unwrap() as u16 + 1;
+        let at = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: f.x + col, row: f.y + (row - f.top) as u16, modifiers: KeyModifiers::NONE };
+        app.on_mouse(at, Instant::now());
+        let up = app.on_mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), ..at }, Instant::now());
+        assert_eq!(up, vec![Action::OpenUrl("https://example.com".into())]);
+        // A click beside it opens nothing.
+        app.on_mouse(MouseEvent { column: f.x + r.indent, ..at }, Instant::now());
+        assert_eq!(app.on_mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: f.x + r.indent, ..at }, Instant::now()), vec![]);
     }
 
     #[test]

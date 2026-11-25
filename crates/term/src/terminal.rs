@@ -338,7 +338,7 @@ fn push_color(out: &mut Vec<u8>, color: Color, base: u32) {
 
 fn push_style(out: &mut Vec<u8>, style: Style) {
     out.extend_from_slice(b"\x1b[0");
-    for (attr, code) in [(Attr::BOLD, 1), (Attr::DIM, 2), (Attr::ITALIC, 3), (Attr::UNDERLINE, 4), (Attr::REVERSE, 7)] {
+    for (attr, code) in [(Attr::BOLD, 1), (Attr::DIM, 2), (Attr::ITALIC, 3), (Attr::UNDERLINE, 4), (Attr::REVERSE, 7), (Attr::STRIKE, 9)] {
         if style.attr.has(attr) {
             out.push(b';');
             push_num(out, code);

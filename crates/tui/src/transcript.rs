@@ -16,6 +16,7 @@ use std::rc::Rc;
 use lykos_client::{Item, Session, SessionStatus, ToolState};
 use lykos_term::{Attr, Style};
 
+use crate::markdown::{self, Span};
 use crate::theme::{self, c};
 use crate::wrap::wrap;
 
@@ -110,11 +111,30 @@ pub struct Row {
     pub style: Style,
     pub bar: Option<Style>,
     pub bg: Option<Style>,
+    /// An answer's rows: its markdown drawn (`markdown.rs`); `text` is then what they say, for a copy.
+    pub spans: Vec<Span>,
 }
 
 impl Row {
     pub fn plain(indent: u16, text: String, style: Style) -> Row {
-        Row { indent, text, style, bar: None, bg: None }
+        Row { indent, text, style, bar: None, bg: None, spans: Vec::new() }
+    }
+
+    pub fn rich(indent: u16, spans: Vec<Span>) -> Row {
+        Row { indent, text: spans.iter().map(|s| s.text.as_str()).collect(), style: theme::text(), bar: None, bg: None, spans }
+    }
+
+    /// The link drawn `col` columns into the row, if one is.
+    pub fn link_at(&self, col: usize) -> Option<&str> {
+        let mut at = self.indent as usize;
+        for s in &self.spans {
+            let w = unicode_width::UnicodeWidthStr::width(s.text.as_str());
+            if (at..at + w).contains(&col) {
+                return s.link.as_deref();
+            }
+            at += w;
+        }
+        None
     }
 
     pub fn blank() -> Row {
@@ -410,16 +430,18 @@ fn item_rows(ctx: &Ctx, i: usize, indent: u16, rows: &mut Vec<Row>) {
         item @ (Item::User(text) | Item::Followup(text)) => {
             let user_bg = Style::default().on(c().surface);
             let bar = Style::fg(if matches!(item, Item::User(_)) { c().accent } else { c().muted }).on(c().surface);
-            let edge = Row { indent: 0, text: String::new(), style: theme::text(), bar: Some(bar), bg: Some(user_bg) };
+            let edge = Row { indent: 0, text: String::new(), style: theme::text(), bar: Some(bar), bg: Some(user_bg), spans: Vec::new() };
             rows.push(edge.clone());
             for line in wrap(text, ctx.width.saturating_sub(3)) {
-                rows.push(Row { indent: 2, text: line, style: theme::text(), bar: Some(bar), bg: Some(user_bg) });
+                rows.push(Row { indent: 2, text: line, style: theme::text(), bar: Some(bar), bg: Some(user_bg), spans: Vec::new() });
             }
             rows.push(edge);
             rows.push(Row::blank());
         }
         Item::Assistant(text) => {
-            push_wrapped(rows, indent + 3, text.trim_end(), w.saturating_sub(3), theme::text());
+            for spans in markdown::render(text.trim_end(), w.saturating_sub(3)) {
+                rows.push(Row::rich(indent + 3, spans));
+            }
             rows.push(Row::blank());
         }
         // Thinking shown (`ReasoningPart` outside hide mode): a header, then the thought, behind a bar.
@@ -429,9 +451,9 @@ fn item_rows(ctx: &Ctx, i: usize, indent: u16, rows: &mut Vec<Row>) {
             }
             let bar = Some(Style::fg(c().overlay));
             let header = if ctx.done(i) { "Thought".to_string() } else { format!("{} {}…", ctx.spinner(), busy_word(turn_of(ctx.items, i))) };
-            rows.push(Row { indent: indent + 2, text: header, style: Style::fg(c().gold), bar, bg: None });
+            rows.push(Row { indent: indent + 2, text: header, style: Style::fg(c().gold), bar, bg: None, spans: Vec::new() });
             for line in wrap(text.trim(), w.saturating_sub(5)) {
-                rows.push(Row { indent: indent + 2, text: line, style: thought_style(), bar, bg: None });
+                rows.push(Row { indent: indent + 2, text: line, style: thought_style(), bar, bg: None, spans: Vec::new() });
             }
             rows.push(Row::blank());
         }

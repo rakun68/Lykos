@@ -283,7 +283,19 @@ pub fn paint_row(buf: &mut Buffer, x: u16, y: u16, width: u16, row: &Row) {
         Some(bg) => Style { bg: bg.bg, ..row.style },
         None => row.style,
     };
-    buf.text(x + row.indent, y, width.saturating_sub(row.indent), &row.text, style);
+    if row.spans.is_empty() {
+        buf.text(x + row.indent, y, width.saturating_sub(row.indent), &row.text, style);
+        return;
+    }
+    let end = x + width;
+    let mut col = x + row.indent;
+    for span in &row.spans {
+        let style = match (span.style.bg, row.bg) {
+            (lykos_term::Color::Reset, Some(bg)) => Style { bg: bg.bg, ..span.style },
+            _ => span.style,
+        };
+        col = buf.text(col, y, end.saturating_sub(col), &span.text, style);
+    }
 }
 
 /// The screen's side padding at width `w`.

@@ -20,6 +20,7 @@ impl Attr {
     pub const ITALIC: Attr = Attr(4);
     pub const UNDERLINE: Attr = Attr(8);
     pub const REVERSE: Attr = Attr(16);
+    pub const STRIKE: Attr = Attr(32);
 
     pub const fn with(self, other: Attr) -> Attr {
         Attr(self.0 | other.0)

@@ -10,6 +10,7 @@ mod form;
 mod history;
 mod keymap;
 mod login;
+mod markdown;
 mod menu;
 mod models;
 mod mouse;
@@ -233,6 +234,7 @@ fn run(args: Args) -> io::Result<()> {
             match a {
                 Action::Quit => quit = true,
                 Action::Copy(text) => copy(&mut term, &text),
+                Action::OpenUrl(url) => open_url(&url),
                 Action::ListFiles => {
                     let (tx, cwd) = (side.1.clone(), side.2.clone());
                     let _ = thread::Builder::new().name("lykos-files".into()).spawn(move || {
@@ -437,6 +439,28 @@ fn state_dir() -> Option<PathBuf> {
 }
 
 /// OSC 52: the terminal puts the text on the system clipboard, over SSH too.
+/// A link in the system's browser: the web and mail only, handed over as one argument (no shell reads it).
+fn open_url(url: &str) {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:")) {
+        return;
+    }
+    let mut cmd = if cfg!(windows) {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    let _ = cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+}
+
 fn copy(term: &mut Terminal<io::Stdout>, text: &str) {
     let w = term.writer();
     let _ = write!(w, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
@@ -570,7 +594,7 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
             }
             Action::Quit => return,
             // The main loop does these itself.
-            Action::Aside { .. } | Action::ListFiles | Action::Copy(_) | Action::Editor(_) | Action::NewTerminal | Action::Suspend => continue,
+            Action::Aside { .. } | Action::ListFiles | Action::Copy(_) | Action::OpenUrl(_) | Action::Editor(_) | Action::NewTerminal | Action::Suspend => continue,
         };
         let msg = match reply {
             Ok(Msg::Connected) => continue,
