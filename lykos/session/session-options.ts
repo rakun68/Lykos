@@ -12,6 +12,7 @@ import { providerMatrix, resolveBootModel, specialistModelSpec, type ProviderRea
 import { sessionRoleModel } from "../config/roles.js";
 import { defaultCredentialDbPath } from "../credentials/db.js";
 import { poolSummary, summaryPoolSizes } from "../credentials/presence.js";
+import { effortLabel, type ThinkingLevelMap } from "../config/model-efforts.js";
 import { EFFORT_LEVELS } from "../surface/effort.js";
 
 export interface ModelOption {
@@ -50,7 +51,7 @@ export interface SessionOptions {
 
 /** The parts of the live session the options read. */
 export interface OptionsSession {
-  readonly model?: { provider: string; id: string } | undefined;
+  readonly model?: { provider: string; id: string; thinkingLevelMap?: ThinkingLevelMap } | undefined;
   readonly thinkingLevel?: string;
   getAvailableThinkingLevels?(): string[];
   supportsThinking?(): boolean;
@@ -105,8 +106,8 @@ export function sessionOptions(input: {
       contextWindow: typeof m.contextWindow === "number" && m.contextWindow > 0 ? m.contextWindow : null,
       reasoning: m.reasoning === true,
     })),
-    effort: thinks ? (session.thinkingLevel ?? null) : null,
-    efforts: thinks ? (session.getAvailableThinkingLevels?.() ?? [...EFFORT_LEVELS]) : [],
+    effort: thinks && session.thinkingLevel !== undefined ? effortLabel(session.model, session.thinkingLevel) : null,
+    efforts: thinks ? (session.getAvailableThinkingLevels?.() ?? [...EFFORT_LEVELS]).map((l) => effortLabel(session.model, l)) : [],
     specialist: input.specialist ?? DEFAULT_SPECIALIST,
     specialists: primarySpecialists(input.cwd, input.globalDir).map((name) => ({ name, description: described.get(name) ?? "" })),
     providers: providerMatrix(input.providers, { env, poolSizes }).map((r) => ({ name: r.name, auth: r.auth, reach: r.reach, reason: r.reachReason })),

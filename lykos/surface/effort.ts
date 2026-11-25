@@ -26,6 +26,9 @@ export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
 const BUCKET: Record<string, SemanticToken> = {
   off: "effortOff",
+  // A declared model's own names (`config/model-efforts.ts`): `none` asks for no reasoning, `auto` lets the endpoint pick.
+  none: "effortOff",
+  auto: "effortMid",
   minimal: "effortLow",
   low: "effortLow",
   medium: "effortMid",

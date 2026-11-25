@@ -189,6 +189,16 @@ providers:
     auth_mode: "api_key"
   anthropic:
     auth_mode: "api_key"
+  omniroute:                  # a custom provider: an endpoint of one's own
+    auth: api_key
+    api: openai-responses
+    baseUrl: "http://localhost:20128/v1"
+    models:
+      - id: "antigravity/gemini-3.8-flash-tiered"
+        # The effort levels the model offers, any of: auto, none, low, medium, high, xhigh, max.
+        # `auto` sends no effort, so the endpoint decides; `none` asks for no reasoning.
+        # Left out (with no `reasoning:`), the model offers all seven; `reasoning: false` offers none.
+        efforts: [auto, none, low, medium, high]
 
 # Models and routing defaults
 models:

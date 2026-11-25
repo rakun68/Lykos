@@ -37,6 +37,7 @@ import { observeSkillCall, observeSkillRead, type SkillInvocationState, type Ski
 import { SKILL_TOOL_NAME } from "../tools/skill-tools.js";
 import { resolveActualToolArgs, resolveActualToolName, tierForToolCall } from "../tools/tool-call.js";
 import { createCheckpoint, type CheckpointDeps } from "./checkpoint.js";
+import { withoutAutoEffort } from "../config/model-efforts.js";
 import { isFileChangingCall } from "../tools/tool-call.js";
 import type { HookRegistry } from "./hooks.js";
 import { specCheckRefusal } from "../delegate/spec-check.js";
@@ -247,6 +248,9 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
   return {
     name: "lykos-harness",
     factory: (pi) => {
+      // A model on `auto` sends no effort: Pi would send the "auto" its thinkingLevelMap holds (`config/model-efforts.ts`).
+      pi.on("before_provider_request", (event, ctx) => withoutAutoEffort(event.payload, ctx.model, ctx.thinkingLevel));
+
       // T150: the T109 continuation threshold watch that lived here is now the
       // `lykos-continuation` default extension (`extensions/defaults/`).
 

@@ -6,6 +6,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config/load.js";
 import { builtinProviderDecls, cacheModelsPath, generateProviderConfig } from "../config/providers.js";
 import type { ProvidersConfig } from "../config/types.js";
+import { DEFAULT_MODEL_EFFORTS, effortLabel } from "../config/model-efforts.js";
 import { EFFORT_LEVELS } from "../surface/effort.js";
 import { createLykosModelRuntime } from "./model-runtime.js";
 
@@ -61,7 +62,7 @@ export function effortsOf(model: { reasoning?: boolean; thinkingLevelMap?: Parti
     if (mapped === null) return false;
     if (level === "xhigh" || level === "max") return mapped !== undefined;
     return true;
-  });
+  }).map((level) => effortLabel(model, level));
 }
 
 function fromPi(m: PiModel): ProviderModel {
@@ -135,6 +136,6 @@ export async function providerModels(
   const seen = new Set(known.map((m) => m.id));
   const asked = listed
     .filter((m) => !seen.has(m.id))
-    .map((m) => ({ id: m.id, name: m.name ?? m.id, reasoning: false, contextWindow: null, efforts: ["off"], listed: false }));
+    .map((m) => ({ id: m.id, name: m.name ?? m.id, reasoning: true, contextWindow: null, efforts: [...DEFAULT_MODEL_EFFORTS], listed: false }));
   return [...known, ...asked];
 }

@@ -30,6 +30,11 @@ export interface ProviderModelDecl {
   api?: string;
   baseUrl?: string;
   reasoning?: boolean;
+  /**
+   * The effort levels the model offers (`config/model-efforts.ts`): auto, none, low, medium, high, xhigh, max. A
+   * model declared with neither this nor `reasoning` offers all of them.
+   */
+  efforts?: string[];
   contextWindow?: number;
   maxTokens?: number;
 }

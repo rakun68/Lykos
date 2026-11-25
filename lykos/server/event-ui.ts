@@ -5,6 +5,7 @@
  */
 import type { ApprovalRequest } from "../gate/approval.js";
 import type { InteractiveSession } from "../session/interactive.js";
+import { effortLabel } from "../config/model-efforts.js";
 import { deriveHud, previewResult, toolSummary, type AgentUi, type AgentUiOptions, type StreamEvent } from "../surface/s0.js";
 import { extractDiff, type ConversationView } from "../surface/renderers/conversation.js";
 import { renderJson } from "../surface/renderers/json.js";
@@ -47,6 +48,8 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
     return head.tokens;
   };
 
+  /** The effort as the person names it: `auto` and `none` on a model whose efforts are Lykos's. */
+  const effort = (): string | undefined => (session.thinkingLevel !== undefined ? effortLabel(session.model, session.thinkingLevel) : undefined);
   const usage = (state: Parameters<AgentUi["writeHud"]>[0], sessionId: string): ReturnType<AgentUi["writeHud"]> => {
     const contextUsage = session.getContextUsage?.();
     const model = opts.header.model;
@@ -56,13 +59,13 @@ export function createEventUi(opts: AgentUiOptions, session: InteractiveSession,
       sessionId,
       startedUtc: opts.startedUtc,
       state,
-      live: { contextUsage, thinkingLevel: session.thinkingLevel, model: state.currentModel ?? model },
+      live: { contextUsage, thinkingLevel: effort(), model: state.currentModel ?? model },
     });
     view.hud = vm;
     const gauge = vm.context.parent;
     const data: UsageData = {
       model: vm.session.model ?? state.currentModel ?? model,
-      effort: session.thinkingLevel ?? null,
+      effort: effort() ?? null,
       contextTokens: contextUsage?.tokens ?? gauge?.usedTokens ?? null,
       contextWindow: contextUsage?.contextWindow ?? gauge?.totalTokens ?? null,
       contextPercent: contextUsage?.percent ?? (gauge?.pct !== null && gauge?.pct !== undefined ? gauge.pct * 100 : null),

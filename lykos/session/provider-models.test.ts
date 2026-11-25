@@ -37,7 +37,8 @@ test("a declared provider's endpoint lists its models after the declared ones, w
       ["x", "X model", false, null],
     ],
   );
-  assert.deepEqual(models[1]!.efforts, ["off"]);
+  // A listed model nobody declared yet offers the default efforts it would have once it is added.
+  assert.deepEqual(models[1]!.efforts, ["auto", "none", "low", "medium", "high", "xhigh", "max"]);
 });
 
 test("an endpoint that cannot be asked falls back to the declared models; with none, it says why", async () => {

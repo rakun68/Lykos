@@ -135,6 +135,7 @@ import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type Agent
 import type { AsideAnswer } from "./aside.js";
 import { runInteractiveSurface } from "../surface/interactive-surface.js";
 import { effortToken } from "../surface/effort.js";
+import { effortLabel, effortLevel, type ThinkingLevelMap } from "../config/model-efforts.js";
 import { fmtUsd } from "../surface/format.js";
 import { openUrl } from "../surface/open-url.js";
 import { parseOutcomeAnswer, renderOutcomePrompt, renderOutcomeResult } from "../surface/outcome.js";
@@ -172,6 +173,8 @@ export interface InteractiveSession extends RewindableSession {
     options?: { excludeFromContext?: boolean },
   ): Promise<{ output: string; exitCode: number | undefined }>;
   getLastAssistantText?(): string | undefined;
+  /** The model in use; its `thinkingLevelMap` names Pi's levels as the person sees them (`config/model-efforts.ts`). */
+  readonly model?: { provider: string; id: string; thinkingLevelMap?: ThinkingLevelMap } | undefined;
   /** T-2026-09-02 item 6: Pi's reasoning-effort control. Absent on the fake session `interactive.test.ts` drives, which is why every caller is optional-chained. */
   readonly thinkingLevel?: string;
   setThinkingLevel?(level: string, options?: { persist?: boolean }): void;
@@ -651,18 +654,20 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     if (!session.setThinkingLevel || session.supportsThinking?.() === false) {
       return { text: "lykos: this model has no reasoning-effort control" };
     }
-    const available = session.getAvailableThinkingLevels?.() ?? [...EFFORT_LEVELS];
+    // Pi's levels, named as the person sees them: `auto` and `none` on a model whose efforts are Lykos's.
+    const shown = (l: string): string => effortLabel(session.model, l);
+    const available = (session.getAvailableThinkingLevels?.() ?? [...EFFORT_LEVELS]).map(shown);
     if (level.length === 0) {
-      return effortReport("current effort is ", session.thinkingLevel ?? null, available);
+      return effortReport("current effort is ", session.thinkingLevel !== undefined ? shown(session.thinkingLevel) : null, available);
     }
     if (!available.includes(level)) {
       return effortReport(`lykos: unknown effort "${level}"`, null, available);
     }
-    session.setThinkingLevel(level);
+    session.setThinkingLevel(effortLevel(session.model, level));
     // Read back rather than echo: Pi clamps to what the model actually
     // supports, and reporting the requested level when it was clamped is
     // the kind of small lie the footer would then repeat all session.
-    const now = session.thinkingLevel ?? level;
+    const now = session.thinkingLevel !== undefined ? shown(session.thinkingLevel) : level;
     return {
       text: `effort is set to ${now}`,
       parts: [
@@ -1077,7 +1082,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // immediately and every surface showing it kept the old value
         // until something unrelated happened to repaint.
         if (ui) ui.writeHud(state, session.sessionId);
-        opts.onEffortChange?.(session.thinkingLevel ?? null);
+        opts.onEffortChange?.(session.thinkingLevel !== undefined ? effortLabel(session.model, session.thinkingLevel) : null);
         return "ok";
       }
       case "usage":
