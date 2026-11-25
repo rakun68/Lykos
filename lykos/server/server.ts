@@ -73,14 +73,43 @@ export interface EngineServerOptions {
 
 interface LiveSession {
   summary: SessionSummary;
-  /** Its `lykos server-session` child, or the watch of a delegated session. */
-  child: ChildProcess | DelegatedWatch;
+  /** Its `lykos server-session` child, the watch of a delegated session, or an old session's before it runs. */
+  child: ChildProcess | DelegatedWatch | Shelved;
   events: Event[];
   exited: Promise<void>;
   /** The ledger the session writes, fixed when it starts: a later `session.cd` moves its cwd, never its ledger. */
   ledgerPath: string;
   /** `session.aside` and `session.options` calls waiting on the child, by id. */
   asides: Map<string, (msg: Extract<FromChild, { kind: "aside" | "options" | "job" }>) => void>;
+  /** What the child is sent while it starts, until it is ready to take it. */
+  held?: ToChild[] | undefined;
+}
+
+/**
+ * The child of an old session opened from the list, until something needs a real one: the first message it is sent
+ * starts the session (`wake`), and a close before that ends it without one.
+ */
+class Shelved {
+  connected = true;
+  constructor(
+    private readonly wake: (msg: ToChild) => void,
+    private readonly end: () => void,
+  ) {}
+
+  send(msg: ToChild): boolean {
+    if (!this.connected) return false;
+    if (msg.kind === "close") return this.kill();
+    this.connected = false;
+    this.wake(msg);
+    return true;
+  }
+
+  kill(): boolean {
+    if (!this.connected) return false;
+    this.connected = false;
+    this.end();
+    return true;
+  }
 }
 
 interface Client {
@@ -91,6 +120,8 @@ interface Client {
 }
 
 const CHILD_EXIT_GRACE_MS = 10_000;
+/** `session.options`' answer for an old session that is open and not running yet. */
+const NOT_RUNNING = "the session is not running yet";
 /** How long a server waits for its first client: the client that started it allows 20 s for it to listen. */
 const FIRST_CLIENT_MS = 30_000;
 
@@ -400,6 +431,8 @@ export class EngineServer {
       case "session.options": {
         const s = this.session(params);
         if (s.summary.status === "starting" || s.summary.status === "closed") throw new Error(`the session is ${s.summary.status}`);
+        // An old session only opened has no lists until it runs: showing its tab does not start it, opening a list does.
+        if (s.child instanceof Shelved && params.wake !== true) throw new Error(NOT_RUNNING);
         const reply = await this.ask(s, (id) => ({ kind: "options", id }));
         if (reply.kind !== "options" || reply.options === undefined) throw new Error(reply.error ?? "no options");
         return reply.options satisfies SessionOptions;
@@ -561,19 +594,7 @@ export class EngineServer {
       throw err;
     }
     const id = randomUUID();
-    const command = this.opts.child ?? defaultChildCommand();
-    const child = spawn(command.command, [...command.args, "server-session"], {
-      cwd,
-      env: { ...process.env, ...this.opts.env, LYKOS_TRUST_SOURCE: trustSource },
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      windowsHide: true,
-    });
     const tag = id.slice(0, 8);
-    const logLines = (chunk: Buffer): void => {
-      for (const line of chunk.toString("utf8").split(/\r?\n/)) if (line.trim() !== "") this.log(`[${tag}] ${line}`);
-    };
-    child.stdout?.on("data", logLines);
-    child.stderr?.on("data", logLines);
     const summary: SessionSummary = {
       id,
       cwd,
@@ -587,27 +608,16 @@ export class EngineServer {
       ledgerSessionId: resume ?? null,
     };
     const ledgerPath = ledgerPathOverride ?? ledgerFor(cwd);
+    let exited!: () => void;
     const live: LiveSession = {
       summary,
-      child,
+      child: new Shelved(() => undefined, () => undefined),
       events: [],
-      exited: new Promise((resolve) => child.once("exit", () => resolve())),
+      exited: new Promise((resolve) => (exited = resolve)),
       ledgerPath,
       asides: new Map(),
     };
     this.sessions.set(id, live);
-    child.on("message", (msg: FromChild) => this.fromChild(live, msg));
-    child.once("exit", (code) => {
-      this.log(`[${tag}] exited ${String(code)}`);
-      if (live.summary.status !== "closed") this.setStatus(live, "closed");
-      for (const settle of live.asides.values()) settle({ kind: "aside", id: "", error: "the session ended" });
-      live.asides.clear();
-      if (resume !== undefined) this.resuming.delete(resume);
-      this.sessions.delete(id);
-      this.checkIdle();
-    });
-    this.log(`[${tag}] started in ${cwd}, pid ${String(child.pid)}`);
-    this.emit(live, { type: "session.status", session: { ...summary } });
     const start: ChildStartParams = {
       cwd,
       trustSource,
@@ -618,9 +628,68 @@ export class EngineServer {
       ...(typeof params.mode === "string" ? { mode: params.mode as InteractionMode } : {}),
       ...(params.autoApprove === true ? { autoApprove: true } : {}),
     };
-    this.toChild(live, { kind: "start", params: start });
+    const ended = (): void => {
+      if (live.summary.status !== "closed") this.setStatus(live, "closed");
+      for (const settle of live.asides.values()) settle({ kind: "aside", id: "", error: "the session ended" });
+      live.asides.clear();
+      live.held = undefined;
+      if (resume !== undefined) this.resuming.delete(resume);
+      this.sessions.delete(id);
+      this.checkIdle();
+      exited();
+    };
+    if (resume !== undefined) {
+      // OpenCode: an old session opened from the list shows its conversation at once, read from its transcript. Its
+      // process starts when something needs it (a prompt, a command, the lists) and does not show the history again.
+      live.child = new Shelved(
+        (msg) => {
+          live.held = [msg];
+          this.setStatus(live, "starting");
+          this.spawnChild(live, { ...start, history: false }, tag, ended);
+        },
+        () => {
+          this.log(`[${tag}] closed before it ran`);
+          ended();
+        },
+      );
+      summary.status = "idle";
+      this.resuming.delete(resume);
+      this.emit(live, { type: "session.status", session: { ...summary } });
+      const { emitHistory } = await import("./transcript-events.js");
+      emitHistory(ledgerPath, resume, (data) => this.emit(live, data));
+      this.log(`[${tag}] opened ${resume} in ${cwd} from its transcript`);
+      this.checkIdle();
+      return summary;
+    }
+    this.emit(live, { type: "session.status", session: { ...summary } });
+    this.spawnChild(live, start, tag, ended);
     this.checkIdle();
     return summary;
+  }
+
+  /** Starts `live`'s `lykos server-session` child and hands it `start`. */
+  private spawnChild(live: LiveSession, start: ChildStartParams, tag: string, ended: () => void): void {
+    const command = this.opts.child ?? defaultChildCommand();
+    const child = spawn(command.command, [...command.args, "server-session"], {
+      cwd: start.cwd,
+      env: { ...process.env, ...this.opts.env, LYKOS_TRUST_SOURCE: start.trustSource },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      windowsHide: true,
+    });
+    const logLines = (chunk: Buffer): void => {
+      for (const line of chunk.toString("utf8").split(/\r?\n/)) if (line.trim() !== "") this.log(`[${tag}] ${line}`);
+    };
+    child.stdout?.on("data", logLines);
+    child.stderr?.on("data", logLines);
+    live.child = child;
+    child.on("message", (msg: FromChild) => this.fromChild(live, msg));
+    child.once("exit", (code) => {
+      this.log(`[${tag}] exited ${String(code)}`);
+      ended();
+    });
+    this.log(`[${tag}] started in ${start.cwd}, pid ${String(child.pid)}`);
+    const first: ToChild = { kind: "start", params: start };
+    child.send(first);
   }
 
   /**
@@ -679,7 +748,9 @@ export class EngineServer {
   }
 
   private toChild(s: LiveSession, msg: ToChild): void {
-    if (s.child.connected) s.child.send(msg);
+    // A child that is still starting takes nothing yet: what it is sent waits until it is ready.
+    if (s.held !== undefined) s.held.push(msg);
+    else if (s.child.connected) s.child.send(msg);
   }
 
   private fromChild(s: LiveSession, msg: FromChild): void {
@@ -700,6 +771,11 @@ export class EngineServer {
         }
         if (msg.model !== undefined) s.summary.model = msg.model;
         this.setStatus(s, msg.status);
+        if (s.held !== undefined && msg.status !== "starting") {
+          const held = s.held;
+          s.held = undefined;
+          for (const m of held) this.toChild(s, m);
+        }
         return;
       case "aside":
       case "options":

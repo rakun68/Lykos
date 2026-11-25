@@ -32,6 +32,30 @@ pub const BUSY_WORDS: [&str; 48] = [
     "Dithering", "Lollygagging", "Bamboozling", "Hornswoggling", "Galumphing", "Discombobulating", "Kerfuffling", "Skedaddling",
 ];
 
+/// `text` with a band of light sweeping across it, one column a tick: the letters it passes brighten from `base` toward
+/// `light`, and each dot lifts (`.` `·` `˙`) as the band crosses it. With animations off it is `text` in `base`.
+pub fn shimmer(text: &str, tick: u64, base: Style, light: lykos_term::Color, animate: bool) -> Vec<Span> {
+    if !animate {
+        return vec![Span { text: text.to_string(), style: base, link: None }];
+    }
+    const REACH: i64 = 3;
+    let n = text.chars().count() as i64;
+    let pos = (tick as i64).rem_euclid(n + 2 * REACH + 4) - REACH;
+    text.chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let d = (i as i64 - pos).abs();
+            let t = (1.0 - d as f32 / REACH as f32).max(0.0);
+            let ch = match (ch, d) {
+                ('.', 0) => '˙',
+                ('.', 1) => '·',
+                (ch, _) => ch,
+            };
+            Span { text: ch.to_string(), style: Style { fg: theme::mix(base.fg, light, t), ..base }, link: None }
+        })
+        .collect()
+}
+
 /// The word for the `turn`-th prompt of a session.
 pub fn busy_word(turn: usize) -> &'static str {
     BUSY_WORDS[turn.wrapping_mul(2_654_435_761) % BUSY_WORDS.len()]
@@ -454,8 +478,16 @@ fn item_rows(ctx: &Ctx, i: usize, indent: u16, rows: &mut Vec<Row>) {
                 return;
             }
             let bar = Some(Style::fg(c().overlay));
-            let header = if ctx.done(i) { "Thought".to_string() } else { format!("{} {}…", ctx.spinner(), busy_word(turn_of(ctx.items, i))) };
-            rows.push(Row { indent: indent + 2, text: header, style: Style::fg(c().gold), bar, bg: None, spans: Vec::new() });
+            let gold = Style::fg(c().gold);
+            let spans = if ctx.done(i) {
+                Vec::new()
+            } else {
+                let mut spans = vec![Span { text: format!("{} ", ctx.spinner()), style: gold, link: None }];
+                spans.extend(shimmer(&format!("{}...", busy_word(turn_of(ctx.items, i))), ctx.tick, gold, c().text, ctx.look.animations));
+                spans
+            };
+            let header = if spans.is_empty() { "Thought".to_string() } else { spans.iter().map(|s| s.text.as_str()).collect() };
+            rows.push(Row { indent: indent + 2, text: header, style: gold, bar, bg: None, spans });
             for line in wrap(text.trim(), w.saturating_sub(5)) {
                 rows.push(Row { indent: indent + 2, text: line, style: thought_style(), bar, bg: None, spans: Vec::new() });
             }
@@ -671,6 +703,19 @@ pub fn layout(cache: &RefCell<Cache>, session: &Session, look: Look, width: usiz
 mod tests {
     use super::*;
     use lykos_client::SessionSummary;
+
+    #[test]
+    fn a_shimmer_lifts_the_dot_under_its_light_and_brightens_the_letters_near_it() {
+        let base = Style::fg(lykos_term::Color::Rgb(0, 0, 0));
+        let white = lykos_term::Color::Rgb(255, 255, 255);
+        let text = |spans: &[Span]| spans.iter().map(|s| s.text.as_str()).collect::<String>();
+        // "Opening..." is 10 columns; the band is at column tick - 3.
+        let at_dots = shimmer("Opening...", 11, base, white, true);
+        assert_eq!(text(&at_dots), "Opening·˙·", "the dot under the light jumps highest, its neighbours half");
+        assert_eq!(at_dots[8].style.fg, white, "the band's centre is the light");
+        assert_eq!(at_dots[0].style.fg, base.fg, "far from it, the base");
+        assert_eq!(text(&shimmer("Opening...", 11, base, white, false)), "Opening...", "animations off: still");
+    }
 
     fn tool(name: &str, state: ToolState) -> Item {
         Item::Tool { id: name.into(), name: name.into(), summary: "x".into(), state, preview: None, diff: None }

@@ -503,6 +503,42 @@ describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
     }
   });
 
+  it("opens an old session from its transcript at once, and starts it only when it is sent a prompt", async () => {
+    const { server, key } = setup();
+    await server.listen();
+    const cwd = project();
+    try {
+      const dir = join(cwd, ".lykos", "sessions", "s9");
+      mkdirSync(dir, { recursive: true });
+      const records = [
+        { kind: "user_message", text: "fix the parser", turn_index: 0, ts_utc: "2026-11-25T00:00:00.000Z" },
+        { kind: "assistant_message", text: "fixed", turn_index: 1, ts_utc: "2026-11-25T00:00:01.000Z" },
+      ];
+      writeFileSync(join(dir, "transcript.jsonl"), records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+      const c = await connectEngine(server.address, key);
+      const seen: Event[] = [];
+      c.onEvent((e) => seen.push(e));
+      await c.request("subscribe");
+      const opened = await c.request<SessionSummary>("session.start", { cwd, resume: "s9" });
+      assert.equal(opened.status, "idle");
+      for (let i = 0; i < 100 && !seen.some((e) => e.session === opened.id && e.data.type === "message.delta"); i += 1) await new Promise((r) => setTimeout(r, 20));
+      const shown = seen.filter((e) => e.session === opened.id).map((e) => e.data.type);
+      assert.deepEqual(shown, ["session.status", "message.user", "message.delta", "message.end"], "the history, and no child");
+      await c.request("session.prompt", { session: opened.id, text: "and the lexer" });
+      let said: string[] = [];
+      for (let i = 0; i < 300 && !said.includes("and the lexer"); i += 1) {
+        await new Promise((r) => setTimeout(r, 50));
+        said = seen.filter((e) => e.session === opened.id && (e.data.type === "system" || e.data.type === "message.user")).map((e) => (e.data as { text: string }).text);
+      }
+      assert.ok(said.includes("history shown by the server"), "the child does not show the history again");
+      assert.equal(said.at(-1), "and the lexer", "the prompt that started it reaches it once it is ready");
+      c.close();
+    } finally {
+      await server.stop("test");
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("moves a session keeping its ledger, checks the target before closing it, and never resumes one ledger session twice", async () => {
     const { server, key } = setup();
     await server.listen();
@@ -525,6 +561,12 @@ describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
       await c.request("session.rename", { cwd, ledgerSessionId: "s1", title: "the parser" });
       const first = await c.request<SessionSummary>("session.start", { cwd, resume: "s1" });
       assert.equal(first.title, "the parser", "a resumed session keeps its title, so its tab is named");
+      // Opened, it only shows its history: no child runs until it is sent something.
+      assert.equal(first.status, "idle");
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal(seen.filter((e) => e.session === first.id && e.data.type === "system").length, 0, "no child started");
+      await assert.rejects(c.request("session.options", { session: first.id }), /not running yet/, "showing its tab starts nothing");
+      await c.request("session.options", { session: first.id, wake: true });
       const ledger = await ledgerOf(first.id);
       assert.equal(ledger, join(cwd, ".lykos", "ledger.db"));
       await assert.rejects(c.request("session.start", { cwd, resume: "s1" }), /already open/, "one ledger session runs in one child");
@@ -532,8 +574,10 @@ describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
       assert.equal((await c.request<SessionSummary[]>("sessions.list", {})).find((s) => s.id === first.id)?.status, "idle", "a bad target leaves it running");
       // cd outside the project, then move again: the ledger stays the project's.
       const moved = await c.request<SessionSummary>("session.move", { session: first.id, cwd: elsewhere });
+      await c.request("session.options", { session: moved.id, wake: true });
       assert.equal(await ledgerOf(moved.id), ledger);
       const back = await c.request<SessionSummary>("session.move", { session: moved.id, cwd });
+      await c.request("session.options", { session: back.id, wake: true });
       assert.equal(await ledgerOf(back.id), ledger);
       c.close();
     } finally {

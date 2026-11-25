@@ -197,7 +197,10 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         // OpenCode: a new session's first prompt shows at once, as sent; the footer's spinner says it is starting.
         if session.summary.status == SessionStatus::Starting {
             if app.queue.is_empty() {
-                tail.rows.push(Row::plain(3, format!("{} starting the session", spinner(app)), theme::muted()));
+                let accent = Style::fg(c().accent);
+                let mut spans = vec![transcript_span(format!("{} ", spinner(app)), accent)];
+                spans.extend(transcript::shimmer("Starting the session...", app.tick, accent, c().text, app.prefs.animations));
+                tail.rows.push(Row::rich(3, spans));
             }
             for q in &app.queue {
                 transcript::prompt_rows(q, text_w as usize, true, &mut tail.rows);
@@ -393,6 +396,10 @@ fn tab_strip(app: &App, session: &Session, buf: &mut Buffer, x: u16, width: u16)
         app.tab_hits.borrow_mut().push((at, (at + lw).min(end), id.clone()));
         at += lw;
     }
+}
+
+fn transcript_span(text: String, style: Style) -> crate::markdown::Span {
+    crate::markdown::Span { text, style, link: None }
 }
 
 /// A spinner frame, or `⋯` with animations off (`component/spinner.tsx`).
@@ -1358,11 +1365,21 @@ pub(crate) fn footer_line(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u1
         Link::Failed(m) | Link::Lost(m) => {
             buf.text(x + 1, y, left_w, m, Style::fg(c().love));
         }
+        Link::Ready if app.opening() => {
+            let mut col = x + 1;
+            for s in transcript::shimmer("Opening...", app.tick, Style::fg(c().accent), c().text, app.prefs.animations) {
+                col = buf.text(col, y, left_w.saturating_sub(col - x - 1), &s.text, s.style);
+            }
+        }
         Link::Ready if app.running() => {
-            let mut col = buf.text(x + 1, y, left_w, &spinner(app).to_string(), Style::fg(c().accent));
+            let accent = Style::fg(c().accent);
+            let mut col = buf.text(x + 1, y, left_w, &spinner(app).to_string(), accent);
             // The turn's word, as the transcript shows it.
             let turn = app.current().map_or(0, |s| crate::transcript::turn_of(&s.items, s.items.len().saturating_sub(1)));
-            col = buf.text(col + 1, y, left_w, &format!("{}…", crate::transcript::busy_word(turn)), Style::fg(c().accent));
+            col += 1;
+            for s in transcript::shimmer(&format!("{}...", crate::transcript::busy_word(turn)), app.tick, accent, c().text, app.prefs.animations) {
+                col = buf.text(col, y, left_w.saturating_sub(col - x - 1), &s.text, s.style);
+            }
             col = buf.text(col + 1, y, left_w, "esc", if app.armed.is_some() { Style::fg(c().gold) } else { theme::text() });
             let rest = if app.armed.is_some() { " again to interrupt" } else { " interrupt" };
             buf.text(col, y, left_w, rest, if app.armed.is_some() { Style::fg(c().gold) } else { theme::muted() });
@@ -1799,7 +1816,7 @@ mod tests {
         app.prefs.verbosity = crate::transcript::Verbosity::High;
         draw(&app, &mut buf);
         let s = screen(&buf);
-        let word = format!("{}…", crate::transcript::busy_word(1));
+        let word = format!("{}...", crate::transcript::busy_word(1));
         assert!(s.contains(&format!("{word} esc interrupt")), "the turn's word beside the spinner: {s}");
         for want in ["Fix it", "On it.", "read src/main.rs", "claude-opus · high", "12,345 tokens · 6% used", "esc interrupt", "▰▱▱▱▱▱▱▱▱▱ 6%"] {
             assert!(s.contains(want), "missing {want:?} in\n{s}");

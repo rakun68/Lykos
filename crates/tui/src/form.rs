@@ -237,7 +237,7 @@ impl App {
         self.toast(ToastKind::Success, message.to_string());
         let mut out = vec![self.providers_call()];
         if let Some(session) = self.live() {
-            out.push(Action::Options { session });
+            out.push(Action::Options { session, wake: true });
         }
         out
     }

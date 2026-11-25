@@ -32,6 +32,8 @@ process.on("message", (msg: ToChild) => {
       watchJobs(jobs, (data) => send({ kind: "event", data }));
       send({ kind: "status", status: "idle", ledgerSessionId, model: msg.params.model ?? "faux/scripted" });
       send({ kind: "event", data: { type: "system", text: `ledger ${msg.params.ledgerPath}` } });
+      // A resume the server already showed the history of is told not to show it again.
+      if (msg.params.history === false) send({ kind: "event", data: { type: "system", text: "history shown by the server" } });
       send({ kind: "event", data: { type: "commands", commands: [{ name: "/help", description: "list commands", source: "builtin" }, { name: "/skill:tdd", description: "test first", source: "skill" }] } });
       break;
     case "job":

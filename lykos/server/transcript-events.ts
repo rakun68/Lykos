@@ -3,9 +3,28 @@
  * and a resumed one show the conversation the archive holds.
  */
 import type { TranscriptRecord } from "../session/replay.js";
+import { activeBranch } from "../session/active-branch.js";
+import { readTranscript, transcriptFilePath } from "../session/transcript.js";
 import { toolSummary } from "../surface/s0.js";
 import { toolEndData } from "./event-ui.js";
 import type { EventData } from "./protocol.js";
+
+/**
+ * An archived session's conversation, as its resume would show it (the active branch, without the turns a rewind
+ * undid), read from its transcript file. Returns false when there is no transcript to read.
+ */
+export function emitHistory(ledgerPath: string, sessionId: string, emit: (data: EventData) => void): boolean {
+  let records: TranscriptRecord[];
+  try {
+    records = readTranscript(transcriptFilePath(ledgerPath, sessionId)).events as TranscriptRecord[];
+  } catch {
+    return false;
+  }
+  const events = new TranscriptEvents(emit);
+  for (const r of activeBranch(records)) events.record(r);
+  events.endTurn();
+  return true;
+}
 
 export class TranscriptEvents {
   private assistantOpen = false;

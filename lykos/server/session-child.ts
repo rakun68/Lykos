@@ -58,6 +58,8 @@ export interface ChildStartParams {
   mode?: InteractionMode;
   autoApprove?: boolean;
   trustSource: "stored" | "flag" | "prompt";
+  /** false: the client shows the conversation already (the server read it from the transcript), so a resume does not. */
+  history?: false;
 }
 
 /** A line source the server feeds. */
@@ -392,7 +394,7 @@ export async function runSessionChild(
 
   async function run(): Promise<number> {
     if (params.resume !== undefined) {
-      const code = await resume(params.resume, { ...(params.fork === true ? { fork: true } : {}), show: true });
+      const code = await resume(params.resume, { ...(params.fork === true ? { fork: true } : {}), show: params.history !== false });
       if (code === 0) send({ kind: "exit", ok: true });
       return code;
     }

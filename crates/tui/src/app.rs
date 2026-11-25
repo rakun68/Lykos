@@ -41,7 +41,7 @@ pub enum Action {
     /// Opens the prompt in the external editor; its text comes back as `App::edited_externally`.
     Editor(String),
     /// Asks the session what the lists show (`session.options`); the answer comes back as `App::on_options`.
-    Options { session: String },
+    Options { session: String, wake: bool },
     /// Any other request; its answer comes back as `App::on_reply` with `then` (P5 #42).
     Call { method: &'static str, params: Value, then: Then },
     /// Opens a terminal in the pane (P5 #48); `main` starts its shell, at the pane's size.
@@ -321,6 +321,8 @@ pub struct App {
     pub input_area: Cell<Option<InputArea>>,
     pub tick: u64,
     starting: bool,
+    /// The start under way opens a session of the list (the footer says "Opening..."), not a new one.
+    opening: bool,
     clicks: Option<(Instant, u16, u16, u8)>,
     /// The prompt in the transcript last clicked, and when: a second click opens its message actions.
     prompt_click: Option<(Instant, usize)>,
@@ -488,6 +490,7 @@ impl App {
             input_area: Cell::new(None),
             tick: 0,
             starting: false,
+            opening: false,
             clicks: None,
             prompt_click: None,
             tabs: Tabs::default(),
@@ -767,6 +770,11 @@ impl App {
     }
 
     /// Whether the screen changes with time alone: a spinner, or an armed key that will lapse.
+    /// A session of the list is being opened.
+    pub fn opening(&self) -> bool {
+        self.starting && self.opening
+    }
+
     pub fn animating(&self) -> bool {
         self.running() || self.status() == Some(SessionStatus::Starting) || matches!(self.dialog, Some(Dialog::Login(_))) || self.armed.is_some() || self.leader.is_some() || self.exit_armed.is_some() || !self.toasts.is_empty() || self.asides > 0 || self.link == Link::Connecting || matches!(self.dialog, Some(Dialog::Output { .. }))
             || self.current().is_some_and(|s| !s.foreground.is_empty())
@@ -830,7 +838,7 @@ impl App {
         self.scroll = 0;
         self.options = None;
         self.armed = None;
-        self.live().map(|session| vec![Action::Options { session }]).unwrap_or_default()
+        self.live().map(|session| vec![Action::Options { session, wake: false }]).unwrap_or_default()
     }
 
     fn show(&mut self, id: Option<String>) -> Vec<Action> {
@@ -966,7 +974,7 @@ impl App {
                 if self.menu.as_ref().is_some_and(|m| m.trigger == Trigger::Slash) {
                     out.extend(self.refresh_menu());
                 }
-                out.push(Action::Options { session: event.session.clone() });
+                out.push(Action::Options { session: event.session.clone(), wake: true });
             }
             return out;
         }
@@ -1039,6 +1047,8 @@ impl App {
     pub fn on_options(&mut self, result: Result<SessionOptions, String>) {
         match result {
             Ok(o) => self.options = Some(o),
+            // An old session only opened runs once it is sent something; until then its lists are a new session's.
+            Err(e) if e.contains("not running yet") => {}
             Err(e) => self.notice = Some(format!("the lists: {e}")),
         }
     }
@@ -1102,7 +1112,7 @@ impl App {
         // The model list has a section for each connected provider: it needs the provider list, session or none.
         let mut out = if matches!(self.dialog, Some(Dialog::List { list: List::Models, .. })) { vec![self.providers_call()] } else { Vec::new() };
         match self.live() {
-            Some(session) if refresh => out.push(Action::Options { session }),
+            Some(session) if refresh => out.push(Action::Options { session, wake: true }),
             None if offered => out.push(self.preview_call()),
             _ => {}
         }
@@ -1369,6 +1379,7 @@ impl App {
             return self.activate(sid);
         }
         self.starting = true;
+        self.opening = true;
         let cwd = cwd.unwrap_or_else(|| self.cwd.clone());
         if self.past.as_ref().is_some_and(|p| p.delegated.contains_key(id)) {
             return vec![Action::Call { method: "session.watch", params: json!({ "cwd": cwd, "id": id }), then: Then::Started { replaces: None } }];
@@ -2074,6 +2085,7 @@ impl App {
                 return Vec::new();
             }
             self.starting = true;
+            self.opening = false;
             return vec![Action::Start { model: self.next_model.clone() }];
         };
         if self.status() != Some(SessionStatus::Idle) {
@@ -3822,7 +3834,7 @@ mod tests {
     fn with_options() -> App {
         let mut app = idle();
         let out = app.on_event(&Event { event: "commands".into(), session: "s1".into(), seq: 2, data: EventData::Commands { commands: Vec::new() } });
-        assert!(out.contains(&Action::Options { session: "s1".into() }), "a booted session's lists are asked for");
+        assert!(out.contains(&Action::Options { session: "s1".into(), wake: true }), "a booted session's lists are asked for");
         let o: SessionOptions = serde_json::from_value(serde_json::json!({
             "model": "p/a",
             "models": [
@@ -4384,7 +4396,7 @@ mod tests {
         assert!(app.tabs.unread.contains("s1"), "a turn that ended out of sight is unread");
         let out = press(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
         assert_eq!(app.session.as_deref(), Some("s1"));
-        assert_eq!(out, vec![Action::Options { session: "s1".into() }], "the lists are asked for the tab shown");
+        assert_eq!(out, vec![Action::Options { session: "s1".into(), wake: false }], "the lists are asked for the tab shown");
         assert!(app.tabs.unread.is_empty());
         press(&mut app, ctrl('x'));
         press(&mut app, key(KeyCode::Char('w')));

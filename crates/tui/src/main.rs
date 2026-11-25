@@ -594,8 +594,8 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
             Action::Prompt { session, text } => client.request("session.prompt", json!({ "session": session, "text": text })).map(|_| Msg::Connected),
             Action::Interrupt { session } => client.request("session.interrupt", json!({ "session": session })).map(|_| Msg::Connected),
             Action::Answer { session, request_id, answer } => client.request("session.answer", json!({ "session": session, "requestId": request_id, "answer": answer })).map(|_| Msg::Connected),
-            Action::Options { session } => Ok(Msg::Options(
-                client.request("session.options", json!({ "session": session })).map_err(|e| e.to_string()).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())),
+            Action::Options { session, wake } => Ok(Msg::Options(
+                client.request("session.options", json!({ "session": session, "wake": wake })).map_err(|e| e.to_string()).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())),
             )),
             Action::Call { method, params, then } => {
                 let mut params = params.clone();
