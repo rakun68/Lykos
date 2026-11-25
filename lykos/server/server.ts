@@ -39,7 +39,7 @@ import type { InteractionMode } from "../gate/modes.js";
 import { workspaceDiff, type DiffMode } from "../git/diff.js";
 import { createNamedWorktree, listNamedWorktrees, removeNamedWorktree } from "../git/worktree.js";
 import { resolveProject } from "../session/identity.js";
-import { archiveHistorySession, exportHistorySession, historyRows, ledgerFor, projectRoot, renameHistorySession } from "./history.js";
+import { type HistoryRow, archiveHistorySession, exportHistorySession, historyRows, ledgerFor, projectRoot, renameHistorySession } from "./history.js";
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
 import type { DelegatedWatch } from "./watch.js";
@@ -595,13 +595,15 @@ export class EngineServer {
     }
     const id = randomUUID();
     const tag = id.slice(0, 8);
+    const row = resume === undefined ? undefined : resumedRow(cwd, resume);
     const summary: SessionSummary = {
       id,
       cwd,
       status: "starting",
-      model: typeof params.model === "string" ? params.model : "",
-      // A resumed session keeps the title its history row has, so its tab is not "New session".
-      title: resume === undefined ? null : resumedTitle(cwd, resume),
+      // A resumed session keeps its history row's title, so its tab is not "New session", and its model, so an opened
+      // one names it before it runs.
+      model: typeof params.model === "string" ? params.model : (row?.model ?? ""),
+      title: row?.title ?? null,
       startedAt: new Date().toISOString(),
       origin: typeof params.origin === "string" ? params.origin : "tui",
       // A resume names its ledger session from the start, so a client finds its tab while the session still starts.
@@ -624,7 +626,7 @@ export class EngineServer {
       ledgerPath,
       ...(typeof params.resume === "string" && params.resume !== "" ? { resume: params.resume } : {}),
       ...(params.fork === true ? { fork: true } : {}),
-      ...(typeof params.model === "string" ? { model: params.model } : {}),
+      ...(typeof params.model === "string" && params.model !== "" ? { model: params.model } : {}),
       ...(typeof params.mode === "string" ? { mode: params.mode as InteractionMode } : {}),
       ...(params.autoApprove === true ? { autoApprove: true } : {}),
     };
@@ -882,11 +884,11 @@ export class EngineServer {
   }
 }
 /** The title of the ledger session `id` resumes, or null when its history has none or cannot be read. */
-function resumedTitle(cwd: string, id: string): string | null {
+function resumedRow(cwd: string, id: string): HistoryRow | undefined {
   try {
-    return historyRows(projectRoot(cwd)).find((r) => r.id === id)?.title ?? null;
+    return historyRows(projectRoot(cwd)).find((r) => r.id === id);
   } catch {
-    return null;
+    return undefined;
   }
 }
 
