@@ -60,6 +60,21 @@ export function detectFirstCommit(workspace: string): string | undefined {
   return out?.split("\n")[0]?.trim() || undefined;
 }
 
+const identities = new Map<string, { gitRemote: string | null; firstCommit: string }>();
+
+/**
+ * A workspace's remote and root commit, asked of git once per process: one session start resolves its project from
+ * several places, and each ask is two git processes. A workspace with no commit yet is asked again next time.
+ */
+function gitIdentity(workspace: string): { gitRemote: string | null; firstCommit: string | null } {
+  const known = identities.get(workspace);
+  if (known !== undefined) return known;
+  const gitRemote = detectGitRemote(workspace) ?? null;
+  const firstCommit = detectFirstCommit(workspace) ?? null;
+  if (firstCommit !== null) identities.set(workspace, { gitRemote, firstCommit });
+  return { gitRemote, firstCommit };
+}
+
 export function currentGitCommit(workspace: string): string | undefined {
   return git(["rev-parse", "HEAD"], workspace);
 }
@@ -127,8 +142,7 @@ export function resolveProject(
 ): ResolveProjectResult {
   const path = opts?.registryPath ?? defaultRegistryPath();
   const registry = loadRegistry(path);
-  const gitRemote = detectGitRemote(workspace) ?? null;
-  const firstCommit = detectFirstCommit(workspace) ?? null;
+  const { gitRemote, firstCommit } = gitIdentity(workspace);
   const now = new Date().toISOString();
 
   const match =
