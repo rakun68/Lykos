@@ -33,7 +33,7 @@ import { addToPool } from "../credentials/login-flow.js";
 import { LoginJobs, type LoginJobsOptions } from "./login-jobs.js";
 import { poolSummary, summaryPoolSizes } from "../credentials/presence.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
-import { isWithinRoot } from "../gate/approval.js";
+import { isWithinRoot } from "../gate/within-root.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError } from "../gate/trust.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { workspaceDiff, type DiffMode } from "../git/diff.js";

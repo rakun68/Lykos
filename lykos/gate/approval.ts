@@ -48,6 +48,7 @@ import { decideCommandPaths } from "./bash-paths.js";
 import { collectPathRules, decidePath, type PathAccess, type PathContext, type PathRule } from "./path-rules.js";
 import { loadPermissions, rememberExtraDir } from "./permissions.js";
 import { isWorkspaceTrusted } from "./trust.js";
+import { isWithinRoot } from "./within-root.js";
 
 /**
  * What class of thing is being approved.
@@ -264,16 +265,7 @@ export async function resolvePathRulesAndContext(cwd: string): Promise<{ rules: 
   return { rules, ctx };
 }
 
-/** T30.2's hard boundary: never asked about, always enforced. */
-export function isWithinRoot(root: string, target: string): boolean {
-  const rootResolved = resolve(root);
-  const targetResolved = resolve(target);
-  if (targetResolved === rootResolved) return true;
-  const rel = relative(rootResolved, targetResolved);
-  // D17: a parent step is a whole `..` SEGMENT. A string-prefix test refused
-  // `<root>/..cache/x`, which is inside the root, with a reason that is false.
-  return rel !== "" && rel !== ".." && !/^\.\.[\\/]/.test(rel) && !isAbsolute(rel);
-}
+export { isWithinRoot };
 
 /** `--yes` (T34.2: "a flag, not a keystroke") — every gated action allowed with no prompt. */
 export class AutoApproveGate implements ApprovalGate {
