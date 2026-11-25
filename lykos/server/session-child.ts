@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { createTwoFilesPatch } from "diff";
 import { folderOfPath, TerminalApprovalGate, type ApprovalRequest } from "../gate/approval.js";
-import { resolveProject } from "../session/identity.js";
+import { holdGitAnswers, resolveProject } from "../session/identity.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { resolveApprovalGate } from "../session/session.js";
 import type { ForkAt, InteractiveHandle, LaunchResult, LineSource, ResumePlan, ResumeRunner } from "../session/interactive.js";
@@ -336,6 +336,7 @@ export async function runSessionChild(
       createUi: (opts, session, askAside, listOptions) => {
         aside = askAside;
         options = listOptions;
+        releaseGit();
         send({ kind: "status", status: "idle", ledgerSessionId: session.sessionId, model: opts.header.model });
         // The surface registered this session's skills and extension commands before it made the UI.
         emit({ type: "commands", commands: slashCandidates("/skill:").map((c) => ({ name: c.name, description: c.description, source: c.source })) });
@@ -383,6 +384,9 @@ export async function runSessionChild(
     if (code !== 0) send({ kind: "exit", ok: false, message: refusal ?? "the session could not be resumed" });
     return code;
   };
+
+  // The boot's git questions are asked once each, until the session is idle (`holdGitAnswers`).
+  const releaseGit = holdGitAnswers();
 
   try {
     return await run();

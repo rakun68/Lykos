@@ -39,13 +39,32 @@ export interface ResolveProjectResult {
   record: ProjectRecord;
 }
 
+/** While a session boots (`holdGitAnswers`), each question below is asked of git once: its answers, by cwd and args. */
+let held: Map<string, string | undefined> | undefined;
+
+/**
+ * Until the returned release, `currentGitCommit`, `isGitDirty` and `gitStatus` answer each question once. A session's
+ * boot asks HEAD and the tree's status from five places in under a second, nothing it does between them moves HEAD
+ * or edits the tree, and each ask is a git process (50 to 100 ms on Windows).
+ */
+export function holdGitAnswers(): () => void {
+  held = new Map();
+  return () => {
+    held = undefined;
+  };
+}
+
 function git(args: string[], cwd: string): string | undefined {
+  const key = held !== undefined ? `${cwd}\0${args.join("\0")}` : undefined;
+  if (key !== undefined && held?.has(key) === true) return held.get(key);
   // T170: through the host git helper, so a repository's hooks and fsmonitor
   // never run. A failing call (no remote, not a repo, no commits yet) is an
   // EXPECTED outcome here and is simply undefined; the helper captures git's
   // own stderr so none of it reaches the terminal.
   const run = hostGit(args, cwd);
-  return run.ok && run.stdout.length > 0 ? run.stdout : undefined;
+  const out = run.ok && run.stdout.length > 0 ? run.stdout : undefined;
+  if (key !== undefined) held?.set(key, out);
+  return out;
 }
 
 export function detectGitRemote(workspace: string): string | undefined {
@@ -80,6 +99,8 @@ export function currentGitCommit(workspace: string): string | undefined {
 }
 
 export function isGitDirty(workspace: string): boolean {
+  // Held, the full status answers it too: either is empty exactly when the tree is clean.
+  if (held !== undefined) return gitStatus(workspace) !== undefined;
   return git(["status", "--porcelain"], workspace) !== undefined;
 }
 
