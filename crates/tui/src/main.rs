@@ -360,16 +360,6 @@ fn exit_splash(term: &mut Terminal<io::Stdout>, app: &App) {
 }
 
 fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
-    let was_empty = app.editor.is_empty();
-    let typed = matches!(msg, Msg::Input(TermEvent::Key(_) | TermEvent::Paste(_)) | Msg::Paste { .. });
-    let mut actions = handle_msg(app, msg, height);
-    if typed {
-        actions.extend(app.warm(was_empty));
-    }
-    actions
-}
-
-fn handle_msg(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
     match msg {
         Msg::Input(TermEvent::Key(k)) => app.on_key(k, Instant::now(), (height / 2).max(1)),
         Msg::Input(TermEvent::Paste(text)) => app.on_paste(&text),

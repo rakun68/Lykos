@@ -74,8 +74,6 @@ pub enum Then {
     Diff,
     /// A call whose answer shows nothing; a failure is the notice.
     Quiet,
-    /// `session.warm`: nothing shows, a failure included (a server older than this TUI does not know it).
-    Warm,
     /// `session.job.logs`, for the output view of this job (P5 #48).
     JobLog(String),
     /// `providers.list`, for `/connect`.
@@ -759,25 +757,6 @@ impl App {
         }
     }
 
-    /// The first character typed into an empty prompt asks the engine server to load a session process for this
-    /// directory while the prompt is written (`session.warm`): the prompt it sends then starts on one already loaded.
-    /// Nothing is asked while a session here runs, or before the server answers.
-    pub fn warm(&self, was_empty: bool) -> Option<Action> {
-        if !was_empty || self.editor.is_empty() || self.link != Link::Ready {
-            return None;
-        }
-        let s = self.current();
-        if s.is_some_and(|s| matches!(s.summary.status, SessionStatus::Starting | SessionStatus::Running | SessionStatus::Waiting)) {
-            return None;
-        }
-        let cwd = s.map_or_else(|| self.cwd.clone(), |s| s.summary.cwd.clone());
-        let mut params = json!({ "cwd": cwd });
-        if let Some(id) = &self.session {
-            params["session"] = json!(id);
-        }
-        Some(Action::Call { method: "session.warm", params, then: Then::Warm })
-    }
-
     pub fn current(&self) -> Option<&Session> {
         self.session.as_ref().and_then(|id| self.store.sessions.get(id))
     }
@@ -1412,9 +1391,6 @@ impl App {
 
     /// An answer to `Action::Call`.
     pub fn on_reply(&mut self, then: Then, result: Result<Value, String>) -> Vec<Action> {
-        if then == Then::Warm {
-            return Vec::new();
-        }
         let v = match result {
             Ok(v) => v,
             Err(e) => {
@@ -1557,7 +1533,7 @@ impl App {
             },
             Then::WorktreesChanged => return vec![self.worktrees_call()],
             Then::Diff => self.on_diff(Ok(v)),
-            Then::Quiet | Then::Warm => {}
+            Then::Quiet => {}
             Then::JobLog(id) => self.on_job_log(&id, Ok(v)),
         }
         Vec::new()
@@ -3387,26 +3363,6 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
-    }
-
-    #[test]
-    fn the_first_character_of_a_prompt_warms_a_session_process_and_the_rest_do_not() {
-        let mut app = App::new("/w".into());
-        let was = app.editor.is_empty();
-        app.on_key(key(KeyCode::Char('h')), Instant::now(), 10);
-        assert!(app.warm(was).is_none(), "nothing before the server answers");
-        app.connected();
-        app.editor = Editor::default();
-        let was = app.editor.is_empty();
-        app.on_key(key(KeyCode::Char('h')), Instant::now(), 10);
-        match app.warm(was) {
-            Some(Action::Call { method, params, then: Then::Warm }) => assert_eq!((method, params), ("session.warm", json!({ "cwd": "/w" }))),
-            other => panic!("{other:?}"),
-        }
-        let was = app.editor.is_empty();
-        app.on_key(key(KeyCode::Char('i')), Instant::now(), 10);
-        assert!(app.warm(was).is_none(), "once a prompt");
-        assert_eq!(app.on_reply(Then::Warm, Err("unknown method session.warm".into())), vec![], "an older server says nothing");
     }
 
     /// The newest toast's text.

@@ -503,28 +503,6 @@ describe("sessions, rename, archive, export and worktrees (P5 #42)", () => {
     }
   });
 
-  it("loads a spare session process while a prompt is written, and the next session there takes it", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "lykos-engine-"));
-    const address = engineAddress(dir);
-    const said: string[] = [];
-    const server = new EngineServer({ address, idleSeconds: 60, child, globalDir: dir, log: (l) => said.push(l), trust: async () => "stored" });
-    await server.listen();
-    const cwd = project();
-    try {
-      const c = await connectEngine(server.address, readOrCreateKey(address));
-      assert.deepEqual(await c.request("session.warm", { cwd }), { warmed: true });
-      assert.deepEqual(await c.request("session.warm", { cwd }), { warmed: false }, "one is loading already");
-      assert.deepEqual(await c.request("session.warm", { cwd: join(cwd, "nope") }), { warmed: false }, "no directory, no process");
-      const s = await c.request<SessionSummary>("session.start", { cwd });
-      assert.ok(said.some((l) => l.includes(`[${s.id.slice(0, 8)}] took the spare`)), said.join("\n"));
-      assert.deepEqual(await c.request("session.warm", { cwd, session: s.id }), { warmed: false }, "its session runs one");
-      c.close();
-    } finally {
-      await server.stop("test");
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  });
-
   it("opens an old session from its transcript at once, and starts it only when it is sent a prompt", async () => {
     const { server, key } = setup();
     await server.listen();

@@ -124,8 +124,6 @@ const CHILD_EXIT_GRACE_MS = 10_000;
 const NOT_RUNNING = "the session is not running yet";
 /** How long a server waits for its first client: the client that started it allows 20 s for it to listen. */
 const FIRST_CLIENT_MS = 30_000;
-/** How long a spare session process (`session.warm`) waits for a session before it ends. */
-const SPARE_MS = 5 * 60_000;
 
 /** When this module's file was last written: a rebuild changes it under a server that keeps running the old one. */
 function builtAt(): number {
@@ -152,8 +150,6 @@ export class EngineServer {
   private server: Server | undefined;
   private idleTimer: NodeJS.Timeout | undefined;
   private stopping: Promise<void> | undefined;
-  /** `session.warm`'s child: loaded, waiting for the next session in its directory. */
-  private spare: { cwd: string; child: ChildProcess; timer: NodeJS.Timeout } | undefined;
   private resolveExited: (reason: string) => void = () => {};
   /** Resolves with the reason once the server has stopped. */
   readonly exited: Promise<string> = new Promise((resolve) => (this.resolveExited = resolve));
@@ -271,11 +267,6 @@ export class EngineServer {
         return [...this.sessions.values()].map((s) => s.summary);
       case "session.start":
         return this.start(params);
-      case "session.warm": {
-        const s = typeof params.session === "string" ? this.sessions.get(params.session) : undefined;
-        if (s !== undefined && !(s.child instanceof Shelved) && s.summary.status !== "closed") return { warmed: false };
-        return { warmed: await this.warm(needCwd(params, "session.warm")) };
-      }
       case "session.prompt": {
         if (typeof params.text !== "string" || params.text === "") throw new Error("session.prompt needs text");
         this.toChild(this.session(params), { kind: "prompt", text: params.text });
@@ -679,75 +670,14 @@ export class EngineServer {
   }
 
   /** Starts `live`'s `lykos server-session` child and hands it `start`. */
-  /**
-   * A `server-session` child for the next session in `cwd`, loading its code (seconds: Pi's package) before any
-   * session needs it. One at a time; one not taken within SPARE_MS ends. A directory not trusted gets none.
-   */
-  private async warm(cwd: string): Promise<boolean> {
-    if (this.stopping) return false;
-    if (this.spare !== undefined && this.spare.cwd === cwd && this.spare.child.exitCode === null) {
-      this.spare.timer.refresh();
-      return false;
-    }
-    try {
-      if (!statSync(cwd).isDirectory()) return false;
-      await this.trustOf(cwd, false);
-    } catch {
-      return false;
-    }
-    if (this.stopping || this.spare?.cwd === cwd) return false;
-    this.dropSpare();
-    const child = this.spawnServerSession(cwd);
-    child.on("error", () => undefined);
-    const logLines = (chunk: Buffer): void => {
-      for (const line of chunk.toString("utf8").split(/\r?\n/)) if (line.trim() !== "") this.log(`[spare] ${line}`);
-    };
-    child.stdout?.on("data", logLines);
-    child.stderr?.on("data", logLines);
-    child.once("exit", () => {
-      if (this.spare?.child !== child) return;
-      clearTimeout(this.spare.timer);
-      this.spare = undefined;
-    });
-    const timer = setTimeout(() => this.dropSpare(), SPARE_MS);
-    timer.unref();
-    this.spare = { cwd, child, timer };
-    this.log(`[spare] loading in ${cwd}, pid ${String(child.pid)}`);
-    return true;
-  }
-
-  private dropSpare(): void {
-    const spare = this.spare;
-    if (spare === undefined) return;
-    this.spare = undefined;
-    clearTimeout(spare.timer);
-    spare.child.kill();
-  }
-
-  /** The spare, when it was loaded for `cwd` and still runs: it is the session's now. */
-  private takeSpare(cwd: string): ChildProcess | undefined {
-    const spare = this.spare;
-    if (spare === undefined || spare.cwd !== cwd || spare.child.exitCode !== null || !spare.child.connected) return undefined;
-    this.spare = undefined;
-    clearTimeout(spare.timer);
-    spare.child.stdout?.removeAllListeners("data");
-    spare.child.stderr?.removeAllListeners("data");
-    return spare.child;
-  }
-
-  private spawnServerSession(cwd: string, trustSource?: ChildStartParams["trustSource"]): ChildProcess {
+  private spawnChild(live: LiveSession, start: ChildStartParams, tag: string, ended: () => void): void {
     const command = this.opts.child ?? defaultChildCommand();
-    return spawn(command.command, [...command.args, "server-session"], {
-      cwd,
-      env: { ...process.env, ...this.opts.env, ...(trustSource !== undefined ? { LYKOS_TRUST_SOURCE: trustSource } : {}) },
+    const child = spawn(command.command, [...command.args, "server-session"], {
+      cwd: start.cwd,
+      env: { ...process.env, ...this.opts.env, LYKOS_TRUST_SOURCE: start.trustSource },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       windowsHide: true,
     });
-  }
-
-  private spawnChild(live: LiveSession, start: ChildStartParams, tag: string, ended: () => void): void {
-    const spare = this.takeSpare(start.cwd);
-    const child = spare ?? this.spawnServerSession(start.cwd, start.trustSource);
     const logLines = (chunk: Buffer): void => {
       for (const line of chunk.toString("utf8").split(/\r?\n/)) if (line.trim() !== "") this.log(`[${tag}] ${line}`);
     };
@@ -759,7 +689,7 @@ export class EngineServer {
       this.log(`[${tag}] exited ${String(code)}`);
       ended();
     });
-    this.log(`[${tag}] ${spare !== undefined ? "took the spare" : "started"} in ${start.cwd}, pid ${String(child.pid)}`);
+    this.log(`[${tag}] started in ${start.cwd}, pid ${String(child.pid)}`);
     const first: ToChild = { kind: "start", params: start };
     child.send(first);
   }
@@ -931,7 +861,6 @@ export class EngineServer {
     if (this.stopping) return this.stopping;
     this.stopping = (async () => {
       if (this.idleTimer) clearTimeout(this.idleTimer);
-      this.dropSpare();
       this.log(`stopping: ${reason}`);
       // close() waits for every open connection, so the clients are told to go first; one that does not is dropped.
       const closed = new Promise<void>((resolve) => (this.server ? this.server.close(() => resolve()) : resolve()));
