@@ -145,8 +145,14 @@ fn run(args: Args) -> io::Result<()> {
     let mut mini = args.mini.then(mini::Mini::default);
     let mut app = App::new(args.cwd.clone());
     app.mini = args.mini;
-    // The loading screen shows until the engine server's settings arrive; mini mode draws inline and skips it.
-    app.loading = !args.mini;
+    // OpenCode draws at once: the TUI starts on the settings this directory had last time (keys, colours, the
+    // defaults the header names) while the engine server starts, and takes the server's when they arrive. Only a
+    // first run here, with nothing remembered, shows the loading screen.
+    let remembered = settings_cache().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).and_then(|mut v| v.get_mut(&args.cwd).map(serde_json::Value::take));
+    app.loading = !args.mini && remembered.is_none();
+    if let Some(v) = remembered {
+        app.on_config(Ok(v));
+    }
     app.resume = args.session.clone();
     app.history = history::History::load(Some(PathBuf::from(&args.cwd).join(".lykos").join("history.json")));
     app.stash = stash::Stash::load(state_dir().map(|d| d.join("prompt-stash.jsonl")));
@@ -385,6 +391,9 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
             Vec::new()
         }
         Msg::Keybinds(result) => {
+            if let Ok(v) = &result {
+                remember_settings(&app.cwd, v);
+            }
             app.on_config(result);
             Vec::new()
         }
@@ -442,6 +451,25 @@ fn suspend(input: &Input) {
 fn suspend(_: &Input) {}
 
 /// Where the TUI keeps what is the user's, not the workspace's: `LYKOS_TUI_DIR`, or `~/.lykos/tui`.
+/// The settings (`config.keybinds`) each directory had last, by directory: what the next start there draws with.
+fn settings_cache() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("settings-cache.json"))
+}
+
+/// Keeps `cwd`'s settings for the next start; written only when they changed.
+fn remember_settings(cwd: &str, v: &serde_json::Value) {
+    let Some(path) = settings_cache() else { return };
+    let mut all = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+    if all.get(cwd) == Some(v) {
+        return;
+    }
+    all[cwd] = v.clone();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&path, all.to_string());
+}
+
 fn state_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("LYKOS_TUI_DIR").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(dir));

@@ -990,6 +990,8 @@ impl App {
     pub fn on_config(&mut self, result: Result<serde_json::Value, String>) {
         let problems = match result {
             Ok(v) => {
+                // What the last run's settings set is undone first: a binding taken out of the config since is gone.
+                self.keymap = Keymap::default();
                 let mut p = self.keymap.apply(&v["keybinds"]);
                 p.extend(theme::set_colors(&v["colors"]));
                 let d = &v["defaults"];
