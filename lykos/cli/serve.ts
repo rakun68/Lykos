@@ -56,7 +56,9 @@ export async function runServerSession(): Promise<number> {
   });
   const code = await runSessionChild(
     (msg) => {
-      if (process.connected) sendToServer(msg);
+      // A pipe that breaks before `disconnect` is seen fails the send with EPIPE: with a callback that is the
+      // callback's, not an unhandled 'error' that kills the child before its teardown (archive, ledger) runs.
+      if (process.connected) sendToServer(msg, undefined, undefined, () => undefined);
     },
     (fn) => {
       process.on("message", fn as (m: unknown) => void);

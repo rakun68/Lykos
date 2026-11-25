@@ -563,8 +563,7 @@ export function register(api: LykosExtensionApi): void {
     return cachedSeals;
   }
 
-  // Pre-load active seals at start
-  getSeals();
+  // The seals are read when a hook first asks, not at load: two git calls (~160 ms on Windows) off every session's start.
 
   api.on("checkpoint_written", () => {
     needsRefresh = true;
