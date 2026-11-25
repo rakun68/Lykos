@@ -11,6 +11,28 @@ use crate::transcript::Verbosity;
 
 pub const RECENT: usize = 10;
 
+/// A model the model picker has touched: whether the model list shows it, the name it goes by there, and the effort a
+/// switch to it sets. Its own name, context window and reasoning are kept so the list draws it with no call.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelPref {
+    pub shown: bool,
+    /// The name given to it; empty: its own.
+    pub rename: String,
+    /// Its own name, as its provider lists it.
+    pub label: String,
+    /// The effort a switch to it sets; `None`: the session's own.
+    pub effort: Option<String>,
+    pub context: Option<f64>,
+    pub reasoning: bool,
+}
+
+impl ModelPref {
+    /// The name the model list shows.
+    pub fn name(&self) -> &str {
+        if self.rename.is_empty() { &self.label } else { &self.rename }
+    }
+}
+
 #[derive(Debug)]
 pub struct Prefs {
     path: Option<PathBuf>,
@@ -20,6 +42,8 @@ pub struct Prefs {
     pub favorite: Vec<String>,
     /// Pinned sessions' ledger ids, newest pin first.
     pub pinned: Vec<String>,
+    /// `provider/id` and what the model picker set for it, in the order first touched.
+    pub models: Vec<(String, ModelPref)>,
     pub show_thinking: bool,
     pub scrollbar: bool,
     pub grouping: bool,
@@ -40,6 +64,7 @@ impl Default for Prefs {
             recent: Vec::new(),
             favorite: Vec::new(),
             pinned: Vec::new(),
+            models: Vec::new(),
             show_thinking: false,
             scrollbar: false,
             grouping: true,
@@ -68,6 +93,26 @@ impl Prefs {
             recent,
             favorite: names(&v["favorite"]),
             pinned: names(&v["pinned"]),
+            models: v["models"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| {
+                            let key = m["key"].as_str()?.to_string();
+                            let text = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+                            let pref = ModelPref {
+                                shown: m["shown"].as_bool().unwrap_or(false),
+                                rename: text("rename"),
+                                label: text("label"),
+                                effort: m["effort"].as_str().map(str::to_string),
+                                context: m["context"].as_f64(),
+                                reasoning: m["reasoning"].as_bool().unwrap_or(false),
+                            };
+                            Some((key, pref))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             show_thinking: v["thinking"].as_str().map_or(d.show_thinking, |s| s == "show"),
             scrollbar: v["scrollbar"].as_bool().unwrap_or(d.scrollbar),
             grouping: v["grouping"].as_str().map_or(d.grouping, |s| s != "none"),
@@ -97,6 +142,31 @@ impl Prefs {
         self.save();
     }
 
+    pub fn model(&self, key: &str) -> Option<&ModelPref> {
+        self.models.iter().find(|(k, _)| k == key).map(|(_, m)| m)
+    }
+
+    /// A model's entry, made when it has none; its own name, context window and reasoning are brought up to date.
+    pub fn model_entry(&mut self, key: &str, label: &str, context: Option<f64>, reasoning: bool) -> &mut ModelPref {
+        let i = match self.models.iter().position(|(k, _)| k == key) {
+            Some(i) => i,
+            None => {
+                self.models.push((key.to_string(), ModelPref::default()));
+                self.models.len() - 1
+            }
+        };
+        let m = &mut self.models[i].1;
+        m.label = label.to_string();
+        m.context = context;
+        m.reasoning = reasoning;
+        m
+    }
+
+    /// The models the model list shows, in the order first touched.
+    pub fn shown(&self) -> impl Iterator<Item = (&String, &ModelPref)> {
+        self.models.iter().filter(|(_, m)| m.shown).map(|(k, m)| (k, m))
+    }
+
     /// `session.pin.toggle`.
     pub fn toggle_pin(&mut self, id: &str) {
         let had = self.pinned.iter().any(|m| m == id);
@@ -122,6 +192,9 @@ impl Prefs {
             "recent": self.recent,
             "favorite": self.favorite,
             "pinned": self.pinned,
+            "models": self.models.iter().map(|(k, m)| json!({
+                "key": k, "shown": m.shown, "rename": m.rename, "label": m.label, "effort": m.effort, "context": m.context, "reasoning": m.reasoning,
+            })).collect::<Vec<_>>(),
             "thinking": if self.show_thinking { "show" } else { "hide" },
             "scrollbar": self.scrollbar,
             "grouping": if self.grouping { "auto" } else { "none" },
@@ -153,6 +226,11 @@ mod tests {
         p.toggle_favorite("p/a");
         p.set_theme("rose-pine");
         p.toggle_pin("s1");
+        let m = p.model_entry("p/m1", "Model One", Some(200000.0), true);
+        m.shown = true;
+        m.rename = "One".into();
+        m.effort = Some("high".into());
+        p.model_entry("p/m2", "Model Two", None, false);
         p.verbosity = Verbosity::High;
         p.show_thinking = true;
         p.save();
@@ -163,6 +241,8 @@ mod tests {
         assert_eq!(again.favorite, ["p/b"]);
         assert_eq!(again.pinned, ["s1"]);
         assert_eq!(again.theme.as_deref(), Some("rose-pine"));
+        assert_eq!(again.shown().map(|(k, m)| (k.as_str(), m.name(), m.effort.as_deref())).collect::<Vec<_>>(), [("p/m1", "One", Some("high"))]);
+        assert_eq!(again.model("p/m2").map(|m| (m.shown, m.name())), Some((false, "Model Two")), "touched, hidden, kept");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

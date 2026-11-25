@@ -2,7 +2,7 @@
 // resync after a drop, and when it exits.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -242,10 +242,22 @@ describe("engine server", () => {
       assert.ok(first.length > 30, `${first.length} providers`);
       assert.equal(first.find((p) => p.name === "anthropic")?.login, "oauth");
       assert.equal(first.find((p) => p.name === "groq")?.login, "api_key");
+      // How each signs in comes from the runtime: Anthropic takes a browser sign-in or a key, Antigravity a browser only.
+      const kinds = (name: string) => { const p = first.find((e) => e.name === name); return [p?.oauth, p?.apiKey]; };
+      assert.deepEqual(kinds("anthropic"), [true, true]);
+      assert.deepEqual(kinds("google-antigravity"), [true, false]);
+      assert.deepEqual(kinds("groq"), [false, true]);
+      await assert.rejects(a.request("provider.models", { cwd: work, provider: "omniroute" }), /omniroute has no endpoint/);
 
       const added = await a.request<{ path: string }>("provider.add", { cwd: work, scope: "project", id: "local", api: "openai-completions", baseUrl: "http://localhost:11434/v1", models: "qwen3:8b" });
       assert.equal(added.path, join(work, ".lykos", "config.yaml"));
       await assert.rejects(a.request("provider.add", { cwd: work, scope: "project", id: "groq", api: "openai-completions", baseUrl: "http://x", models: "m" }), /already exists/);
+      // Models are optional: the model list's picker adds them later, to the file that declares the provider.
+      await a.request("provider.add", { cwd: work, scope: "project", id: "omni", api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", models: "" });
+      const at = await a.request<{ path: string }>("provider.model.add", { cwd: work, provider: "omni", model: "auto/best-coding" });
+      assert.equal(at.path, added.path);
+      assert.match(readFileSync(at.path, "utf8"), /omni:\n(.*\n)*? {4}models:\n {6}- id: "auto\/best-coding"/);
+      await assert.rejects(a.request("provider.model.add", { cwd: work, provider: "nowhere", model: "m" }), /nowhere is not declared in a config file/);
 
       const stored = await a.request<{ message: string }>("credential.add", { provider: "local", key: "sk-SERVER-SECRET" });
       assert.match(stored.message, /logged in to local as key#1/);

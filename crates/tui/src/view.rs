@@ -564,7 +564,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
     theme::dim(buf);
     let dw = w.saturating_sub(4).min(if matches!(d, Dialog::Aside { .. } | Dialog::Help { .. } | Dialog::Output { .. } | Dialog::Skills { .. }) { 100 } else { 72 });
     let inner = dw.saturating_sub(4) as usize;
-    let searching = matches!(d, Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. });
+    let searching = matches!(d, Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::ModelPicker { .. });
     let search_h: u16 = if searching && h >= 14 { 3 } else { 0 };
     let room = h.saturating_sub(6 + search_h) as usize;
     let k = |id: &str| app.keymap.first(id);
@@ -663,7 +663,6 @@ fn dialog(app: &App, buf: &mut Buffer) {
         }
         Dialog::Accounts { provider, selected, confirm } => {
             let entry = app.providers.iter().flatten().find(|p| &p.name == provider);
-            let oauth = entry.is_some_and(|p| p.login == "oauth");
             let mut lines = Vec::new();
             let mut at = None;
             match &app.accounts {
@@ -687,13 +686,59 @@ fn dialog(app: &App, buf: &mut Buffer) {
                         let why = entry.map_or(String::new(), |p| p.reason.clone());
                         lines.push(Line { heading: true, ..line(format!("No stored credential: {why}"), theme::muted()) });
                     }
-                    if *selected == accounts.len() {
-                        at = Some(lines.len());
+                    for (j, browser) in app.account_adds(provider).into_iter().enumerate() {
+                        if *selected == accounts.len() + j {
+                            at = Some(lines.len());
+                        }
+                        lines.push(line(if browser { "+ Sign in with a browser" } else { "+ Add an API key" }, Style::fg(c().accent)));
                     }
-                    lines.push(line(if oauth { "+ Sign in with a browser" } else { "+ Add an API key" }, Style::fg(c().accent)));
                 }
             }
             (format!("{provider} accounts"), lines, at, format!("{} add · d remove · {} back", k("dialog.select.submit"), k("dialog.close")))
+        }
+        Dialog::ModelPicker { provider, query, selected, rename } => {
+            // Two rows a model: a dot (shown or hidden) and its name, its effort on the right; its id under it.
+            let models = app.picker_rows(provider, query);
+            let mut lines = Vec::new();
+            let mut at = None;
+            let room_w = inner.saturating_sub(1);
+            for (i, m) in models.iter().enumerate() {
+                let pref = app.prefs.model(&format!("{provider}/{}", m.id));
+                let on = i == *selected;
+                if on {
+                    at = Some(lines.len());
+                }
+                let (dot, dot_style) = if pref.is_some_and(|p| p.shown) { ("● ", Style::fg(c().accent)) } else { ("○ ", theme::subtle()) };
+                let name = match (rename, on) {
+                    (Some(t), true) => format!("{t}▏"),
+                    _ => pref.filter(|p| !p.rename.is_empty()).map_or_else(|| m.name.clone(), |p| p.rename.clone()),
+                };
+                let effort = app.picker_effort(provider, m).map(|e| if on { format!("‹ {e} ›") } else { e }).unwrap_or_default();
+                let name = ellipsis(&name, room_w.saturating_sub(effort.width() + 4));
+                let pad = room_w.saturating_sub(2 + name.width() + effort.width());
+                lines.push(runs(vec![(dot.into(), dot_style), (name, theme::text()), (" ".repeat(pad), theme::text()), (effort, Style::fg(c().accent))]));
+                lines.push(Line { with_prev: true, ..runs(vec![("  ".into(), theme::text()), (ellipsis(&m.id, room_w.saturating_sub(2)), theme::muted())]) });
+            }
+            if lines.is_empty() {
+                match &app.picker {
+                    None => lines.push(line("Loading models…", theme::muted())),
+                    Some(Err(e)) => {
+                        lines.extend(wrap(e, inner.max(1)).into_iter().map(|l| line(l, Style::fg(c().love))));
+                        if app.no_endpoint() {
+                            lines.push(line(format!("{}: add its base URL", k("dialog.select.submit")), theme::muted()));
+                        }
+                    }
+                    Some(Ok(_)) => lines.push(line(if query.is_empty() { "No models" } else { "No match" }, theme::muted())),
+                }
+            }
+            search = Some(("Search models", query.clone()));
+            let n = app.prefs.shown().filter(|(k, _)| k.strip_prefix(provider.as_str()).is_some_and(|r| r.starts_with('/'))).count();
+            let keys = if rename.is_some() {
+                format!("{} keep · {} cancel", k("dialog.select.submit"), k("dialog.close"))
+            } else {
+                format!("{} show/hide · ←→ effort · ctrl+r rename · {} back", k("dialog.select.submit"), k("dialog.close"))
+            };
+            (format!("{provider} models · {n} shown"), lines, at, keys)
         }
         Dialog::Provider(f) => {
             let key_only = f.provider.is_some();
@@ -754,12 +799,18 @@ fn dialog(app: &App, buf: &mut Buffer) {
         Dialog::List { list, query, selected } => {
             let (mut lines, at) = select_lines(&app.list_rows(list, query), *selected);
             let (name, empty, extra) = match list {
-                List::Models => ("Select model", "No models: open a session first, or connect a provider", format!(" · {} favorite · {} providers", k("model.dialog.favorite"), k("model.dialog.provider"))),
+                List::Models => (
+                    "Select model",
+                    if app.providers.is_none() { "Loading providers…" } else { "No provider connected: /connect adds one" },
+                    format!(" · {} favorite · {} providers", k("model.dialog.favorite"), k("model.dialog.provider")),
+                ),
                 List::Efforts => ("Select thinking effort", "This model has no effort levels, or no session is open", String::new()),
                 List::Agents => ("Select specialist", "No specialists: open a session first", String::new()),
-                List::Themes { .. } => ("Themes", "", String::new()),
-                List::Providers => ("Connect a provider", "Loading providers…", String::new()),
+                List::Themes { .. } => ("Themes", "No themes", String::new()),
+                List::Providers => ("Connect a provider", if app.providers.is_none() { "Loading providers…" } else { "No providers" }, String::new()),
             };
+            // A search that matches nothing says so, whatever the list.
+            let empty = if query.is_empty() { empty } else { "No match" };
             if lines.is_empty() {
                 lines.push(line(empty, theme::muted()));
             }
@@ -842,7 +893,14 @@ fn dialog(app: &App, buf: &mut Buffer) {
         Dialog::Sessions { query, selected, all, confirm } => {
             let (mut lines, at) = select_lines(&app.session_rows(query, confirm.as_deref()), *selected);
             if lines.is_empty() {
-                lines.push(line(if app.past.is_none() { "Loading sessions…" } else { "No sessions" }, theme::muted()));
+                let empty = if app.past.is_none() {
+                    "Loading sessions…"
+                } else if query.is_empty() {
+                    "No sessions"
+                } else {
+                    "No match"
+                };
+                lines.push(line(empty, theme::muted()));
             }
             let name = if *all { "Sessions  every project" } else { "Sessions" };
             search = Some(("Search sessions", query.clone()));
@@ -858,7 +916,10 @@ fn dialog(app: &App, buf: &mut Buffer) {
             (name.into(), lines, at, keys)
         }
         Dialog::Timeline { query, selected } => {
-            let (lines, at) = select_lines(&app.timeline_rows(query), *selected);
+            let (mut lines, at) = select_lines(&app.timeline_rows(query), *selected);
+            if lines.is_empty() {
+                lines.push(line(if query.is_empty() { "No prompts yet" } else { "No match" }, theme::muted()));
+            }
             search = Some(("Search timeline", query.clone()));
             ("Timeline".into(), lines, at, format!("{} jump · {close}", k("dialog.select.submit")))
         }
@@ -1496,13 +1557,46 @@ mod tests {
         app.dialog = Some(Dialog::List { list: List::Models, query: String::new(), selected: 0 });
         let mut buf = Buffer::new(100, 30);
         draw(&app, &mut buf);
+        assert!(screen(&buf).contains("Loading providers…"), "{}", screen(&buf));
+        let entry = lykos_client::ProviderEntry { name: "p".into(), login: "api_key".into(), oauth: None, api_key: None, configured: true, reason: String::new() };
+        app.providers = Some(vec![entry]);
+        draw(&app, &mut buf);
         let s = screen(&buf);
-        assert!(s.contains("Select model") && s.contains("● Alpha") && s.contains("p · 200K · Reasoning"), "{s}");
+        assert!(s.contains("Select model") && s.contains("● Alpha") && s.contains("200K") && s.contains("Select models…"), "{s}");
+        app.dialog = Some(Dialog::List { list: List::Models, query: "zzz".into(), selected: 0 });
+        draw(&app, &mut buf);
+        assert!(screen(&buf).contains("No match"), "a search that matches nothing says so");
+        app.dialog = Some(Dialog::List { list: List::Models, query: String::new(), selected: 0 });
         assert_eq!(buf.get(0, 29).style.bg, lykos_term::Color::Reset, "a dark theme leaves the terminal's background");
         theme::set("rose-pine-dawn");
         draw(&app, &mut buf);
         assert_eq!(buf.get(0, 29).style.bg, c().base.unwrap(), "a light one paints it");
         theme::set("sky");
+    }
+
+    #[test]
+    fn the_model_picker_draws_each_model_shown_or_hidden_with_its_id_and_effort() {
+        let mut app = App::new("C:/work".into());
+        app.connected();
+        app.dialog = Some(Dialog::ModelPicker { provider: "p".into(), query: String::new(), selected: 0, rename: None });
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        assert!(screen(&buf).contains("Loading models…"));
+        app.picker = Some(Ok(serde_json::from_value(serde_json::json!([
+            { "id": "a-1", "name": "Alpha", "reasoning": true, "contextWindow": null, "efforts": ["off", "high"], "listed": true },
+            { "id": "b-2", "name": "Beta", "reasoning": false, "contextWindow": null, "efforts": ["off"], "listed": true }
+        ]))
+        .unwrap()));
+        app.prefs.model_entry("p/b-2", "Beta", None, false).shown = true;
+        draw(&app, &mut buf);
+        let s = screen(&buf);
+        assert!(s.contains("p models · 1 shown") && s.contains("○ Alpha") && s.contains("‹ auto ›") && s.contains("a-1") && s.contains("● Beta") && s.contains("b-2"), "{s}");
+        app.dialog = Some(Dialog::ModelPicker { provider: "p".into(), query: "zzz".into(), selected: 0, rename: None });
+        draw(&app, &mut buf);
+        assert!(screen(&buf).contains("No match"));
+        app.picker = Some(Err("p has no endpoint: add it as a custom provider with its base URL".into()));
+        draw(&app, &mut buf);
+        assert!(screen(&buf).contains("add its base URL"));
     }
 
     #[test]

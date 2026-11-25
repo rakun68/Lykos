@@ -155,11 +155,53 @@ pub struct SpecialistOption {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProviderEntry {
     pub name: String,
-    /// "oauth" (a browser sign-in) or "api_key".
+    /// "oauth" (a browser sign-in) or "api_key": how it signs in first.
     pub login: String,
+    /// It has a browser sign-in. An older server sends neither this nor `api_key`: `login` says which.
+    #[serde(default)]
+    pub oauth: Option<bool>,
+    /// It takes an API key.
+    #[serde(default, rename = "apiKey")]
+    pub api_key: Option<bool>,
     /// It has a credential, its environment variable or a declared source already.
     pub configured: bool,
     pub reason: String,
+}
+
+impl ProviderEntry {
+    pub fn signs_in_with_browser(&self) -> bool {
+        self.oauth.unwrap_or(self.login == "oauth")
+    }
+
+    pub fn takes_api_key(&self) -> bool {
+        self.api_key.unwrap_or(self.login != "oauth")
+    }
+}
+
+/// `provider.models`' rows: every model a provider offers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderModel {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub reasoning: bool,
+    #[serde(default, rename = "contextWindow")]
+    pub context_window: Option<f64>,
+    /// The effort levels it takes, lowest first; `["off"]` when it does not reason.
+    #[serde(default)]
+    pub efforts: Vec<String>,
+    /// A session can switch to it already; one the endpoint lists that its declaration lacks is added when shown.
+    #[serde(default = "yes")]
+    pub listed: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderModelsResult {
+    pub models: Vec<ProviderModel>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

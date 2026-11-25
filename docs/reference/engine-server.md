@@ -53,7 +53,7 @@ on the address cannot pose as the server. Each step has a 5 s deadline.
 | `server.shutdown` | | `{stopping: true}`; every connection is closed, every session child told to close |
 | `server.disconnect` | | `{closed}`: closes every connection except this one (tests drive reconnection with it) |
 | `sessions.list` | | `SessionSummary[]` |
-| `session.start` | `{cwd, model?, mode?, autoApprove?, trust?, origin?, resume?, fork?}` | `SessionSummary`. An untrusted workspace is refused unless `trust: true`. `resume` (a ledger session id) continues it as `lykos resume` does, `fork` as `lykos resume --fork`; a preflight that needs agreement asks it as a `question` request. A resume of a ledger session already open, or being opened, is refused |
+| `session.start` | `{cwd, model?, mode?, autoApprove?, trust?, origin?, resume?, fork?}` | `SessionSummary`. An untrusted workspace is refused unless `trust: true`. `resume` (a ledger session id) continues it as `lykos resume` does, `fork` as `lykos resume --fork`; a preflight that would need agreement (a rebuild cost, a moved working tree) is agreed to, so a resume asks nothing. A resume of a ledger session already open, or being opened, is refused |
 | `session.prompt` | `{session, text}` | `{ok: true}` |
 | `session.interrupt` | `{session}` | `{ok: true}` |
 | `session.answer` | `{session, requestId, answer}` | `{ok: true}`: answers an approval or a question |

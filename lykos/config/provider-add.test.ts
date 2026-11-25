@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { addProviderToConfig, runProviderAdd, type ProviderAddQuestion } from "./provider-add.js";
+import { addModelToConfig, addProviderToConfig, runProviderAdd, type ProviderAddQuestion } from "./provider-add.js";
 import { validateProviders } from "./providers.js";
 import type { ProvidersConfig } from "./types.js";
 
@@ -51,4 +51,26 @@ test("runProviderAdd asks each question and writes the chosen file; a bad answer
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a model joins its provider's declared models, in whatever form they are, and a listed one is left alone", () => {
+  const models = (raw: string, id = "omniroute") => ((parse(raw) as { providers: ProvidersConfig }).providers[id]?.models ?? []).map((m) => m.id);
+  const empty = addProviderToConfig("", { id: "omniroute", api: "openai-completions", baseUrl: "http://localhost:20128/v1", models: [] });
+  assert.match(empty, /\n {4}models: \[\]\n/);
+  const one = addModelToConfig(empty, "omniroute", "auto/best-coding");
+  assert.deepEqual(models(one), ["auto/best-coding"]);
+  const two = addModelToConfig(one, "omniroute", "x:y");
+  assert.deepEqual(models(two), ["auto/best-coding", "x:y"]);
+  assert.equal(addModelToConfig(two, "omniroute", "x:y"), two, "listed already");
+  // No models key, with a provider after it; CRLF kept.
+  const bare = "providers:\r\n  a:\r\n    auth: api_key\r\n  b:\r\n    auth: api_key\r\n";
+  const added = addModelToConfig(bare, "a", "m1");
+  assert.deepEqual([models(added, "a"), models(added, "b")], [["m1"], []]);
+  assert.ok(!added.replace(/\r\n/g, "").includes("\n"), "CRLF kept");
+  // Items at the key's own indent.
+  const flush = "providers:\n  a:\n    models:\n    - id: m1\n      name: One\n  b:\n    auth: api_key\n";
+  assert.deepEqual(models(addModelToConfig(flush, "a", "m2"), "a"), ["m1", "m2"]);
+  assert.throws(() => addModelToConfig("providers:\n  a:\n    models: [{ id: m1 }]\n", "a", "m2"), /not a block list/);
+  assert.throws(() => addModelToConfig("providers: { a: { auth: api_key } }\n", "a", "m2"), /not in block style/);
+  assert.throws(() => addModelToConfig("providers:\n  a:\n    auth: api_key\n", "c", "m2"), /c is not declared/);
 });

@@ -102,6 +102,36 @@ try {
     await waitText("No skills in|/skill:");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
+  await step("a provider search that matches nothing says No match, never loading", async () => {
+    await call("send_text", { sessionId: id, text: "/connect" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Add a custom provider");
+    await call("send_text", { sessionId: id, text: "zzqqxx" });
+    await waitText("No match");
+    if ((await screen()).includes("Loading")) throw new Error("it still says loading");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
+  await step("anthropic signs in with a browser or an API key, google-antigravity with a browser", async () => {
+    await call("send_text", { sessionId: id, text: "/connect" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Add a custom provider");
+    await call("send_text", { sessionId: id, text: "anthropic" });
+    await waitText("browser or API key");
+    for (let i = 0; i < 9; i++) await call("send_keys", { sessionId: id, keys: "Backspace" });
+    await call("send_text", { sessionId: id, text: "antigravity" });
+    await waitText("google-antigravity +browser · ");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
+  await step("the model list opens before any session: a section per connected provider, or how to connect one", async () => {
+    await call("send_text", { sessionId: id, text: "/models" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Select model");
+    await waitText("No provider connected: /connect adds one|Select models…");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
   await step("a typed prompt is sent with Enter and answered", async () => {
     await call("send_text", { sessionId: id, text: "hello through the mcp" });
     await waitText("hello through the mcp");

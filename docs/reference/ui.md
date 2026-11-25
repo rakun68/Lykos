@@ -281,14 +281,16 @@ characters a token; messages are the measured total less the head when the provi
 shows the head estimate as the context bar until a request measures it, never `unknown`.
 
 **Login.** `/connect` lists every provider Lykos supports, from the engine server's `providers.list`, with or
-without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser` (OAuth) or
-`API key` and why; a provider already configured (a credential in its pool, its environment variable, or a declared
-source) is drawn in the accent colour. A configured provider opens its accounts: each credential in its pool by label, kind and date added, `d` twice to
-remove one (disabled as `lykos logout` does, never deleted, by the server's `credential.remove`), and a last row to add
-another; `Esc` goes back to the list. One configured only by its environment variable says so. An unconfigured
-provider with OAuth sends `/login <name>`, starting a session when none is
-open; any other has its API key asked for in a popup of its own, drawn as `•`, and stored by the server's
-`credential.add` without a session. An engine server older than its build on disk, or one that answers `unknown
+without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser`,
+`API key` or `browser or API key`, as Pi's runtime offers an OAuth login and an API key for it (Anthropic takes both,
+Google Antigravity a browser only), and why; a provider already configured (a credential in its pool, its environment
+variable, or a declared source) is drawn in the accent colour. A configured provider opens its accounts: each
+credential in its pool by label, kind and date added, `d` twice to remove one (disabled as `lykos logout` does, never
+deleted, by the server's `credential.remove`), and a row for each way to add another; `Esc` goes back to the list. One
+configured only by its environment variable says so. An unconfigured provider that takes both opens the same dialog
+with its two rows; one with a browser sign-in only sends `/login <name>`, starting a session when none is open, which
+shows the sign-in link; one with an API key only has it asked for in a popup of its own, drawn as `•`, and stored by
+the server's `credential.add` without a session. An engine server older than its build on disk, or one that answers `unknown
 method`, says so in a notice. It outlives TUI windows while it has sessions; `Restart the engine server` in the palette
 stops it (its sessions are closed, archived and resumable), the next request starts the one on disk, and this tab's
 session is resumed there.
@@ -297,10 +299,13 @@ session is resumed there.
 or without a session: `↑`/`↓` or `Tab` move between fields, `←`/`→` change a choice, `Enter` goes to the next field
 and saves on the last; a missing field or the server's refusal shows under the fields and the popup stays. The
 server's `provider.add` writes it: the provider's name, its API (`openai-completions`, `openai-responses`,
-`anthropic-messages`, `google-generative-ai`), its base URL, its model ids, and whether to save it to the global or
-the project `config.yaml`. It appends the declaration to that file's `providers:` block, leaving the rest of the file
-as it was, then stores the key when one was typed (it is optional). A new session uses it, as `<name>/<model>`. A
-name in use, a URL that is not http or https, or no model id stops it with the reason, and nothing is written.
+`anthropic-messages`, `google-generative-ai`), its base URL, its model ids (optional: the model picker adds them
+later), and whether to save it to the global or the project `config.yaml`. It appends the declaration to that file's
+`providers:` block, leaving the rest of the file as it was, then stores the key when one was typed (it is optional).
+A new session uses it, as `<name>/<model>`. A name in use or a URL that is not http or https stops it with the
+reason, and nothing is written. A provider with a stored key and no declaration (an OpenAI-compatible gateway whose
+key was added first) has no endpoint to ask for models: its picker says so, and `Enter` there opens this popup with
+its name filled in.
 `/provider add` on the line surface asks the same questions as lines.
 
 **Command answers (#58).** What a session's slash command answers (`/session`, the lists of `/specialist` and
@@ -328,7 +333,7 @@ command, so it takes effect on the next request.
 
 | Key | Command | Action |
 | --- | --- | --- |
-| `Ctrl+X M` | `/models`, `/model` | The models: Favorites, Recent, then each provider; `Ctrl+F` favorites the row, `Ctrl+A` the providers, `Ctrl+U` usage. Sends `/model provider/id` |
+| `Ctrl+X M` | `/models`, `/model` | The models shown: Favorites, Recent, then a section for each connected provider ending in `Select models…`; `Ctrl+F` favorites the row, `Ctrl+A` the providers, `Ctrl+U` usage. Sends `/model provider/id`, then `/effort` when the picker set one; with no session open, the next session starts on it |
 | `F2`, `Shift+F2` | | Next, previous recently used model |
 | `Ctrl+T` | `/effort` | Next thinking effort, wrapping; `/effort` lists them. Sends `/effort level` |
 | `Ctrl+X A`, `Shift+Tab` | `/agents`, `/specialist` | The primary specialists; `Shift+Tab` the next. Sends `/specialist name` |
@@ -342,14 +347,29 @@ command, so it takes effect on the next request.
 by default; the palette runs them. With an argument, `/model`, `/effort`, `/specialist` and `/login`
 go to the session as before. Eight themes: `sky` (the default), `rose-pine`, `rose-pine-moon`,
 `rose-pine-dawn`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`; the mode switch goes to the other of a
-dark and light pair. The theme, the last 10 models (newest first) and the favorites are kept in
-`~/.lykos/tui/state.json` (or `$LYKOS_TUI_DIR`).
+dark and light pair. The theme, the last 10 models (newest first), the favorites and what the model picker set are
+kept in `~/.lykos/tui/state.json` (or `$LYKOS_TUI_DIR`).
+
+**Model picker.** `Select models…` opens a provider's models, as the server's `provider.models` lists them: a
+provider declared with a base URL is asked (`GET <baseUrl>/models`, its key in the header its API takes), its
+declared models first; any other is the runtime's catalog. Every model starts hidden from the model list. Each takes
+two rows: `●` shown or `○` hidden and its name, the effort a switch to it sets on the right (`auto` leaves the
+session's), and its id under it. `Enter` shows or hides it, `←`/`→` change the effort, `Ctrl+R` or `F2` renames it
+(its id stays; an empty name or its own puts its own back), typing filters, and `Esc` goes back to the model list on
+that provider's row. A model only the endpoint lists is added to the provider's declaration when shown
+(`provider.model.add`, the project file when it declares the provider, else the global one), so a new session can
+switch to it.
+
+**Empty lists.** A list says what it waits for only while its call is out (`Loading providers…`); a search that
+matches nothing says `No match`, and a call that failed leaves its list empty, saying so, with the error in a toast
+or notice.
 
 Where the lists differ from OpenCode on purpose:
 
 - Thinking effort replaces variants, and its cycle wraps with no "default" step.
 - Primary specialists replace agents.
-- Before a session exists the lists are empty: they come from the session's own runtime.
+- Before a session exists the effort and specialist lists are empty: they come from the session's own runtime. The
+  model list is the picker's choice, so it shows with no session.
 - The model list shows no usage limits; the usage dialog shows Lykos's own cost and cache figures.
 - No variant list follows a model choice.
 - Eight palettes, no `ansi16` or `mono`, and no `theme.mode.lock`; `ui.theme` in config is not read.
@@ -382,7 +402,7 @@ TUI commands: `/sessions` (bare `/resume` too) the list, `/open` every project's
 The session list shows root sessions that are not archived: Pinned first, then by the UTC day they
 started (`Today`, else the date), newest first, the one shown marked `●` and a pinned one `*`.
 Typing filters by title. `Enter` shows the session's tab when it runs here, and resumes it otherwise
-(the resume's preflight question shows as a request). `Ctrl+D` twice archives it: the ledger row and
+(it asks nothing: the TUI agrees to the resume's preflight). `Ctrl+D` twice archives it: the ledger row and
 transcript stay, `lykos session --all` lists it, and a resume clears the archive. `Ctrl+R` renames it,
 `Ctrl+F` pins it (kept in `state.json`), `Ctrl+A` switches between this project and every project.
 

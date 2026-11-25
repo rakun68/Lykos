@@ -10,6 +10,7 @@ mod form;
 mod history;
 mod keymap;
 mod menu;
+mod models;
 mod mini;
 mod paste;
 mod prefs;
@@ -542,9 +543,9 @@ fn requests(opts: Options, args: Args, actions: Receiver<Action>, tx: Sender<Msg
     let _ = tx.send(Msg::Keybinds(keybinds));
     for action in actions {
         let reply = match &action {
-            Action::Start => {
+            Action::Start { model } => {
                 let mut p = json!({ "cwd": args.cwd, "origin": "tui" });
-                if let Some(m) = &args.model {
+                if let Some(m) = model.as_ref().or(args.model.as_ref()) {
                     p["model"] = Value::String(m.clone());
                 }
                 if args.trust {

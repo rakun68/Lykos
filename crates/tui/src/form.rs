@@ -48,7 +48,7 @@ impl Field {
         match self {
             Field::Name => "local",
             Field::BaseUrl => "http://localhost:11434/v1",
-            Field::Models => "llama3.1, qwen2.5-coder",
+            Field::Models => "optional: pick them later in the model list",
             Field::Key if key_only => "the key, $VAR or !command",
             Field::Key => "optional: the key, $VAR or !command",
             Field::Api | Field::Scope => "",
@@ -139,9 +139,8 @@ impl ProviderForm {
         let empty = |f: Field| match f {
             Field::Name => self.name.trim().is_empty(),
             Field::BaseUrl => self.base_url.trim().is_empty(),
-            Field::Models => self.models.trim().is_empty(),
             Field::Key => self.provider.is_some() && self.key.trim().is_empty(),
-            Field::Api | Field::Scope => false,
+            Field::Models | Field::Api | Field::Scope => false,
         };
         self.fields().iter().position(|f| empty(*f))
     }
@@ -156,6 +155,12 @@ impl App {
     /// Opens the custom provider popup.
     pub fn ask_custom(&mut self) {
         self.dialog = Some(Dialog::Provider(ProviderForm::default()));
+    }
+
+    /// Opens the custom provider popup for `name`, a provider with a stored key and no endpoint: its name is filled
+    /// in, and the cursor is on the API kind, its base URL next.
+    pub fn ask_custom_named(&mut self, name: &str) {
+        self.dialog = Some(Dialog::Provider(ProviderForm { name: name.into(), focus: 1, ..ProviderForm::default() }));
     }
 
     /// A key in the popup: up and down (or tab) move between fields, left and right change a choice, Enter goes to

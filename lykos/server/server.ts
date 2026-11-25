@@ -14,16 +14,17 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, rmSync, statSync, type WriteStream } from "node:fs";
+import { createWriteStream, existsSync, readFileSync, rmSync, statSync, type WriteStream } from "node:fs";
 import { homedir } from "node:os";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { tuiColors, tuiKeybinds } from "../config/keybinds.js";
 import { sessionDefaults } from "../session/session-options.js";
 import { globalConfigPath, loadConfig, projectConfigPath } from "../config/load.js";
 import { providerCatalog } from "../config/provider-catalog.js";
-import { baseUrlProblem, CUSTOM_PROVIDER_APIS, modelIds, providerIdProblem, writeProviderToConfig } from "../config/provider-add.js";
+import { baseUrlProblem, CUSTOM_PROVIDER_APIS, modelIds, providerIdProblem, writeModelToConfig, writeProviderToConfig } from "../config/provider-add.js";
 import { BUILTIN_PROVIDERS, PI_NATIVE_PROVIDERS } from "../config/provider-table.js";
 import { defaultCredentialDbPath, openCredentialDb } from "../credentials/db.js";
 import { disableCredential, listEnabled } from "../credentials/pool.js";
@@ -40,7 +41,7 @@ import { archiveHistorySession, exportHistorySession, historyRows, ledgerFor, pr
 import { engineAddress, ensureEngineDir, readOrCreateKey, type EngineAddress } from "./address.js";
 import type { ChildStartParams, FromChild, ToChild } from "./session-child.js";
 import type { DelegatedWatch } from "./watch.js";
-import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type ProvidersResult, type EventData, type SessionOptions, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
+import { PROTOCOL_VERSION, type AsideResult, type Event, type KeybindsResult, type ProvidersResult, type ProviderModelsResult, type EventData, type SessionOptions, type Method, type Request, type Response, type SessionStatus, type SessionSummary } from "./protocol.js";
 import { LineReader, send, serverHandshake } from "./wire.js";
 
 export interface EngineServerOptions {
@@ -251,9 +252,35 @@ export class EngineServer {
       }
       case "providers.list": {
         if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("providers.list needs cwd");
-        const { resolved } = loadConfig({ cwd: resolvePath(params.cwd), ...this.globalOpt() });
+        const cwd = resolvePath(params.cwd);
+        const { resolved } = loadConfig({ cwd, ...this.globalOpt() });
         const poolSizes = summaryPoolSizes(poolSummary(defaultCredentialDbPath()));
-        return { providers: providerCatalog({ providers: resolved.providers, env: process.env, poolSizes }) } satisfies ProvidersResult;
+        // Which providers sign in with a browser is what the model runtime says, so a login Lykos adds shows here.
+        const { catalogRuntime, loginKinds } = await import("../session/provider-models.js");
+        const kinds = loginKinds(await catalogRuntime(cwd, resolved.providers));
+        return { providers: providerCatalog({ providers: resolved.providers, env: process.env, poolSizes, kinds }) } satisfies ProvidersResult;
+      }
+      case "provider.models": {
+        const { cwd, provider } = params;
+        if (typeof cwd !== "string" || cwd === "" || typeof provider !== "string" || provider === "") throw new Error("provider.models needs cwd and provider");
+        const root = resolvePath(cwd);
+        const { resolved } = loadConfig({ cwd: root, ...this.globalOpt() });
+        const { catalogRuntime, providerModels } = await import("../session/provider-models.js");
+        const runtime = await catalogRuntime(root, resolved.providers);
+        return { models: await providerModels(runtime, resolved.providers, provider) } satisfies ProviderModelsResult;
+      }
+      case "provider.model.add": {
+        const { cwd, provider, model } = params;
+        if (typeof cwd !== "string" || cwd === "" || typeof provider !== "string" || typeof model !== "string" || model.trim() === "") {
+          throw new Error("provider.model.add needs cwd, provider and model");
+        }
+        const root = resolvePath(cwd);
+        // The file that declares the provider: the project's wins, as it does when the config loads.
+        const files = [projectConfigPath(root), globalConfigPath(this.opts.globalDir ?? join(homedir(), ".lykos"))];
+        const path = files.find((f) => declares(f, provider));
+        if (path === undefined) throw new Error(`${provider} is not declared in a config file`);
+        writeModelToConfig(path, provider, model.trim());
+        return { path };
       }
       case "provider.add": {
         const { cwd, scope, id, api, baseUrl, models } = params;
@@ -265,8 +292,7 @@ export class EngineServer {
         const problem =
           providerIdProblem(id, taken) ??
           (CUSTOM_PROVIDER_APIS.some((a) => a.value === api) ? undefined : `"${api}" is not one of the API kinds offered`) ??
-          baseUrlProblem(baseUrl) ??
-          (modelIds(models).length === 0 ? "a provider needs at least one model id" : undefined);
+          baseUrlProblem(baseUrl);
         if (problem !== undefined) throw new Error(problem);
         const path = scope === "global" ? globalConfigPath(this.opts.globalDir ?? join(homedir(), ".lykos")) : projectConfigPath(root);
         writeProviderToConfig(path, { id, api, baseUrl, models: modelIds(models) });
@@ -763,4 +789,16 @@ function answers(path: string): Promise<boolean> {
     });
     s.once("error", () => resolve(false));
   });
+}
+
+/** The config file at `path` declares `provider` under `providers:`. */
+function declares(path: string, provider: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const parsed: unknown = parseYaml(readFileSync(path, "utf8"));
+    const providers = typeof parsed === "object" && parsed !== null ? (parsed as { providers?: unknown }).providers : undefined;
+    return typeof providers === "object" && providers !== null && provider in providers;
+  } catch {
+    return false;
+  }
 }

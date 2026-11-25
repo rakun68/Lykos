@@ -54,9 +54,67 @@ function block(p: CustomProvider): string[] {
     "    auth: api_key",
     `    api: ${p.api}`,
     `    baseUrl: ${JSON.stringify(p.baseUrl)}`,
-    "    models:",
-    ...p.models.map((m) => `      - id: ${JSON.stringify(m)}`),
+    // No models yet: the model picker asks the endpoint and adds the ones shown.
+    ...(p.models.length === 0 ? ["    models: []"] : ["    models:", ...p.models.map((m) => `      - id: ${JSON.stringify(m)}`)]),
   ];
+}
+
+/**
+ * `raw` with `model` added to the `models:` list of `provider`, declared in its block-style `providers:` block. Nothing
+ * changes when the model is listed already.
+ */
+export function addModelToConfig(raw: string, provider: string, model: string): string {
+  const parsed: unknown = raw.trim().length > 0 ? parse(raw) : undefined;
+  const providers = typeof parsed === "object" && parsed !== null ? (parsed as { providers?: unknown }).providers : undefined;
+  const decl = typeof providers === "object" && providers !== null ? (providers as Record<string, unknown>)[provider] : undefined;
+  if (typeof decl !== "object" || decl === null) throw new Error(`${provider} is not declared in this file`);
+  const listed = (decl as { models?: unknown }).models;
+  if (Array.isArray(listed) && listed.some((m) => typeof m === "object" && m !== null && (m as { id?: unknown }).id === model)) return raw;
+  const eol = raw.includes("\r\n") ? "\r\n" : "\n";
+  const lines = raw.split(/\r?\n/);
+  const top = lines.findIndex((l) => /^providers:\s*(#.*)?$/.test(l));
+  const at = top === -1 ? -1 : lines.findIndex((l, i) => i > top && l.replace(/\s*(#.*)?$/, "") === `  ${provider}:`);
+  if (at === -1) throw new Error(`${provider}'s declaration is not in block style; add the model by hand`);
+  // The provider's block ends at the next line indented two spaces or less.
+  let end = lines.length;
+  for (let i = at + 1; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (l.trim() !== "" && !/^ {3}/.test(l)) {
+      end = i;
+      break;
+    }
+  }
+  const entry = `      - id: ${JSON.stringify(model)}`;
+  const key = lines.findIndex((l, i) => i > at && i < end && /^    models:/.test(l));
+  if (key === -1) {
+    let last = at;
+    for (let i = at + 1; i < end; i++) if (lines[i]!.trim() !== "") last = i;
+    lines.splice(last + 1, 0, "    models:", entry);
+  } else if (/^    models:\s*\[\s*\]\s*(#.*)?$/.test(lines[key]!)) {
+    lines.splice(key, 1, "    models:", entry);
+  } else if (/^    models:\s*(#.*)?$/.test(lines[key]!)) {
+    let last = key;
+    let dash: string | undefined;
+    for (let i = key + 1; i < end; i++) {
+      const l = lines[i]!;
+      if (l.trim() === "") continue;
+      if (!/^ {5}/.test(l) && !/^ {4}-/.test(l)) break;
+      dash ??= /^( *)- /.exec(l)?.[1];
+      last = i;
+    }
+    // The new item at the indent the list's items have, which YAML lets be four spaces or more.
+    lines.splice(last + 1, 0, dash !== undefined ? `${dash}- id: ${JSON.stringify(model)}` : entry);
+  } else {
+    throw new Error(`${provider}'s models are not a block list; add the model by hand`);
+  }
+  return lines.join(eol);
+}
+
+/** Adds `model` to `provider`'s declared models in the config file at `path`. */
+export function writeModelToConfig(path: string, provider: string, model: string): void {
+  const raw = readFileSync(path, "utf8");
+  const next = addModelToConfig(raw, provider, model);
+  if (next !== raw) writeFileSync(path, next, "utf8");
 }
 
 /** `raw` with `p` declared at the end of its `providers:` block, which is added when there is none. */

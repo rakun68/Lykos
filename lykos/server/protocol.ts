@@ -9,6 +9,7 @@ import type { CacheGaugeEntry } from "../surface/cache-gauge.js";
 import type { Alert, OutcomeView, TokenCounters } from "../surface/types.js";
 import type { ContextBreakdown } from "../session/context-breakdown.js";
 import type { ProviderEntry } from "../config/provider-catalog.js";
+import type { ProviderModel } from "../session/provider-models.js";
 export type { ModelOption, ProviderOption, SessionOptions, SpecialistOption } from "../session/session-options.js";
 
 /** Bumped on any change a client of the previous version would misread. A client of another version is refused. */
@@ -89,6 +90,10 @@ export type Method =
   | "credentials.list"
   | "skills.list"
   | "credential.remove"
+  /** Every model a provider offers, `{ cwd, provider }`: a `ProviderModelsResult`. Needs no session. */
+  | "provider.models"
+  /** A model into a declared provider's `models:` in the config file that declares it, `{ cwd, provider, model }`: `{ path }`. */
+  | "provider.model.add"
   | "session.options"
   /** P5 #42: the ledger's sessions for the session list, and which are live here. */
   | "sessions.history"
@@ -239,6 +244,10 @@ export interface CommandInfo {
 /** What `config.keybinds` answers: only what a config layer sets; the client holds the defaults. */
 export interface ProvidersResult {
   providers: ProviderEntry[];
+}
+
+export interface ProviderModelsResult {
+  models: ProviderModel[];
 }
 
 export interface KeybindsResult {

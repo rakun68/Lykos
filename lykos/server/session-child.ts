@@ -369,10 +369,8 @@ export async function runSessionChild(
           }
         : {}),
       ...(opts.inputText !== undefined ? { inputText: opts.inputText } : {}),
-      confirm: async (preflight) => {
-        open({ kind: "question", title: "Resume this session?", detail: preflight, options: [{ value: "y", label: "Resume" }, { value: "n", label: "Cancel" }] });
-        return (await answer()) === "y";
-      },
+      // Opening a session from the list is the agreement: the client asks nothing more. A refusal still stops it.
+      confirm: async () => true,
       onRefusal: (reason) => {
         refusal = reason;
       },
