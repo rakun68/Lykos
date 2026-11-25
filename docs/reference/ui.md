@@ -284,7 +284,7 @@ shows the head estimate as the context bar until a request measures it, never `u
 
 **Login.** `/connect` lists every provider Lykos supports, from the engine server's `providers.list`, with or
 without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser`,
-`API key`, `browser authentication` or `browser authentication · API key`, as Pi's runtime offers an OAuth login and
+`API key`, `browser` or `browser · API key`, as Pi's runtime offers an OAuth login and
 an API key for it (Anthropic takes both, Google Antigravity a browser only). A provider with no endpoint (one the
 runtime does not know and no declaration gives a base URL, such as a name with only a stored key) is left out. A
 provider already configured (a credential in its pool, its environment

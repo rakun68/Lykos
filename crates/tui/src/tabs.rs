@@ -61,6 +61,14 @@ impl Tabs {
         self.open.get(at).or_else(|| at.checked_sub(1).and_then(|i| self.open.get(i))).cloned()
     }
 
+    /// A tab that never held a session (its start failed): nothing to reopen or step back to.
+    pub fn forget_closed(&mut self, id: &str) {
+        self.closed.retain(|(t, _)| t != id);
+        let before = self.history.len();
+        self.history.retain(|t| t != id);
+        self.at = self.at.saturating_sub(before - self.history.len()).min(self.history.len().saturating_sub(1));
+    }
+
     /// The last closed tab, back where it was.
     pub fn reopen(&mut self) -> Option<String> {
         let (id, at) = self.closed.pop()?;

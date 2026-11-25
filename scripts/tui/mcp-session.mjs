@@ -120,10 +120,10 @@ try {
     await call("send_keys", { sessionId: id, keys: "Enter" });
     await waitText("Add a custom provider");
     await call("send_text", { sessionId: id, text: "anthropic" });
-    await waitText("browser authentication · API key");
+    await waitText("browser · API key");
     for (let i = 0; i < 9; i++) await call("send_keys", { sessionId: id, keys: "Backspace" });
     await call("send_text", { sessionId: id, text: "antigravity" });
-    await waitText("google-antigravity +browser authentication");
+    await waitText("google-antigravity +browser");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
   await step("/login opens its sign-in popup at once and starts no session", async () => {

@@ -583,7 +583,8 @@ export class EngineServer {
       title: resume === undefined ? null : resumedTitle(cwd, resume),
       startedAt: new Date().toISOString(),
       origin: typeof params.origin === "string" ? params.origin : "tui",
-      ledgerSessionId: null,
+      // A resume names its ledger session from the start, so a client finds its tab while the session still starts.
+      ledgerSessionId: resume ?? null,
     };
     const ledgerPath = ledgerPathOverride ?? ledgerFor(cwd);
     const live: LiveSession = {

@@ -385,6 +385,8 @@ pub struct App {
     pub hits: RefCell<crate::mouse::Hits>,
     /// The dialog's first line while the mouse selects in it, so the rows stay put under the cursor.
     pub mouse_skip: Option<usize>,
+    /// What a starting session said before it closed: the toast its failed start shows.
+    start_error: Option<String>,
 }
 
 /// One palette row: an action (`id`), or a slash command (`slash`, with `id` empty).
@@ -513,6 +515,7 @@ impl App {
             tab_hits: RefCell::new(Vec::new()),
             hits: RefCell::new(crate::mouse::Hits::default()),
             mouse_skip: None,
+            start_error: None,
         }
     }
 
@@ -728,7 +731,7 @@ impl App {
 
     /// Whether the screen changes with time alone: a spinner, or an armed key that will lapse.
     pub fn animating(&self) -> bool {
-        self.running() || self.armed.is_some() || self.leader.is_some() || self.exit_armed.is_some() || !self.toasts.is_empty() || self.asides > 0 || self.link == Link::Connecting || matches!(self.dialog, Some(Dialog::Output { .. }))
+        self.running() || self.status() == Some(SessionStatus::Starting) || matches!(self.dialog, Some(Dialog::Login(_))) || self.armed.is_some() || self.leader.is_some() || self.exit_armed.is_some() || !self.toasts.is_empty() || self.asides > 0 || self.link == Link::Connecting || matches!(self.dialog, Some(Dialog::Output { .. }))
             || self.current().is_some_and(|s| !s.foreground.is_empty())
     }
 
@@ -872,7 +875,27 @@ impl App {
     }
 
     pub fn on_event(&mut self, event: &Event) -> Vec<Action> {
+        let was_starting = self.store.sessions.get(&event.session).is_some_and(|s| s.summary.status == SessionStatus::Starting);
         self.store.apply(event);
+        // A session that ends before it ever ran leaves no tab behind: why it could not start is a toast.
+        if let EventData::System { text } = &event.data {
+            if was_starting {
+                self.start_error = Some(text.clone());
+            }
+        }
+        if let EventData::SessionStatus { session } = &event.data {
+            if was_starting && session.status == SessionStatus::Closed {
+                let why = self.start_error.take().unwrap_or_else(|| "The session could not start".into());
+                self.toast(ToastKind::Error, why);
+                let next = self.tabs.close(&event.session);
+                self.tabs.forget_closed(&event.session);
+                if self.session.as_ref() == Some(&event.session) {
+                    self.session = None;
+                    return self.show(next);
+                }
+                return Vec::new();
+            }
+        }
         if matches!(event.data, EventData::TurnEnd) {
             self.tabs.finished(&event.session, self.session.as_deref());
         }
@@ -1123,8 +1146,8 @@ impl App {
                 let custom = row(CUSTOM_PROVIDER.into(), "Add a custom provider…".into(), "your own endpoint".into(), "", false, false);
                 let rest = self.providers.iter().flatten().map(|p| {
                     let how = match (p.signs_in_with_browser(), p.takes_api_key()) {
-                        (true, true) => "browser authentication · API key",
-                        (true, false) => "browser authentication",
+                        (true, true) => "browser · API key",
+                        (true, false) => "browser",
                         _ => "API key",
                     };
                     row(p.name.clone(), p.name.clone(), how.into(), "", p.configured, false)
@@ -1295,8 +1318,12 @@ impl App {
         if self.starting {
             return Vec::new();
         }
-        let live = self.past.as_ref().and_then(|p| p.live.get(id)).cloned();
-        if let Some(sid) = live.filter(|sid| self.store.sessions.get(sid).is_some_and(|s| s.summary.status != SessionStatus::Closed)) {
+        // Open here already, running or still starting: its tab, never a second one.
+        let open = |sid: &String| self.store.sessions.get(sid).is_some_and(|s| s.summary.status != SessionStatus::Closed);
+        let live = self.past.as_ref().and_then(|p| p.live.get(id)).cloned().filter(|sid| open(sid)).or_else(|| {
+            self.store.sessions.iter().find(|(sid, s)| (sid.as_str() == id || s.summary.ledger_session_id.as_deref() == Some(id)) && open(sid)).map(|(sid, _)| sid.clone())
+        });
+        if let Some(sid) = live {
             return self.activate(sid);
         }
         self.starting = true;
@@ -3846,7 +3873,7 @@ mod tests {
         app.providers = Some(vec![provider("google-antigravity", true, false, false)]);
         assert!(matches!(&app.connect("google-antigravity")[..], [Action::Call { method: "provider.login", .. }]));
         let rows = app.list_rows(&List::Providers, "");
-        assert_eq!(rows[1].detail, "browser authentication");
+        assert_eq!(rows[1].detail, "browser");
     }
 
     #[test]
@@ -4186,6 +4213,50 @@ mod tests {
 
     fn event(app: &mut App, id: &str, seq: u64, data: EventData) -> Vec<Action> {
         app.on_event(&Event { event: String::new(), session: id.into(), seq, data })
+    }
+
+    fn summary(id: &str, ledger: Option<&str>, status: SessionStatus) -> EventData {
+        EventData::SessionStatus {
+            session: SessionSummary {
+                id: id.into(),
+                cwd: "/w".into(),
+                status,
+                model: String::new(),
+                title: None,
+                started_at: "2026-11-25T00:00:00Z".into(),
+                origin: "tui".into(),
+                ledger_session_id: ledger.map(Into::into),
+            },
+        }
+    }
+
+    #[test]
+    fn a_session_open_here_is_shown_in_its_tab_even_while_it_starts_never_resumed_again() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        event(&mut app, "live-1", 1, summary("live-1", Some("ledger-1"), SessionStatus::Starting));
+        app.started("live-1".into());
+        event(&mut app, "live-2", 1, summary("live-2", None, SessionStatus::Idle));
+        app.started("live-2".into());
+        assert!(!app.animating());
+        let out = app.open_session("ledger-1", None);
+        assert!(calls(&out).is_empty(), "{out:?}");
+        assert_eq!(app.session.as_deref(), Some("live-1"));
+        assert!(app.animating(), "the spinner of a starting session turns");
+        assert_eq!(app.tabs.open.len(), 2);
+    }
+
+    #[test]
+    fn a_session_that_cannot_start_leaves_no_tab_and_says_why() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        event(&mut app, "live-1", 1, summary("live-1", Some("ledger-1"), SessionStatus::Starting));
+        app.started("live-1".into());
+        event(&mut app, "live-1", 2, EventData::System { text: "the session could not start: unknown model".into() });
+        event(&mut app, "live-1", 3, summary("live-1", Some("ledger-1"), SessionStatus::Closed));
+        assert!(app.tabs.open.is_empty());
+        assert_eq!(app.session, None);
+        assert!(app.toasts.iter().any(|t| t.text.contains("unknown model")));
     }
 
     fn calls(out: &[Action]) -> Vec<(&'static str, Value)> {

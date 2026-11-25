@@ -26,7 +26,8 @@ export function sessionModelPath(ledger: Ledger, sessionId: string): string | un
   const asked = ledger.db.prepare("SELECT model_path FROM session_bases WHERE session_id = ?").get(sessionId) as { model_path: string | null } | undefined;
   if (asked?.model_path != null) return asked.model_path;
   const row = ledger.db.prepare("SELECT model_path FROM sessions WHERE id = ?").get(sessionId) as { model_path: string | null } | undefined;
-  return row?.model_path ?? undefined;
+  // The row's path records the session's switches (`from>to>…`): the model it ran on last is the one after the last `>`.
+  return row?.model_path?.split(">").at(-1) ?? undefined;
 }
 
 /** The base a session started from, or undefined for one that predates the record. */

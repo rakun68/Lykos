@@ -678,7 +678,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
                         if i == *selected {
                             at = Some(lines.len());
                         }
-                        let kind = if a.kind == "oauth" { "browser sign-in" } else { "API key" };
+                        let kind = if a.kind == "oauth" { "browser" } else { "API key" };
                         let right = if *confirm == Some(a.id) {
                             "d again to remove".to_string()
                         } else {
