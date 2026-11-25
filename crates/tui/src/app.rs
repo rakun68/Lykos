@@ -90,6 +90,12 @@ pub enum Then {
     ProviderModels(String),
     /// `provider.model.add`: the provider and the model added to its declaration.
     ModelAdded(String, String),
+    /// `provider.login`: the provider whose sign-in started.
+    LoginStarted(String),
+    /// `provider.login.status`, for the sign-in with this id.
+    LoginStatus(String),
+    /// `session.preview`: what a new session would offer, for the lists before one runs.
+    Preview,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,6 +177,8 @@ pub enum Dialog {
     /// `dialog-shell-output.tsx`: a background job's output, its last 64 KiB, following the end while `scroll` is 0
     /// (rows up from the end). `offset` is where the next read starts.
     Output { job: String, command: String, text: String, offset: Option<u64>, scroll: usize, error: Option<String> },
+    /// A browser sign-in the engine server runs with no session (`login.rs`).
+    Login(crate::login::Login),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -365,10 +373,18 @@ pub struct App {
     pub next_model: Option<String>,
     /// The effort set for `next_model` in the picker, sent when the next session starts.
     pub next_effort: Option<String>,
+    /// The specialist chosen with no session open, set when the next session starts.
+    pub next_specialist: Option<String>,
+    /// What a new session would offer (`session.preview`): the effort and specialist lists before one runs.
+    pub preview: Option<SessionOptions>,
     /// The model picker's models; `None` until the server answers.
     pub picker: Option<Result<Vec<lykos_client::ProviderModel>, String>>,
     /// The session tabs as last drawn: each one's columns on the top row, and its session.
     pub tab_hits: RefCell<Vec<(u16, u16, String)>>,
+    /// Where the last frame drew the popups, the completion and a request, for the mouse (`mouse.rs`).
+    pub hits: RefCell<crate::mouse::Hits>,
+    /// The dialog's first line while the mouse selects in it, so the rows stay put under the cursor.
+    pub mouse_skip: Option<usize>,
 }
 
 /// One palette row: an action (`id`), or a slash command (`slash`, with `id` empty).
@@ -491,8 +507,12 @@ impl App {
             skill_list: None,
             next_model: None,
             next_effort: None,
+            next_specialist: None,
+            preview: None,
             picker: None,
             tab_hits: RefCell::new(Vec::new()),
+            hits: RefCell::new(crate::mouse::Hits::default()),
+            mouse_skip: None,
         }
     }
 
@@ -730,7 +750,9 @@ impl App {
         if self.leader.is_some_and(|at| now.duration_since(at) >= LEADER_WINDOW) {
             self.leader = None;
         }
-        self.poll_output(now)
+        let mut out = self.poll_output(now);
+        out.extend(self.poll_login(now));
+        out
     }
 
     pub fn connected(&mut self) -> Vec<Action> {
@@ -751,6 +773,9 @@ impl App {
         // The effort the model list set for the model this session started on goes first.
         if let Some(e) = self.next_effort.take() {
             self.queue.insert(0, format!("/effort {e}"));
+        }
+        if let Some(name) = self.next_specialist.take() {
+            self.queue.insert(0, format!("/specialist {name}"));
         }
         self.flush()
     }
@@ -970,7 +995,7 @@ impl App {
         if live.is_some() || self.options.is_some() {
             return live;
         }
-        self.defaults.as_ref().map(|d| d.effort.clone()).filter(|e| !e.is_empty())
+        self.next_effort.clone().or_else(|| self.defaults.as_ref().map(|d| d.effort.clone()).filter(|e| !e.is_empty()))
     }
 
     /// The specialist in use, else the one a new session starts as.
@@ -979,7 +1004,18 @@ impl App {
             .as_ref()
             .map(|o| o.specialist.clone())
             .filter(|s| !s.is_empty())
+            .or_else(|| self.next_specialist.clone())
             .or_else(|| self.defaults.as_ref().map(|d| d.specialist.clone()).filter(|s| !s.is_empty()))
+    }
+
+    /// What the effort and specialist lists offer: the session's, else what a new one would.
+    pub fn offered(&self) -> Option<&SessionOptions> {
+        self.options.as_ref().or(self.preview.as_ref())
+    }
+
+    /// Asks what a new session on the next model would offer.
+    pub(crate) fn preview_call(&self) -> Action {
+        Action::Call { method: "session.preview", params: json!({ "cwd": self.cwd, "model": self.next_model.clone().unwrap_or_default() }), then: Then::Preview }
     }
 
     /// A live session to send a command to, and a refresh of the lists for it.
@@ -993,6 +1029,7 @@ impl App {
         let providers = matches!(list, List::Providers);
         let selected = if providers { 0 } else { self.list_rows(&list, "").iter().position(|r| r.current).unwrap_or(0) };
         let refresh = !matches!(list, List::Themes { .. });
+        let offered = matches!(list, List::Efforts | List::Agents);
         self.dialog = Some(Dialog::List { list, query: String::new(), selected });
         if providers {
             return vec![self.providers_call()];
@@ -1001,6 +1038,7 @@ impl App {
         let mut out = if matches!(self.dialog, Some(Dialog::List { list: List::Models, .. })) { vec![self.providers_call()] } else { Vec::new() };
         match self.live() {
             Some(session) if refresh => out.push(Action::Options { session }),
+            None if offered => out.push(self.preview_call()),
             _ => {}
         }
         out
@@ -1031,8 +1069,32 @@ impl App {
                 self.reporting = text.starts_with('/').then(|| (text.split_whitespace().next().unwrap_or("").to_string(), Instant::now()));
                 vec![Action::Prompt { session, text }]
             }
-            None => {
-                self.toast(ToastKind::Warning, "Open a session first".into());
+            None => self.without_session(&text),
+        }
+    }
+
+    /// A command with no session open never starts one: what a new session starts with is set here, a sign-in opens
+    /// its popup, and the rest wait for a conversation.
+    pub(crate) fn without_session(&mut self, text: &str) -> Vec<Action> {
+        let (command, arg) = text.split_once(char::is_whitespace).map_or((text, ""), |(c, a)| (c, a.trim()));
+        match (command, arg.is_empty()) {
+            ("/model", false) => {
+                self.preview = None;
+                self.switch_model(arg)
+            }
+            ("/effort", false) => {
+                self.next_effort = Some(arg.to_string());
+                self.toast(ToastKind::Info, format!("The next session starts with {arg} effort"));
+                Vec::new()
+            }
+            ("/specialist", false) => {
+                self.next_specialist = Some(arg.to_string());
+                self.toast(ToastKind::Info, format!("The next session starts as {arg}"));
+                Vec::new()
+            }
+            ("/login", false) => self.login_command(arg),
+            _ => {
+                self.toast(ToastKind::Info, format!("{command} needs a conversation: send a message first"));
                 Vec::new()
             }
         }
@@ -1041,7 +1103,7 @@ impl App {
     /// The rows of a list for its query, in the order shown.
     pub fn list_rows(&self, list: &List, query: &str) -> Vec<Row> {
         let row = |value: String, title: String, detail: String, group: &str, current: bool, favorite: bool| Row { value, title, detail, group: group.to_string(), current, favorite };
-        let o = self.options.as_ref();
+        let o = self.offered();
         let rows: Vec<Row> = match list {
             // `dialog-model.tsx`: Favorites, then Recent, then each connected provider's shown models (`models.rs`).
             List::Models => return self.model_rows(query),
@@ -1049,9 +1111,11 @@ impl App {
                 let now = self.effort_now();
                 o.map(|o| o.efforts.clone()).unwrap_or_default().into_iter().map(|e| row(e.clone(), e.clone(), String::new(), "", now.as_deref() == Some(e.as_str()), false)).collect()
             }
-            List::Agents => o
-                .map(|o| o.specialists.iter().map(|s| row(s.name.clone(), s.name.clone(), s.description.clone(), "", s.name == o.specialist, false)).collect())
-                .unwrap_or_default(),
+            List::Agents => {
+                let now = self.specialist_now();
+                o.map(|o| o.specialists.iter().map(|s| row(s.name.clone(), s.name.clone(), s.description.clone(), "", now.as_deref() == Some(s.name.as_str()), false)).collect())
+                    .unwrap_or_default()
+            }
             List::Themes { initial } => theme::PALETTES.iter().map(|p| row(p.name.into(), p.name.into(), if p.light() { "light".into() } else { "dark".into() }, "", p.name == *initial, false)).collect(),
             List::Providers => {
                 // "Add a custom provider…" asks for an endpoint of one's own, then its key. The rest come from the
@@ -1059,11 +1123,11 @@ impl App {
                 let custom = row(CUSTOM_PROVIDER.into(), "Add a custom provider…".into(), "your own endpoint".into(), "", false, false);
                 let rest = self.providers.iter().flatten().map(|p| {
                     let how = match (p.signs_in_with_browser(), p.takes_api_key()) {
-                        (true, true) => "browser or API key",
-                        (true, false) => "browser",
+                        (true, true) => "browser authentication · API key",
+                        (true, false) => "browser authentication",
                         _ => "API key",
                     };
-                    row(p.name.clone(), p.name.clone(), format!("{how} · {}", p.reason), "", p.configured, false)
+                    row(p.name.clone(), p.name.clone(), how.into(), "", p.configured, false)
                 });
                 std::iter::once(custom).chain(rest).collect()
             }
@@ -1256,6 +1320,16 @@ impl App {
                     self.on_job_log(id, Err(e));
                     return Vec::new();
                 }
+                if let Then::LoginStarted(provider) = &then {
+                    if e.contains("unknown method") {
+                        self.stale_server();
+                    }
+                    self.on_login_started(provider, Err(e));
+                    return Vec::new();
+                }
+                if let Then::LoginStatus(id) = &then {
+                    return self.on_login_status(id, Err(e));
+                }
                 if matches!(then, Then::Started { .. }) {
                     self.starting = false;
                 }
@@ -1284,7 +1358,7 @@ impl App {
                 if matches!(then, Then::ProviderModels(_)) {
                     return Vec::new();
                 }
-                if matches!(then, Then::ModelAdded(..) | Then::Providers) {
+                if matches!(then, Then::ModelAdded(..) | Then::Providers | Then::Preview) {
                     self.toast(ToastKind::Error, e);
                     return Vec::new();
                 }
@@ -1329,6 +1403,21 @@ impl App {
                 }
             }
             Then::ModelAdded(provider, id) => self.on_model_added(&provider, &id, v["path"].as_str().unwrap_or_default()),
+            Then::LoginStarted(provider) => self.on_login_started(&provider, Ok(v)),
+            Then::LoginStatus(id) => return self.on_login_status(&id, Ok(v)),
+            Then::Preview => {
+                let efforts: Vec<String> = serde_json::from_value(v["efforts"].clone()).unwrap_or_default();
+                let specialists: Vec<lykos_client::SpecialistOption> = serde_json::from_value(v["specialists"].clone()).unwrap_or_default();
+                self.preview = Some(SessionOptions {
+                    model: self.model_now().unwrap_or_default(),
+                    models: Vec::new(),
+                    effort: self.effort_now(),
+                    efforts,
+                    specialist: self.specialist_now().unwrap_or_default(),
+                    specialists,
+                    providers: Vec::new(),
+                });
+            }
             Then::ProviderAdded(id) => return self.on_provider_added(&id, v["path"].as_str().unwrap_or_default()),
             Then::KeyStored => return self.on_key_stored(v["message"].as_str().unwrap_or_default()),
             Then::Accounts => match serde_json::from_value::<lykos_client::CredentialsResult>(v) {
@@ -1575,7 +1664,7 @@ impl App {
     }
 
     fn need_session(&mut self) -> Vec<Action> {
-        self.toast(ToastKind::Warning, "Open a session first".into());
+        self.toast(ToastKind::Info, "No conversation yet: send a message first".into());
         Vec::new()
     }
 
@@ -1805,14 +1894,8 @@ impl App {
             self.ask_key(name);
             return Vec::new();
         }
-        // A browser sign-in runs in a session, which shows its link; with none open, one starts for it.
-        let text = format!("/login {name}");
-        if self.live().is_some() {
-            return self.command(text);
-        }
-        self.reporting = Some(("/login".into(), Instant::now()));
-        self.queue.push(text);
-        self.flush()
+        // A browser sign-in in a popup of its own, run by the engine server: no session starts or hears of it.
+        self.open_login(name)
     }
 
     /// `local.tsx` `model.cycle` and `cycleFavorite`: the next model of the list after the one in use, wrapping.
@@ -1840,9 +1923,13 @@ impl App {
 
     /// `variant.cycle`: the next effort level, wrapping (Lykos has no "default" level to return to).
     fn cycle_effort(&mut self) -> Vec<Action> {
-        let efforts = self.options.as_ref().map(|o| o.efforts.clone()).unwrap_or_default();
+        let efforts = self.offered().map(|o| o.efforts.clone()).unwrap_or_default();
         if efforts.is_empty() {
-            self.toast(ToastKind::Warning, if self.options.is_some() { "this model has no effort levels" } else { "Open a session first" }.into());
+            // Before a session, what a new one offers is asked first.
+            if self.offered().is_none() {
+                return vec![self.preview_call()];
+            }
+            self.toast(ToastKind::Warning, "this model has no effort levels".into());
             return Vec::new();
         }
         let next = match self.effort_now().and_then(|e| efforts.iter().position(|x| *x == e)) {
@@ -1857,16 +1944,14 @@ impl App {
 
     /// `agent.cycle`: the old TUI's Shift+Tab, through the primary specialists.
     fn cycle_specialist(&mut self, direction: isize) -> Vec<Action> {
-        let Some(o) = self.options.as_ref() else {
-            self.toast(ToastKind::Warning, "Open a session first".into());
-            return Vec::new();
-        };
+        let Some(o) = self.offered() else { return vec![self.preview_call()] };
         let names: Vec<String> = o.specialists.iter().map(|s| s.name.clone()).collect();
         if names.is_empty() {
             return Vec::new();
         }
         let n = names.len() as isize;
-        let next = match names.iter().position(|x| *x == o.specialist) {
+        let now = self.specialist_now();
+        let next = match names.iter().position(|x| Some(x) == now.as_ref()) {
             Some(i) => (i as isize + direction).rem_euclid(n),
             None => 0,
         };
@@ -1950,6 +2035,7 @@ impl App {
                     *selected = 0;
                 }
                 Dialog::Provider(f) => f.paste(&line),
+                Dialog::Login(l) if l.ask.is_some() => l.input.push_str(line.trim()),
                 _ => {}
             }
             return Vec::new();
@@ -1971,11 +2057,23 @@ impl App {
             *scroll = if up { scroll.saturating_sub(rows) } else { scroll.saturating_add(rows).min(200) };
             return;
         }
+        if matches!(self.dialog, Some(Dialog::Help { .. })) {
+            let last = self.help_rows().saturating_sub(1);
+            if let Some(Dialog::Help { scroll }) = &mut self.dialog {
+                *scroll = if up { scroll.saturating_sub(rows) } else { scroll.saturating_add(rows).min(last) };
+            }
+            return;
+        }
         // The output view counts from its end.
         if let Some(Dialog::Output { scroll, .. }) = &mut self.dialog {
             *scroll = if up { scroll.saturating_add(rows) } else { scroll.saturating_sub(rows) };
             return;
         }
+        self.scroll_chat(up, rows);
+    }
+
+    /// Scrolls the transcript, whatever is open over it.
+    pub fn scroll_chat(&mut self, up: bool, rows: usize) {
         self.scroll = if up { self.scroll.saturating_add(rows) } else { self.scroll.saturating_sub(rows) };
         self.nav = None;
     }
@@ -1997,15 +2095,18 @@ impl App {
         if self.terms.area.get().is_some_and(|(x, y, w, h)| m.column >= x && m.column < x + w && m.row >= y && m.row < y + h) {
             return Vec::new();
         }
+        if let Some(out) = self.popup_mouse(&m, now) {
+            return out;
+        }
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown if self.diff_mouse(&m) => return Vec::new(),
             _ if self.dialog.is_none() && self.sidebar_mouse(&m) => return Vec::new(),
             MouseEventKind::ScrollUp => {
-                self.on_scroll(true, 3);
+                self.scroll_chat(true, 3);
                 return Vec::new();
             }
             MouseEventKind::ScrollDown => {
-                self.on_scroll(false, 3);
+                self.scroll_chat(false, 3);
                 return Vec::new();
             }
             _ => {}
@@ -2061,6 +2162,10 @@ impl App {
             return Vec::new();
         }
         self.settle();
+        self.mouse_skip = None;
+        if let Some(m) = self.menu.as_mut() {
+            m.pinned = None;
+        }
         if let Some(out) = self.selection_key(&key) {
             return out;
         }
@@ -2343,6 +2448,9 @@ impl App {
         if let Dialog::Provider(f) = dialog {
             return self.provider_form_key(key, &ids, f);
         }
+        if let Dialog::Login(l) = dialog {
+            return self.login_key(key, &ids, l);
+        }
         if let Dialog::Accounts { provider, selected, confirm } = dialog {
             return self.accounts_key(key, &ids, provider, selected, confirm);
         }
@@ -2364,7 +2472,7 @@ impl App {
         let step = |sel: usize, n: usize, up: bool| if n == 0 { 0 } else if up { (sel + n - 1) % n } else { (sel + 1) % n };
         let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
-            Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::Provider(_) | Dialog::Accounts { .. } | Dialog::ModelPicker { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
+            Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::Provider(_) | Dialog::Login(_) | Dialog::Accounts { .. } | Dialog::ModelPicker { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
             Dialog::Output { .. } => {
                 if has("dialog.select.submit") {
                     self.dialog = None;
@@ -2815,7 +2923,7 @@ impl App {
         Some(Vec::new())
     }
 
-    fn pick(&mut self) -> Vec<Action> {
+    pub(crate) fn pick(&mut self) -> Vec<Action> {
         let Some(m) = self.menu.take() else { return Vec::new() };
         let Some(entry) = m.entries.get(m.selected).cloned() else { return Vec::new() };
         let cursor = self.editor.cursor();
@@ -2888,7 +2996,7 @@ impl App {
                 menu::files(&query, self.files.as_deref().unwrap_or(&[]))
             }
         };
-        self.menu = (!entries.is_empty()).then_some(Menu { trigger, at, entries, selected: 0 });
+        self.menu = (!entries.is_empty()).then_some(Menu { trigger, at, entries, selected: 0, pinned: None });
         out
     }
 
@@ -3010,11 +3118,14 @@ impl App {
             return self.ask_aside();
         }
         let Some(text) = self.take_prompt() else { return Vec::new() };
-        // A command's answer comes back as a report: it shows here only while this is what was asked.
-        self.reporting = text.starts_with('/').then(|| (text.split_whitespace().next().unwrap_or("").to_string(), Instant::now()));
         if self.status() == Some(SessionStatus::Closed) {
             self.session = None;
         }
+        if let Some(out) = self.slash_here(&text) {
+            return out;
+        }
+        // A command's answer comes back as a report: it shows here only while this is what was asked.
+        self.reporting = text.starts_with('/').then(|| (text.split_whitespace().next().unwrap_or("").to_string(), Instant::now()));
         if let (Some(id), Some(SessionStatus::Idle | SessionStatus::Running | SessionStatus::Waiting)) = (self.session.clone(), self.status()) {
             if self.link == Link::Ready {
                 return vec![Action::Prompt { session: id, text }];
@@ -3027,8 +3138,23 @@ impl App {
     /// <leader>return: the prompt waits for the turn to end, then goes as the next one.
     fn submit_queued(&mut self) -> Vec<Action> {
         let Some(text) = self.take_prompt() else { return Vec::new() };
+        if let Some(out) = self.slash_here(&text) {
+            return out;
+        }
         self.queue.push(text);
         self.flush()
+    }
+
+    /// A slash command that runs here and never goes to a session: `/login` opens its popup, and with no session open
+    /// none starts for a command. A skill is a prompt, and goes as one.
+    fn slash_here(&mut self, text: &str) -> Option<Vec<Action>> {
+        if !text.starts_with('/') || text.starts_with("/skill:") {
+            return None;
+        }
+        if let Some(provider) = text.strip_prefix("/login ").map(str::trim).filter(|p| !p.is_empty() && !p.contains(char::is_whitespace)) {
+            return Some(self.login_command(provider));
+        }
+        self.session.is_none().then(|| self.without_session(text))
     }
 
     /// btw.tsx: a session must be open; the question is what follows `/btw`.
@@ -3038,7 +3164,7 @@ impl App {
             return self.run_local(Local::Btw);
         }
         let Some(session) = self.session.clone().filter(|_| matches!(self.status(), Some(s) if s != SessionStatus::Starting && s != SessionStatus::Closed)) else {
-            self.toast(ToastKind::Warning, "Open a session first".into());
+            self.toast(ToastKind::Info, "No conversation yet: send a message first".into());
             return Vec::new();
         };
         self.history.append(&format!("/btw {question}"));
@@ -3549,7 +3675,7 @@ mod tests {
         let mut app = App::new("/w".into());
         typed(&mut app, "/btw why?");
         assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![]);
-        assert_eq!(said(&app), Some("Open a session first"));
+        assert_eq!(said(&app), Some("No conversation yet: send a message first"));
         let mut app = idle();
         typed(&mut app, "/btw why?");
         assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![Action::Aside { session: "s1".into(), text: "why?".into() }]);
@@ -3685,7 +3811,8 @@ mod tests {
         let out = app.on_reply(Then::AccountRemoved("anthropic".into()), Ok(json!({ "message": "logged out me@x.com from anthropic" })));
         assert_eq!(out.len(), 2, "the accounts and the providers again");
         press(&mut app, key(KeyCode::Down));
-        assert_eq!(sent(&press(&mut app, key(KeyCode::Enter))), ["/login anthropic"], "the add row signs in again");
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&out[..], [Action::Call { method: "provider.login", params, .. }] if params["provider"] == "anthropic"), "the add row signs in again");
         assert!(app.connect("openai").is_empty());
         assert!(matches!(&app.dialog, Some(Dialog::Provider(f)) if f.provider.as_deref() == Some("openai")));
         // The list opens on "Add a custom provider…"; a configured provider is marked current.
@@ -3711,16 +3838,15 @@ mod tests {
         app.dialog = None;
         app.connect("anthropic");
         let out = press(&mut app, key(KeyCode::Enter));
-        assert_eq!(out, [Action::Start { model: None }], "a browser sign-in starts a session for /login");
-        assert_eq!(app.queue, ["/login anthropic"]);
+        assert!(matches!(&out[..], [Action::Call { method: "provider.login", .. }]), "a browser sign-in opens its popup");
+        assert!(app.queue.is_empty());
         // Browser only: no question.
         let mut app = App::new("/w".into());
         app.connected();
         app.providers = Some(vec![provider("google-antigravity", true, false, false)]);
-        assert_eq!(app.connect("google-antigravity"), [Action::Start { model: None }]);
-        assert_eq!(app.queue, ["/login google-antigravity"]);
+        assert!(matches!(&app.connect("google-antigravity")[..], [Action::Call { method: "provider.login", .. }]));
         let rows = app.list_rows(&List::Providers, "");
-        assert_eq!(rows[1].detail, "browser · ");
+        assert_eq!(rows[1].detail, "browser authentication");
     }
 
     #[test]
@@ -3812,12 +3938,122 @@ mod tests {
         assert_eq!(app.worktrees, Some(Vec::new()));
         app.on_reply(Then::Skills, Err("boom".into()));
         assert!(!app.skills_loading());
-        // The picker shows its error; one with no endpoint opens the custom provider form on Enter, its name filled in.
-        app.dialog = Some(Dialog::ModelPicker { provider: "omniroute".into(), query: String::new(), selected: 0, rename: None });
-        app.on_reply(Then::ProviderModels("omniroute".into()), Err("omniroute has no endpoint: add it as a custom provider with its base URL".into()));
-        assert!(app.no_endpoint());
-        press(&mut app, key(KeyCode::Enter));
-        assert!(matches!(&app.dialog, Some(Dialog::Provider(f)) if f.provider.is_none() && f.name == "omniroute" && f.focus == 1));
+        // The picker shows its error, and Enter on it does nothing.
+        app.dialog = Some(Dialog::ModelPicker { provider: "p".into(), query: String::new(), selected: 0, rename: None });
+        app.on_reply(Then::ProviderModels("p".into()), Err("boom".into()));
+        assert!(press(&mut app, key(KeyCode::Enter)).is_empty());
+        assert!(matches!(app.dialog, Some(Dialog::ModelPicker { .. })));
+    }
+
+    #[test]
+    fn a_browser_sign_in_opens_its_popup_at_once_and_never_starts_a_session() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.providers = Some(vec![provider("google-antigravity", true, false, false)]);
+        let out = app.connect("google-antigravity");
+        assert!(matches!(&out[..], [Action::Call { method: "provider.login", params, then: Then::LoginStarted(p) }] if params["provider"] == "google-antigravity" && p == "google-antigravity"));
+        assert!(app.queue.is_empty() && app.session.is_none());
+        assert!(matches!(&app.dialog, Some(Dialog::Login(l)) if l.provider == "google-antigravity"));
+        app.on_reply(Then::LoginStarted("google-antigravity".into()), Ok(json!({ "login": "L1" })));
+        let now = Instant::now();
+        let out = app.on_tick(now);
+        assert!(matches!(&out[..], [Action::Call { method: "provider.login.status", params, then: Then::LoginStatus(id) }] if params["login"] == "L1" && id == "L1"));
+        assert!(app.on_tick(now).is_empty(), "one read at a time");
+        // It asks for a code: typing answers, masked when secret, and Enter sends it.
+        app.on_reply(Then::LoginStatus("L1".into()), Ok(json!({ "lines": ["open this URL to sign in:", "  https://x"], "ask": { "prompt": "Paste the code", "secret": false } })));
+        typed(&mut app, "abc");
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&out[..], [Action::Call { method: "provider.login.answer", params, .. }] if params["answer"] == "abc"));
+        // Done: the popup closes with a toast, and the lists are read again.
+        let out = app.on_reply(Then::LoginStatus("L1".into()), Ok(json!({ "lines": ["logged in to google-antigravity as a@b"], "done": { "ok": true } })));
+        assert!(app.dialog.is_none());
+        assert_eq!(said(&app), Some("logged in to google-antigravity as a@b"));
+        assert!(matches!(&out[..], [Action::Call { method: "providers.list", .. }]));
+        // Esc ends a sign-in that runs.
+        app.open_login("google-antigravity");
+        app.on_reply(Then::LoginStarted("google-antigravity".into()), Ok(json!({ "login": "L2" })));
+        let out = press(&mut app, key(KeyCode::Esc));
+        assert!(matches!(&out[..], [Action::Call { method: "provider.login.cancel", params, .. }] if params["login"] == "L2"));
+        assert!(app.dialog.is_none());
+        // A failure stays on screen.
+        app.open_login("google-antigravity");
+        app.on_reply(Then::LoginStarted("google-antigravity".into()), Ok(json!({ "login": "L3" })));
+        app.on_reply(Then::LoginStatus("L3".into()), Ok(json!({ "lines": ["lykos login: denied"], "done": { "ok": false } })));
+        assert!(matches!(&app.dialog, Some(Dialog::Login(l)) if l.failed));
+    }
+
+    #[test]
+    fn a_command_with_no_session_never_starts_one() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.providers = Some(vec![provider("anthropic", true, true, false)]);
+        // `/login name` typed opens the popup.
+        typed(&mut app, "/login anthropic");
+        let out = press(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&out[..], [Action::Call { method: "provider.login", .. }]));
+        app.dialog = None;
+        // `/effort` and `/specialist` set what the next session starts with.
+        typed(&mut app, "/effort high");
+        assert!(press(&mut app, key(KeyCode::Enter)).is_empty());
+        typed(&mut app, "/specialist plan");
+        assert!(press(&mut app, key(KeyCode::Enter)).is_empty());
+        assert_eq!((app.effort_now().as_deref(), app.specialist_now().as_deref()), (Some("high"), Some("plan")));
+        // One that needs a conversation says so.
+        typed(&mut app, "/compact");
+        assert!(press(&mut app, key(KeyCode::Enter)).is_empty());
+        assert_eq!(said(&app), Some("/compact needs a conversation: send a message first"));
+        assert!(app.session.is_none() && app.queue.is_empty() && !app.starting);
+        // The first message starts the session, which is told the effort and the specialist first.
+        typed(&mut app, "hi");
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), [Action::Start { model: None }]);
+        app.started("s1".into());
+        assert_eq!(app.queue, ["/specialist plan", "/effort high", "hi"]);
+    }
+
+    #[test]
+    fn the_effort_and_specialist_lists_open_with_no_session_from_the_server() {
+        let mut app = App::new("/w".into());
+        app.connected();
+        let out = app.open_list(List::Agents);
+        assert!(matches!(&out[..], [Action::Call { method: "session.preview", .. }]));
+        app.on_reply(Then::Preview, Ok(json!({ "efforts": ["low", "high"], "specialists": [{ "name": "build", "description": "" }, { "name": "plan", "description": "" }] })));
+        assert_eq!(app.list_rows(&List::Agents, "").len(), 2);
+        app.dialog = Some(Dialog::List { list: List::Agents, query: String::new(), selected: 1 });
+        assert!(press(&mut app, key(KeyCode::Enter)).is_empty());
+        assert_eq!(app.specialist_now().as_deref(), Some("plan"));
+        assert_eq!(app.list_rows(&List::Efforts, "").iter().map(|r| r.value.as_str()).collect::<Vec<_>>(), ["low", "high"]);
+    }
+
+    #[test]
+    fn the_mouse_selects_what_it_is_over_clicks_it_and_scrolls_what_is_under_it() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mouse = |kind, column, row| MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE };
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.dialog = Some(Dialog::List { list: List::Efforts, query: String::new(), selected: 0 });
+        app.preview = Some(SessionOptions { model: String::new(), models: vec![], effort: None, efforts: vec!["low".into(), "medium".into(), "high".into()], specialist: String::new(), specialists: vec![], providers: vec![] });
+        {
+            let mut h = app.hits.borrow_mut();
+            h.dialog = Some((10, 5, 40, 10));
+            h.dialog_rows = vec![(7, 0), (8, 1), (9, 2)];
+        }
+        let now = Instant::now();
+        app.on_mouse(mouse(MouseEventKind::Moved, 20, 9), now);
+        assert!(matches!(app.dialog, Some(Dialog::List { selected: 2, .. })), "moving over a row selects it");
+        app.on_mouse(mouse(MouseEventKind::ScrollUp, 20, 9), now);
+        assert!(matches!(app.dialog, Some(Dialog::List { selected: 1, .. })), "the wheel inside moves the selection");
+        let before = app.scroll;
+        app.on_mouse(mouse(MouseEventKind::ScrollUp, 1, 1), now);
+        assert_eq!(app.scroll, before + 3, "the wheel outside scrolls the chat");
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 20, 9), now);
+        assert!(app.dialog.is_none(), "a click is Enter");
+        assert_eq!(app.effort_now().as_deref(), Some("high"));
+        // A click outside a list closes it.
+        app.dialog = Some(Dialog::Help { scroll: 0 });
+        app.on_mouse(mouse(MouseEventKind::ScrollDown, 20, 9), now);
+        assert!(matches!(app.dialog, Some(Dialog::Help { scroll: 3 })), "a page scrolls under the wheel");
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 1, 1), now);
+        assert!(app.dialog.is_none());
     }
 
     #[test]

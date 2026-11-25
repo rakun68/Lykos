@@ -109,12 +109,18 @@ pub struct Menu {
     pub at: usize,
     pub entries: Vec<Entry>,
     pub selected: usize,
+    /// The first entry shown while the mouse selects: the window stays put under it.
+    pub pinned: Option<usize>,
 }
 
 impl Menu {
-    /// The first entry shown: the selection stays in the middle of the window of `LIMIT`, except near either end.
+    /// The first entry shown: the selection stays in the middle of the window of `LIMIT`, except near either end,
+    /// or where the mouse left it while the selection is in it.
     pub fn first(&self) -> usize {
-        centered(self.selected, 1, self.entries.len(), LIMIT)
+        match self.pinned {
+            Some(p) if (p..p + LIMIT).contains(&self.selected) && p <= self.entries.len().saturating_sub(LIMIT) => p,
+            _ => centered(self.selected, 1, self.entries.len(), LIMIT),
+        }
     }
 
     /// The rows it takes: the window, and a count row when there is more than fits.
@@ -231,7 +237,7 @@ mod tests {
         let many: Vec<String> = (0..30).map(|i| format!("f{i}")).collect();
         let all = files("f", &many);
         assert_eq!(all.len(), 30, "every match, so the list scrolls to each");
-        let mut m = Menu { trigger: Trigger::At, at: 0, entries: all, selected: 0 };
+        let mut m = Menu { trigger: Trigger::At, at: 0, entries: all, selected: 0, pinned: None };
         assert_eq!((m.first(), m.height()), (0, LIMIT + 1));
         m.selected = 14;
         assert_eq!(m.first(), 10, "the selection stays in the middle");

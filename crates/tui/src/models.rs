@@ -176,14 +176,8 @@ impl App {
         let mut rename = None;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if has("dialog.select.submit") {
-            match (&self.picker, &chosen) {
-                (Some(Err(_)), _) if self.no_endpoint() => {
-                    // Known only by a stored key: its endpoint is asked for, with its name filled in.
-                    self.ask_custom_named(&provider);
-                    return Vec::new();
-                }
-                (_, Some(m)) => out = self.toggle_shown(&provider, m),
-                _ => {}
+            if let Some(m) = &chosen {
+                out = self.toggle_shown(&provider, m);
             }
         } else if matches!(key.code, KeyCode::Left | KeyCode::Right) {
             if let Some(m) = &chosen {
@@ -232,11 +226,6 @@ impl App {
             }
         }
         self.toast(ToastKind::Success, format!("{provider}/{id} added to {path}; a new session can switch to it"));
-    }
-
-    /// The picker's provider has a stored key and no endpoint: no declaration names its base URL.
-    pub fn no_endpoint(&self) -> bool {
-        matches!(&self.picker, Some(Err(e)) if e.contains("has no endpoint"))
     }
 
     /// The effort a picker row shows: the one set, else the session's own; none for a model that does not reason.

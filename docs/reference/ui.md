@@ -200,7 +200,9 @@ deletes), `/stash pop`.
 | `Ctrl+X` (with a selection), `Ctrl+V` | Cut, paste what was cut or copied |
 | `Ctrl+Z` (Windows), `Ctrl+-`; `Ctrl+Y`, `Ctrl+.`, `Ctrl+Shift+Z` | Undo; redo (200 steps, at most 16 MiB) |
 | Click, drag, double click | Place the cursor, select, select a word |
-| `PageUp`, `PageDown`, `Ctrl+Alt+B`, `Ctrl+Alt+F`, mouse wheel | Scroll the transcript a page |
+| `PageUp`, `PageDown`, `Ctrl+Alt+B`, `Ctrl+Alt+F` | Scroll the transcript a page |
+| Mouse wheel | Scrolls what is under the cursor: a popup's list moves its selection, a page (help, a report, `/context`, a job's output) scrolls, the completion moves its selection, a request's text scrolls; anywhere else the transcript |
+| Mouse over a row, click | Selects the row; a click is `Enter` on it. In a popup's list, the completion and a request's options. In the provider form a click only moves to the field. A click outside a list or a page closes it; outside a form being filled it does nothing |
 | `Ctrl+Alt+Y`, `Ctrl+Alt+E`; `Ctrl+Alt+U`, `Ctrl+Alt+D` | Scroll a line; half a page |
 | `Ctrl+G`, `Alt+Home`; `Ctrl+Alt+G` | Oldest, newest |
 | `Ctrl+P` | The command palette |
@@ -282,14 +284,18 @@ shows the head estimate as the context bar until a request measures it, never `u
 
 **Login.** `/connect` lists every provider Lykos supports, from the engine server's `providers.list`, with or
 without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser`,
-`API key` or `browser or API key`, as Pi's runtime offers an OAuth login and an API key for it (Anthropic takes both,
-Google Antigravity a browser only), and why; a provider already configured (a credential in its pool, its environment
+`API key`, `browser authentication` or `browser authentication · API key`, as Pi's runtime offers an OAuth login and
+an API key for it (Anthropic takes both, Google Antigravity a browser only). A provider with no endpoint (one the
+runtime does not know and no declaration gives a base URL, such as a name with only a stored key) is left out. A
+provider already configured (a credential in its pool, its environment
 variable, or a declared source) is drawn in the accent colour. A configured provider opens its accounts: each
 credential in its pool by label, kind and date added, `d` twice to remove one (disabled as `lykos logout` does, never
 deleted, by the server's `credential.remove`), and a row for each way to add another; `Esc` goes back to the list. One
 configured only by its environment variable says so. An unconfigured provider that takes both opens the same dialog
-with its two rows; one with a browser sign-in only sends `/login <name>`, starting a session when none is open, which
-shows the sign-in link; one with an API key only has it asked for in a popup of its own, drawn as `•`, and stored by
+with its two rows. A browser sign-in opens its popup at once, session or none: the engine server runs it
+(`provider.login`) and opens the browser, the popup shows the link and what the sign-in says, asks what it asks (a
+pasted code, masked when secret), and closes with a toast once the credential is stored; `Esc` ends it. No session
+starts or hears of it, and `/login <name>` typed opens the same popup. One with an API key only has it asked for in a popup of its own, drawn as `•`, and stored by
 the server's `credential.add` without a session. An engine server older than its build on disk, or one that answers `unknown
 method`, says so in a notice. It outlives TUI windows while it has sessions; `Restart the engine server` in the palette
 stops it (its sessions are closed, archived and resumable), the next request starts the one on disk, and this tab's
@@ -303,9 +309,7 @@ server's `provider.add` writes it: the provider's name, its API (`openai-complet
 later), and whether to save it to the global or the project `config.yaml`. It appends the declaration to that file's
 `providers:` block, leaving the rest of the file as it was, then stores the key when one was typed (it is optional).
 A new session uses it, as `<name>/<model>`. A name in use or a URL that is not http or https stops it with the
-reason, and nothing is written. A provider with a stored key and no declaration (an OpenAI-compatible gateway whose
-key was added first) has no endpoint to ask for models: its picker says so, and `Enter` there opens this popup with
-its name filled in.
+reason, and nothing is written.
 `/provider add` on the line surface asks the same questions as lines.
 
 **Command answers (#58).** What a session's slash command answers (`/session`, the lists of `/specialist` and
@@ -338,14 +342,18 @@ command, so it takes effect on the next request.
 | `Ctrl+T` | `/effort` | Next thinking effort, wrapping; `/effort` lists them. Sends `/effort level` |
 | `Ctrl+X A`, `Shift+Tab` | `/agents`, `/specialist` | The primary specialists; `Shift+Tab` the next. Sends `/specialist name` |
 | | `/themes` | The themes, previewed under the cursor; `Esc` puts back the one open before |
-| | `/connect`, `/login` | The providers and whether Lykos reaches each; a browser sign-in sends `/login name`, an API key is asked for in the TUI |
+| | `/connect`, `/login` | The providers; a browser sign-in and an API key each open a popup of their own, with no session |
 | `Ctrl+X S` | `/status` | Engine server, session, model, effort, specialist, theme, MCP servers |
 | | `/mcps` | MCP servers |
 | | `/debug` | Version, OS, terminal, session id, model; `c` copies |
 
 `model.cycle_favorite`, `variant.list`, `usage.show`, `theme.switch_mode` and the rest have no key
-by default; the palette runs them. With an argument, `/model`, `/effort`, `/specialist` and `/login`
-go to the session as before. Eight themes: `sky` (the default), `rose-pine`, `rose-pine-moon`,
+by default; the palette runs them. With an argument, `/model`, `/effort` and `/specialist` go to the session
+as before; `/login <name>` opens the sign-in popup. **A command never starts a session.** With none open, `/model`,
+`/effort` and `/specialist` set what the next session starts with (it is told them before the first prompt), the
+effort and specialist lists come from the server's `session.preview`, and a command that needs a conversation
+(`/compact`, `/fork`, `/undo`) says so in a toast. A skill (`/skill:name`) is a prompt, and starts one as a prompt
+does. Eight themes: `sky` (the default), `rose-pine`, `rose-pine-moon`,
 `rose-pine-dawn`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`; the mode switch goes to the other of a
 dark and light pair. The theme, the last 10 models (newest first), the favorites and what the model picker set are
 kept in `~/.lykos/tui/state.json` (or `$LYKOS_TUI_DIR`).

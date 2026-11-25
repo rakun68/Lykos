@@ -265,6 +265,36 @@ describe("engine server", () => {
       const local = (await list()).find((p) => p.name === "local");
       assert.deepEqual([local?.configured, local?.reason], [true, "1 credential in the pool"]);
 
+      // A sign-in with no session: started, asked, answered and read by separate calls.
+      const { login } = await a.request<{ login: string }>("provider.login", { provider: "omni", apiKey: true });
+      type Status = { lines: string[]; ask?: { prompt: string; secret: boolean }; done?: { ok: boolean } };
+      const until = async (ok: (s: Status) => boolean): Promise<Status> => {
+        for (;;) {
+          const s = await a.request<Status>("provider.login.status", { login });
+          if (ok(s)) return s;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+      };
+      assert.deepEqual((await until((s) => s.ask !== undefined)).ask, { prompt: "omni API key, $VAR or !command", secret: true });
+      await a.request("provider.login.answer", { login, answer: "sk-SECOND" });
+      const signed = await until((s) => s.done !== undefined);
+      assert.equal(signed.done?.ok, true);
+      assert.match(signed.lines.join("\n"), /logged in to omni as key#[0-9]/);
+
+      // A name with only a pool credential has no endpoint to call, so it is not offered.
+      await a.request("credential.add", { provider: "pool-only", key: "sk-X" });
+      assert.equal((await list()).find((p) => p.name === "pool-only"), undefined);
+
+      // What a new session would offer, before one runs: a reasoning model's effort levels, and the specialists.
+      const anthropic = (await a.request<{ models: { id: string; reasoning: boolean }[] }>("provider.models", { cwd: work, provider: "anthropic" })).models;
+      const thinker = anthropic.find((m) => m.reasoning);
+      assert.ok(thinker, "anthropic lists a reasoning model");
+      type Preview = { efforts: string[]; specialists: { name: string }[] };
+      const preview = await a.request<Preview>("session.preview", { cwd: work, model: `anthropic/${thinker.id}` });
+      assert.ok(preview.efforts.includes("high"), preview.efforts.join(","));
+      assert.ok(preview.specialists.length > 0);
+      assert.deepEqual((await a.request<Preview>("session.preview", { cwd: work, model: "nowhere/none" })).efforts, []);
+
       // The accounts: listed without secrets, removed as `lykos logout` does (disabled, never deleted).
       const { credentials } = await a.request<{ credentials: { id: number; type: string; label: string }[] }>("credentials.list", { provider: "local" });
       assert.deepEqual(credentials.map((c) => [c.type, c.label]), [["api_key", "key#1"]]);

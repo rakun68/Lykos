@@ -87,6 +87,16 @@ export type Method =
   | "provider.add"
   /** An API key into a provider's credential pool, `{ provider, key }`: `{ message }`. The key is never sent back. */
   | "credential.add"
+  /** A sign-in with no session, `{ provider, apiKey? }`: `{ login }`, the id the three below take. */
+  | "provider.login"
+  /** What a new session would offer, `{ cwd, model? }`: `{ efforts, specialists }`, for the lists before one runs. */
+  | "session.preview"
+  /** `{ login }`: `{ lines, ask?: { prompt, secret }, done?: { ok } }`. A finished sign-in is forgotten once read. */
+  | "provider.login.status"
+  /** The answer to the question a sign-in waits on, `{ login, answer }`. */
+  | "provider.login.answer"
+  /** Ends a sign-in, `{ login }`. */
+  | "provider.login.cancel"
   | "credentials.list"
   | "skills.list"
   | "credential.remove"

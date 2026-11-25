@@ -157,12 +157,6 @@ impl App {
         self.dialog = Some(Dialog::Provider(ProviderForm::default()));
     }
 
-    /// Opens the custom provider popup for `name`, a provider with a stored key and no endpoint: its name is filled
-    /// in, and the cursor is on the API kind, its base URL next.
-    pub fn ask_custom_named(&mut self, name: &str) {
-        self.dialog = Some(Dialog::Provider(ProviderForm { name: name.into(), focus: 1, ..ProviderForm::default() }));
-    }
-
     /// A key in the popup: up and down (or tab) move between fields, left and right change a choice, Enter goes to
     /// the next field and on the last one saves.
     pub fn provider_form_key(&mut self, key: &KeyEvent, ids: &[&str], mut f: ProviderForm) -> Vec<Action> {

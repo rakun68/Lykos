@@ -383,7 +383,12 @@ fn draw_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, h: u16) -> 
     } else {
         let max = body.len().saturating_sub(room);
         let scroll = ui.scroll.min(max);
-        for line in body.iter().skip(scroll).take(room) {
+        // A question's options open its body: each one's row, for the mouse.
+        let options = if approval(r) || r.options.is_empty() { 0 } else { r.options.len() + 1 };
+        for (j, line) in body.iter().enumerate().skip(scroll).take(room) {
+            if j < options {
+                app.hits.borrow_mut().request_options.push((at, tx, tx + iw as u16, j));
+            }
             paint(buf, line, at);
             at += 1;
         }
@@ -430,7 +435,9 @@ fn actions(app: &App, r: &RequestData, ui: &Ui, buf: &mut Buffer, x: u16, y: u16
         let on = ui.selected == i;
         let style = if on { Style::fg(c().surface).on(c().accent) } else { Style::fg(c().text).on(c().overlay) };
         let label = format!(" {} ", o.label);
+        let start = col;
         col = buf.text(col, y + 1, (x + width).saturating_sub(col), &label, style) + 1;
+        app.hits.borrow_mut().request_options.push((y + 1, start, col - 1, i));
     }
     if !one_row(app, r, width) {
         draw_hints(buf, x + 3, y + 2);
@@ -443,6 +450,9 @@ fn actions(app: &App, r: &RequestData, ui: &Ui, buf: &mut Buffer, x: u16, y: u16
 pub fn draw(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h: u16) -> Option<(u16, u16)> {
     let h = height(app, width, screen_h).saturating_sub(1);
     let ui = app.request_ui();
+    if !ui.expanded {
+        app.hits.borrow_mut().request = Some((x, y, width, h));
+    }
     let cursor = if ui.expanded { None } else { draw_box(app, buf, x, y, width, h) };
     if ui.expanded {
         // Full screen draws it over everything; this place keeps its rows.
@@ -459,5 +469,10 @@ pub fn draw_expanded(app: &App, buf: &mut Buffer) {
     }
     let (w, h) = (buf.width, buf.height);
     buf.fill(0, 0, w, h - 1, Style::default());
+    {
+        let mut hits = app.hits.borrow_mut();
+        hits.request = Some((0, 0, w, h - 1));
+        hits.request_options.clear();
+    }
     draw_box(app, buf, 2, 0, w.saturating_sub(4), h - 1);
 }

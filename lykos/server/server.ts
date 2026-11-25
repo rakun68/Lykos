@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { tuiColors, tuiKeybinds } from "../config/keybinds.js";
 import { sessionDefaults } from "../session/session-options.js";
+import { discoverSpecialists, primarySpecialists } from "../config/specialists.js";
 import { globalConfigPath, loadConfig, projectConfigPath } from "../config/load.js";
 import { providerCatalog } from "../config/provider-catalog.js";
 import { baseUrlProblem, CUSTOM_PROVIDER_APIS, modelIds, providerIdProblem, writeModelToConfig, writeProviderToConfig } from "../config/provider-add.js";
@@ -29,6 +30,7 @@ import { BUILTIN_PROVIDERS, PI_NATIVE_PROVIDERS } from "../config/provider-table
 import { defaultCredentialDbPath, openCredentialDb } from "../credentials/db.js";
 import { disableCredential, listEnabled } from "../credentials/pool.js";
 import { addToPool } from "../credentials/login-flow.js";
+import { LoginJobs, type LoginJobsOptions } from "./login-jobs.js";
 import { poolSummary, summaryPoolSizes } from "../credentials/presence.js";
 import { defaultChildCommand, type ChildCommand } from "../delegate/session-process.js";
 import { isWithinRoot } from "../gate/approval.js";
@@ -63,6 +65,8 @@ export interface EngineServerOptions {
   registryPath?: string;
   /** Where `worktree.create` makes worktrees. Default `~/.lykos/worktrees`; tests pass their own. */
   worktreesRoot?: string;
+  /** How a sign-in with no session opens its URL and builds its runtime. Default: the browser and the model runtime; tests pass their own. */
+  login?: Omit<LoginJobsOptions, "dbPath">;
   /** Called once the server has stopped listening and every child has exited. */
   onExit?: (reason: string) => void;
 }
@@ -108,6 +112,8 @@ export class EngineServer {
   private asideSeq = 0;
   /** Ledger sessions a `session.start` is resuming, until its child is live: one ledger row runs in one child. */
   private readonly resuming = new Set<string>();
+  /** Sign-ins started with no session (`provider.login`), by id. */
+  private readonly logins: LoginJobs;
   /** Every open connection, authenticated or not: stop() must close them all, or server.close() never returns. */
   private readonly sockets = new Set<Socket>();
   private server: Server | undefined;
@@ -122,6 +128,7 @@ export class EngineServer {
   private readonly log: (line: string) => void;
 
   constructor(private readonly opts: EngineServerOptions) {
+    this.logins = new LoginJobs({ dbPath: () => defaultCredentialDbPath(), ...opts.login });
     this.address = opts.address ?? engineAddress();
     ensureEngineDir(this.address.dir);
     this.key = readOrCreateKey(this.address);
@@ -297,6 +304,43 @@ export class EngineServer {
         const path = scope === "global" ? globalConfigPath(this.opts.globalDir ?? join(homedir(), ".lykos")) : projectConfigPath(root);
         writeProviderToConfig(path, { id, api, baseUrl, models: modelIds(models) });
         return { path };
+      }
+      case "session.preview": {
+        // The effort levels and specialists a new session would offer, `{ cwd, model? }`, for the lists before one runs.
+        if (typeof params.cwd !== "string" || params.cwd === "") throw new Error("session.preview needs cwd");
+        const root = resolvePath(params.cwd);
+        const globalDir = this.opts.globalDir ?? join(homedir(), ".lykos");
+        const model = typeof params.model === "string" && params.model !== "" ? params.model : sessionDefaults(root, this.opts.globalDir).model;
+        const { resolved } = loadConfig({ cwd: root, ...this.globalOpt() });
+        const { catalogRuntime, effortsOf } = await import("../session/provider-models.js");
+        const runtime = await catalogRuntime(root, resolved.providers);
+        const slash = model.indexOf("/");
+        const found = slash > 0 ? runtime.getModels(model.slice(0, slash)).find((m) => m.id === model.slice(slash + 1)) : undefined;
+        const described = new Map(discoverSpecialists(root, globalDir).map((sp) => [sp.name, sp.description ?? ""]));
+        return {
+          efforts: found?.reasoning === true ? effortsOf(found) : [],
+          specialists: primarySpecialists(root, globalDir).map((name) => ({ name, description: described.get(name) ?? "" })),
+        };
+      }
+      case "provider.login": {
+        // A browser sign-in, or `apiKey` for a key, run here with no session: the TUI polls its status.
+        const { provider, apiKey } = params;
+        if (typeof provider !== "string" || provider === "") throw new Error("provider.login needs provider");
+        return { login: this.logins.start(provider, apiKey === true) };
+      }
+      case "provider.login.status":
+      case "provider.login.answer":
+      case "provider.login.cancel": {
+        const { login, answer } = params;
+        if (typeof login !== "string" || login === "") throw new Error(`${method} needs login`);
+        if (method === "provider.login.status") return this.logins.status(login);
+        if (method === "provider.login.cancel") {
+          this.logins.cancel(login);
+          return {};
+        }
+        if (typeof answer !== "string") throw new Error("provider.login.answer needs answer");
+        this.logins.answer(login, answer);
+        return {};
       }
       case "credential.add": {
         const { provider, key } = params;

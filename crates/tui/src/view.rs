@@ -87,6 +87,7 @@ fn loading(app: &App, buf: &mut Buffer) {
 fn draw_screen(app: &App, buf: &mut Buffer) -> Option<(u16, u16)> {
     let (w, h) = (buf.width, buf.height);
     app.tab_hits.borrow_mut().clear();
+    *app.hits.borrow_mut() = crate::mouse::Hits::default();
     if w < 10 || h < 6 {
         buf.text(0, 0, w, "lykos", theme::text());
         return None;
@@ -449,7 +450,7 @@ fn prompt_box(app: &App, buf: &mut Buffer, x: u16, y: u16, width: u16, screen_h:
         cursor = Some((tx + ccol as u16, ty + (crow - first) as u16));
     }
     if let Some(m) = &app.menu {
-        completion(m, buf, x, y, width);
+        completion(app, m, buf, x, y, width);
     }
     let meta_y = y + body;
     buf.fill(x, meta_y, width, 1, raised);
@@ -486,7 +487,7 @@ fn input_row(editor: &Editor, buf: &mut Buffer, x: u16, y: u16, max: u16, row: c
 
 /// OpenCode `component/prompt/autocomplete.tsx`: the matches in a box over the prompt, the selected one raised; a
 /// longer list scrolls in a window of `menu::LIMIT` with a count row under it.
-fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
+fn completion(app: &App, m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
     let n = m.entries.len();
     let h = m.height() as u16;
     if prompt_y < h || n == 0 {
@@ -495,6 +496,11 @@ fn completion(m: &Menu, buf: &mut Buffer, x: u16, prompt_y: u16, width: u16) {
     let top = prompt_y - h;
     let first = m.first();
     let shown = &m.entries[first..(first + crate::menu::LIMIT).min(n)];
+    {
+        let mut hits = app.hits.borrow_mut();
+        hits.menu = Some((x, top, width, h));
+        hits.menu_rows = (0..shown.len()).map(|i| (top + i as u16, first + i)).collect();
+    }
     let label_w = shown.iter().map(|e| e.label.chars().count()).max().unwrap_or(0).min(width as usize / 2) as u16;
     for (i, e) in shown.iter().enumerate() {
         let y = top + i as u16;
@@ -722,12 +728,7 @@ fn dialog(app: &App, buf: &mut Buffer) {
             if lines.is_empty() {
                 match &app.picker {
                     None => lines.push(line("Loading models…", theme::muted())),
-                    Some(Err(e)) => {
-                        lines.extend(wrap(e, inner.max(1)).into_iter().map(|l| line(l, Style::fg(c().love))));
-                        if app.no_endpoint() {
-                            lines.push(line(format!("{}: add its base URL", k("dialog.select.submit")), theme::muted()));
-                        }
-                    }
+                    Some(Err(e)) => lines.extend(wrap(e, inner.max(1)).into_iter().map(|l| line(l, Style::fg(c().love)))),
                     Some(Ok(_)) => lines.push(line(if query.is_empty() { "No models" } else { "No match" }, theme::muted())),
                 }
             }
@@ -804,8 +805,8 @@ fn dialog(app: &App, buf: &mut Buffer) {
                     if app.providers.is_none() { "Loading providers…" } else { "No provider connected: /connect adds one" },
                     format!(" · {} favorite · {} providers", k("model.dialog.favorite"), k("model.dialog.provider")),
                 ),
-                List::Efforts => ("Select thinking effort", "This model has no effort levels, or no session is open", String::new()),
-                List::Agents => ("Select specialist", "No specialists: open a session first", String::new()),
+                List::Efforts => ("Select thinking effort", if app.offered().is_some() { "This model has no effort levels" } else { "Loading…" }, String::new()),
+                List::Agents => ("Select specialist", if app.offered().is_some() { "No specialists" } else { "Loading…" }, String::new()),
                 List::Themes { .. } => ("Themes", "No themes", String::new()),
                 List::Providers => ("Connect a provider", if app.providers.is_none() { "Loading providers…" } else { "No providers" }, String::new()),
             };
@@ -952,6 +953,25 @@ fn dialog(app: &App, buf: &mut Buffer) {
             let shown = all.into_iter().skip(start).take(room).map(|l| line(l, style)).collect();
             (title.clone(), shown, None, format!("{} copy · ↑↓ scroll · {close}", k("aside.copy")))
         }
+        // A sign-in: what it said, then its question with the answer typed so far, masked when it is a secret.
+        Dialog::Login(l) => {
+            let mut all: Vec<Line> = if l.lines.is_empty() && !l.failed { vec![line("Starting…", theme::muted())] } else { Vec::new() };
+            let style = if l.failed { Style::fg(c().love) } else { theme::text() };
+            all.extend(l.lines.iter().flat_map(|x| wrap(x, inner.max(1))).map(|x| line(x, style)));
+            if let Some((prompt, secret)) = &l.ask {
+                let shown = if *secret { "•".repeat(l.input.chars().count()) } else { l.input.clone() };
+                all.push(line("", theme::text()));
+                all.push(runs(vec![(format!("{prompt}: "), Style::fg(c().accent)), (format!("{shown}▏"), theme::text())]));
+            }
+            let end = all.len().saturating_sub(room);
+            all.drain(..end);
+            let keys = match (&l.ask, l.failed) {
+                (Some(_), _) => format!("{} send · {} cancel", k("dialog.select.submit"), k("dialog.close")),
+                (None, true) => close.clone(),
+                (None, false) => format!("waiting for the browser · {} cancel", k("dialog.close")),
+            };
+            (format!("Sign in to {}", l.provider), all, None, keys)
+        }
         // `dialog-shell-output.tsx`: the command as the title, the output's end, `Loading…` until the first read.
         Dialog::Output { command, text, offset, scroll, error, .. } => {
             let mut all: Vec<Line> = match (error, offset) {
@@ -974,7 +994,11 @@ fn dialog(app: &App, buf: &mut Buffer) {
         || {
             selected.map_or(0, |s| {
                 let span = 1 + usize::from(lines.get(s + 1).is_some_and(|l| l.with_prev));
-                crate::menu::centered(s, span, lines.len(), room)
+                // Where the mouse left it, while the selection is in view: the rows stay put under the cursor.
+                match app.mouse_skip {
+                    Some(p) if s >= p && s + span <= p + room && p <= lines.len().saturating_sub(room) => p,
+                    _ => crate::menu::centered(s, span, lines.len(), room),
+                }
             })
         },
         |s| s.min(lines.len().saturating_sub(room)),
@@ -1005,6 +1029,27 @@ fn dialog(app: &App, buf: &mut Buffer) {
         }
     }
     let top = y + 2 + search_h;
+    {
+        // Each body row's item, for the mouse: a heading is none, a second row its first row's.
+        let mut hits = app.hits.borrow_mut();
+        hits.dialog = Some((x, y, dw, dh));
+        hits.dialog_skip = skip;
+        if selected.is_some() {
+            let mut item = None;
+            let mut next = 0;
+            for (i, l) in lines.iter().enumerate() {
+                if l.heading {
+                    item = None;
+                } else if !l.with_prev || item.is_none() {
+                    item = Some(next);
+                    next += 1;
+                }
+                if let (Some(n), true) = (item, (skip..skip + body as usize).contains(&i)) {
+                    hits.dialog_rows.push((top + (i - skip) as u16, n));
+                }
+            }
+        }
+    }
     // #58 item 11: where the view is in a longer list.
     let bar = lines.len() > body as usize;
     let width = (inner as u16).saturating_sub(u16::from(bar));
@@ -1164,7 +1209,7 @@ fn short(t: f64) -> String {
 fn context_lines(app: &App, data: Option<&lykos_client::ContextBreakdown>) -> Vec<Line> {
     let Some(d) = data else {
         let why = match (app.current(), app.status()) {
-            (None, _) => "Open a session first",
+            (None, _) => "No conversation yet: send a message first",
             (Some(_), Some(SessionStatus::Idle)) => "Loading…",
             _ => "Shown once the session is idle",
         };
@@ -1594,9 +1639,32 @@ mod tests {
         app.dialog = Some(Dialog::ModelPicker { provider: "p".into(), query: "zzz".into(), selected: 0, rename: None });
         draw(&app, &mut buf);
         assert!(screen(&buf).contains("No match"));
-        app.picker = Some(Err("p has no endpoint: add it as a custom provider with its base URL".into()));
+        app.picker = Some(Err("the endpoint refused".into()));
         draw(&app, &mut buf);
-        assert!(screen(&buf).contains("add its base URL"));
+        assert!(screen(&buf).contains("the endpoint refused"));
+    }
+
+    #[test]
+    fn the_mouse_finds_the_row_drawn_under_it_in_a_list_of_two_rows_an_item() {
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        let mut app = App::new("/w".into());
+        app.connected();
+        app.picker = Some(Ok(serde_json::from_value(serde_json::json!([
+            { "id": "a-1", "name": "Alpha", "reasoning": false, "contextWindow": null, "efforts": ["off"], "listed": true },
+            { "id": "b-2", "name": "Beta", "reasoning": false, "contextWindow": null, "efforts": ["off"], "listed": true }
+        ]))
+        .unwrap()));
+        app.dialog = Some(Dialog::ModelPicker { provider: "p".into(), query: String::new(), selected: 0, rename: None });
+        let mut buf = Buffer::new(100, 30);
+        draw(&app, &mut buf);
+        // Beta's name row and its id row under it are both Beta's.
+        let s = screen(&buf);
+        let beta = s.lines().position(|l| l.contains("Beta")).unwrap() as u16;
+        let rows = app.hits.borrow().dialog_rows.clone();
+        assert!(rows.contains(&(beta, 1)) && rows.contains(&(beta + 1, 1)), "{rows:?}");
+        let x = app.hits.borrow().dialog.unwrap().0 + 3;
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Moved, column: x, row: beta + 1, modifiers: KeyModifiers::NONE }, std::time::Instant::now());
+        assert!(matches!(app.dialog, Some(Dialog::ModelPicker { selected: 1, .. })));
     }
 
     #[test]

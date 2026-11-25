@@ -30,6 +30,8 @@ const env = {
   LYKOS_ENGINE_CHILD: JSON.stringify({ command: process.execPath, args: ["--import", tsx, join(root, "lykos/server/scripted-child.fixture.ts")] }),
   LYKOS_SERVE_CMD: "",
   LYKOS_TRUST_WORKSPACE: "",
+  // A build of the TUI elsewhere, when the one in target/ is held by a running TUI.
+  ...(process.env.LYKOS_TUI_BIN ? { LYKOS_TUI_BIN: process.env.LYKOS_TUI_BIN } : {}),
 };
 
 const server = process.env.TUI_MCP
@@ -86,7 +88,7 @@ try {
     await call("wait_for_idle", { sessionId: id, timeout: 3000 });
     await call("send_keys", { sessionId: id, keys: "Enter" });
     await waitText("Add a custom provider");
-    await waitText("API key · ");
+    await waitText("API key");
   });
   await step("its first row opens the custom provider popup, every field at once", async () => {
     await call("send_keys", { sessionId: id, keys: "Enter" });
@@ -112,17 +114,34 @@ try {
     if ((await screen()).includes("Loading")) throw new Error("it still says loading");
     await call("send_keys", { sessionId: id, keys: "Escape" });
   });
-  await step("anthropic signs in with a browser or an API key, google-antigravity with a browser", async () => {
+  await step("anthropic signs in with a browser or an API key, google-antigravity with a browser, in a few words", async () => {
     await call("send_text", { sessionId: id, text: "/connect" });
     await call("wait_for_idle", { sessionId: id, timeout: 3000 });
     await call("send_keys", { sessionId: id, keys: "Enter" });
     await waitText("Add a custom provider");
     await call("send_text", { sessionId: id, text: "anthropic" });
-    await waitText("browser or API key");
+    await waitText("browser authentication · API key");
     for (let i = 0; i < 9; i++) await call("send_keys", { sessionId: id, keys: "Backspace" });
     await call("send_text", { sessionId: id, text: "antigravity" });
-    await waitText("google-antigravity +browser · ");
+    await waitText("google-antigravity +browser authentication");
     await call("send_keys", { sessionId: id, keys: "Escape" });
+  });
+  await step("/login opens its sign-in popup at once and starts no session", async () => {
+    // A provider the runtime does not know: the server's sign-in fails before any browser opens.
+    await call("send_text", { sessionId: id, text: "/login nowhere-provider" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("Sign in to nowhere-provider");
+    await waitText("unknown provider");
+    await call("send_keys", { sessionId: id, keys: "Escape" });
+    if ((await screen()).includes("Build · Scripted")) throw new Error("a session started");
+  });
+  await step("a command before any session sets what the next one starts with, and starts none", async () => {
+    await call("send_text", { sessionId: id, text: "/compact" });
+    await call("wait_for_idle", { sessionId: id, timeout: 3000 });
+    await call("send_keys", { sessionId: id, keys: "Enter" });
+    await waitText("needs a conversation");
+    if ((await screen()).includes("Build · Scripted")) throw new Error("a session started");
   });
   await step("the model list opens before any session: a section per connected provider, or how to connect one", async () => {
     await call("send_text", { sessionId: id, text: "/models" });

@@ -46,7 +46,10 @@ export function providerCatalog(input: {
     ...input.poolSizes.keys(),
     ...(input.kinds?.keys() ?? []),
   ]);
+  // A provider the runtime does not know and no declaration gives a base URL has no endpoint to call: it is left out.
+  const reachable = (name: string): boolean => input.kinds === undefined || input.kinds.has(name) || input.providers[name]?.baseUrl !== undefined;
   return [...names]
+    .filter(reachable)
     .sort((a, b) => a.localeCompare(b))
     .map((name) => {
       const decl = input.providers[name];
