@@ -3648,7 +3648,7 @@ mod tests {
         assert_eq!(app.dialog, Some(Dialog::Palette { query: String::new(), selected: 0 }));
         let all = app.palette("");
         assert!(all.iter().any(|d| d.id == "input.select.all") && all.iter().all(|d| d.id != "command.palette.show" && (keymap::in_palette(d.group) || d.group == SLASH_GROUP)));
-        assert!(all.iter().any(|d| d.slash.as_ref().is_some_and(|e| e.label == "/models")), "the slash commands are listed too");
+        assert!(all.iter().any(|d| d.slash.as_ref().is_some_and(|e| e.label == "/model")), "the slash commands are listed too");
         let groups: Vec<&str> = all.iter().map(|d| d.group).fold(Vec::new(), |mut g, x| {
             if g.last() != Some(&x) {
                 g.push(x);

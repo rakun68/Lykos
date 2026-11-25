@@ -144,7 +144,7 @@ try {
     if ((await screen()).includes("Build · Scripted")) throw new Error("a session started");
   });
   await step("the model list opens before any session: a section per connected provider, or how to connect one", async () => {
-    await call("send_text", { sessionId: id, text: "/models" });
+    await call("send_text", { sessionId: id, text: "/model" });
     await call("wait_for_idle", { sessionId: id, timeout: 3000 });
     await call("send_keys", { sessionId: id, keys: "Enter" });
     await waitText("Select model");

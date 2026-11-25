@@ -3,6 +3,7 @@
 // (`delegate/ocr.ts`'s default), so a model listed here is one a session can switch to.
 
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "../config/load.js";
 import { builtinProviderDecls, cacheModelsPath, generateProviderConfig } from "../config/providers.js";
 import type { ProvidersConfig } from "../config/types.js";
 import { EFFORT_LEVELS } from "../surface/effort.js";
@@ -33,6 +34,18 @@ export async function catalogRuntime(cwd: string, providers: ProvidersConfig): P
   const generated = generateProviderConfig({ providers, builtins: builtinProviderDecls(), targetPath: cacheModelsPath(cwd) });
   if (generated.errors.length > 0) throw new Error(generated.errors.join("; "));
   return createLykosModelRuntime({ ...(generated.written ? { modelsPath: generated.targetPath } : {}), providerConfig: providers });
+}
+
+/**
+ * Reads the config's providers again into a running session's runtime: a provider or model added since the session
+ * started (`/connect`, a model picked from an endpoint, an edited config) is then one it can switch to. The runtime
+ * reads the same generated file a session in `cwd` boots from; no endpoint is asked.
+ */
+export async function reloadProviders(runtime: ModelRuntime, cwd: string, globalDir?: string): Promise<void> {
+  const { resolved } = loadConfig({ cwd, ...(globalDir !== undefined ? { globalDir } : {}) });
+  const generated = generateProviderConfig({ providers: resolved.providers, builtins: builtinProviderDecls(), targetPath: cacheModelsPath(cwd) });
+  if (generated.errors.length > 0) throw new Error(generated.errors.join("; "));
+  await runtime.refresh({ allowNetwork: false });
 }
 
 /** Every provider the runtime knows, by how it signs in. */

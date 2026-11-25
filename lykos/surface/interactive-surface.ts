@@ -47,6 +47,7 @@ import {
   startLiveCapture,
   subscribeStandaloneUsage,
 } from "../session/session.js";
+import { reloadProviders } from "../session/provider-models.js";
 import {
   parseAskAnswer,
   TerminalAsk,
@@ -456,7 +457,14 @@ export async function runAppendOnlyInteractive(shared: StandaloneBootInputs, fin
         return current ? `${current.provider}/${current.id}` : modelSpec;
       },
       setModel: async (spec, persist) => {
-        const next = await resolveHostModel(spec, modelRuntime);
+        let next: Awaited<ReturnType<typeof resolveHostModel>>;
+        try {
+          next = await resolveHostModel(spec, modelRuntime);
+        } catch {
+          // Unknown to the runtime this session started with: read the providers again, then ask once more.
+          await reloadProviders(modelRuntime, cwd);
+          next = await resolveHostModel(spec, modelRuntime);
+        }
         await session.setModel(next, { persist });
         const ref = `${next.provider}/${next.id}`;
         if (state.currentModel !== ref) {

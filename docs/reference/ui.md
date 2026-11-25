@@ -340,7 +340,7 @@ command, so it takes effect on the next request.
 
 | Key | Command | Action |
 | --- | --- | --- |
-| `Ctrl+X M` | `/models`, `/model` | The models shown: Favorites, Recent, then a section for each connected provider ending in `Select models…`; `Ctrl+F` favorites the row, `Ctrl+A` the providers, `Ctrl+U` usage. Sends `/model provider/id`, then `/effort` when the picker set one; with no session open, the next session starts on it |
+| `Ctrl+X M` | `/model` | The models shown: Favorites, Recent, then a section for each connected provider ending in `Select models…`; `Ctrl+F` favorites the row, `Ctrl+A` the providers, `Ctrl+U` usage. Sends `/model provider/id`, then `/effort` when the picker set one; with no session open, the next session starts on it |
 | `F2`, `Shift+F2` | | Next, previous recently used model |
 | `Ctrl+T` | `/effort` | Next thinking effort, wrapping; `/effort` lists them. Sends `/effort level` |
 | `Ctrl+X A`, `Shift+Tab` | `/agents`, `/specialist` | The primary specialists; `Shift+Tab` the next. Sends `/specialist name` |

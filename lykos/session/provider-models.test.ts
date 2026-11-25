@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ProvidersConfig } from "../config/types.js";
-import { effortsOf, endpointModelIds, providerModels } from "./provider-models.js";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { resolveHostModel } from "./session.js";
+import { catalogRuntime, effortsOf, endpointModelIds, providerModels, reloadProviders } from "./provider-models.js";
 
 /** A runtime that knows `known`'s providers and models, with `key` stored for each. */
 function runtime(known: Record<string, { id: string; name: string; reasoning?: boolean; contextWindow?: number }[]>, key = "sk-test"): ModelRuntime {
@@ -56,4 +60,29 @@ test("model ids come from OpenAI's, Anthropic's and Google's list shapes; effort
   assert.deepEqual(effortsOf({ reasoning: false }), ["off"]);
   assert.deepEqual(effortsOf({ reasoning: true }), ["off", "minimal", "low", "medium", "high"]);
   assert.deepEqual(effortsOf({ reasoning: true, thinkingLevelMap: { minimal: null, medium: null, xhigh: "max" } }), ["off", "low", "high", "xhigh"]);
+});
+
+test("a provider added to the config after a session started is one it can switch to once the config is read again", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lykos-reload-"));
+  const cwd = join(root, "work");
+  const globalDir = join(root, "global");
+  mkdirSync(cwd);
+  mkdirSync(globalDir);
+  const before = process.env.LYKOS_CREDENTIALS_DB;
+  process.env.LYKOS_CREDENTIALS_DB = join(root, "credentials.db");
+  try {
+    const rt = await catalogRuntime(cwd, {});
+    await assert.rejects(resolveHostModel("omniroute/auto", rt), /unknown provider "omniroute"/);
+    writeFileSync(
+      join(globalDir, "config.yaml"),
+      ["providers:", "  omniroute:", "    auth: api_key", "    api: openai-completions", '    baseUrl: "http://localhost:20128/v1"', "    models:", '      - id: "auto"', ""].join("\n"),
+    );
+    await reloadProviders(rt, cwd, globalDir);
+    const model = await resolveHostModel("omniroute/auto", rt);
+    assert.equal(`${model.provider}/${model.id}`, "omniroute/auto");
+    assert.ok(rt.getProvider("anthropic"), "the built-ins are still there");
+  } finally {
+    if (before === undefined) delete process.env.LYKOS_CREDENTIALS_DB;
+    else process.env.LYKOS_CREDENTIALS_DB = before;
+  }
 });

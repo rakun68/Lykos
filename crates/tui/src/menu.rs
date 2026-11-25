@@ -44,7 +44,7 @@ pub const LOCAL: [(Local, &str, &str); 23] = [
     (Local::StashPop, "/stash pop", "Pop the last stashed prompt"),
     (Local::Help, "/help", "Every key, and the config layer that set it"),
     // OpenCode's slash names for its lists (`app.tsx`).
-    (Local::Models, "/models", "Switch model"),
+    (Local::Models, "/model", "Switch model"),
     (Local::Agents, "/agents", "Switch specialist"),
     (Local::Themes, "/themes", "Switch theme"),
     (Local::Connect, "/connect", "Connect a provider"),
@@ -257,6 +257,7 @@ mod tests {
             CommandInfo { name: "/context".into(), description: "what is occupying the context window".into(), source: "builtin".into() },
             CommandInfo { name: "/login".into(), description: "add a credential: /login <provider>".into(), source: "builtin".into() },
             CommandInfo { name: "/followup".into(), description: "queue a follow-up".into(), source: "builtin".into() },
+            CommandInfo { name: "/model".into(), description: "switch model: /model <provider/model>".into(), source: "builtin".into() },
         ];
         let got = commands("tdd", &theirs);
         assert_eq!(got[0].pick, Pick::Command("/skill:tdd".into()));
@@ -265,7 +266,8 @@ mod tests {
         assert_eq!(bare_of("/context"), Some(true));
         assert_eq!(bare_of("/login"), Some(true), "bare, it opens its list");
         assert_eq!(bare_of("/followup"), Some(false));
-        assert_eq!(bare_of("/models"), Some(true));
+        assert_eq!(bare_of("/model"), Some(true));
+        assert_eq!(all_commands(&theirs).iter().filter(|e| e.label.starts_with("/model")).count(), 1, "one /model, no /models");
         assert_eq!(bare_of("/btw"), Some(false));
         assert!(is_image("a/B.PNG") && !is_image("a.rs"));
     }
