@@ -105,6 +105,11 @@ export type Method =
   /** A model into a declared provider's `models:` in the config file that declares it, `{ cwd, provider, model }`: `{ path }`. */
   | "provider.model.add"
   | "session.options"
+  /**
+   * `{ cwd, session? }`: a prompt is being written in `cwd`. The server loads a session process there, so the session
+   * the prompt starts (or wakes) does not wait for it: `{ warmed }`. Nothing when `session` runs one already.
+   */
+  | "session.warm"
   /** P5 #42: the ledger's sessions for the session list, and which are live here. */
   | "sessions.history"
   | "session.rename"
