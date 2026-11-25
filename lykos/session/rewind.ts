@@ -542,6 +542,16 @@ export function earlierPrompts(branch: readonly TranscriptRecord[]): EarlierProm
   return out;
 }
 
+/**
+ * The index in `points` of the prompt typed as `text`, `nth` such prompts back from the last (0 is the last): how a
+ * client that shows the conversation names a prompt it was clicked on. Undefined when there is no such prompt.
+ */
+export function promptIndex(points: readonly RewindPoint[], text: string, nth: number): number | undefined {
+  const want = text.trim();
+  const hits = points.flatMap((p, i) => (p.text.trim() === want ? [i] : []));
+  return hits[hits.length - 1 - nth];
+}
+
 /** How a picker shows one prompt: its first line, clipped, and the turn it started. */
 export function rewindPointLabel(point: RewindPoint, width = 72): string {
   const first = point.text.split("\n")[0] ?? "";

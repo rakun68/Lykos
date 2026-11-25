@@ -13,7 +13,7 @@ import { folderOfPath, TerminalApprovalGate, type ApprovalRequest } from "../gat
 import { resolveProject } from "../session/identity.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { resolveApprovalGate } from "../session/session.js";
-import type { InteractiveHandle, LaunchResult, LineSource, ResumePlan, ResumeRunner } from "../session/interactive.js";
+import type { ForkAt, InteractiveHandle, LaunchResult, LineSource, ResumePlan, ResumeRunner } from "../session/interactive.js";
 import { defaultLedgerPath } from "../ledger/ledger.js";
 import { TerminalAsk, type AskRequest } from "../tools/ask.js";
 import { slashCandidates } from "../surface/commands.js";
@@ -349,15 +349,17 @@ export async function runSessionChild(
           status: "ok",
           sessionId: result.sessionId,
           ...(result.forkRequested ? { forkRequested: true } : {}),
+          ...(result.forkAt !== undefined ? { forkAt: result.forkAt } : {}),
           ...(result.rewindRebuild !== undefined ? { rewindRebuild: result.rewindRebuild } : {}),
         }
       : { status: "error", message: result.message };
   };
   /** P5 #42: `lykos resume` on these seams: the preflight's agreement is a question to the client. */
-  const resume = async (id: string, opts: { fork?: boolean; inputText?: string; show?: boolean }): Promise<number> => {
+  const resume = async (id: string, opts: { fork?: boolean; forkAt?: ForkAt; inputText?: string; show?: boolean }): Promise<number> => {
     let refusal: string | undefined;
     const code = await runResume(params.cwd, ledgerPath ?? defaultLedgerPath(params.cwd), id, {
       ...(opts.fork === true ? { fork: true } : {}),
+      ...(opts.forkAt !== undefined ? { forkAt: opts.forkAt.turn, inputText: opts.forkAt.inputText } : {}),
       // A session opened from the list shows its conversation so far; a fork or a rewind in this process already has.
       ...(opts.show === true
         ? {
@@ -401,7 +403,7 @@ export async function runSessionChild(
     }
     // `/fork` and a rewind past this process continue as `lykos run` continues them, through a resume.
     let code = 0;
-    if (result.forkRequested === true && result.sessionId !== undefined) code = await resume(result.sessionId, { fork: true });
+    if (result.forkRequested === true && result.sessionId !== undefined) code = await resume(result.sessionId, { fork: true, ...(result.forkAt !== undefined ? { forkAt: result.forkAt } : {}) });
     else if (result.rewindRebuild !== undefined && result.sessionId !== undefined) {
       code = await resume(result.sessionId, { inputText: result.rewindRebuild.inputText });
     }

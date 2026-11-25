@@ -49,6 +49,8 @@ const TICK: Duration = Duration::from_millis(80);
 
 enum Msg {
     Input(TermEvent),
+    /// A paste the input thread read (`paste::Read::Paste`).
+    Paste { text: String, after: Option<char>, full: bool },
     Server(Update),
     Connected,
     /// The engine server runs an older build than the one on disk.
@@ -168,7 +170,16 @@ fn run(args: Args) -> io::Result<()> {
     let reader = (tx.clone(), input.clone());
     thread::Builder::new().name("lykos-input".into()).spawn(move || {
         let (tx, flags) = reader;
-        let send = |evs: Vec<TermEvent>| evs.into_iter().all(|ev| tx.send(Msg::Input(ev)).is_ok());
+        let send = |evs: Vec<paste::Read>| {
+            evs.into_iter().all(|r| {
+                tx.send(match r {
+                    paste::Read::Event(ev) => Msg::Input(ev),
+                    paste::Read::Paste { text, after, full } => Msg::Paste { text, after, full },
+                })
+                .is_ok()
+            })
+        };
+        let mut reader = paste::Reader::default();
         loop {
             if flags.pause.load(Ordering::SeqCst) {
                 flags.parked.store(true, Ordering::SeqCst);
@@ -183,7 +194,7 @@ fn run(args: Args) -> io::Result<()> {
                 Err(_) => return,
             }
             let Ok(ev) = crossterm::event::read() else { return };
-            let events = if cfg!(windows) { paste::gather(ev, paste::waiting) } else { Ok(vec![ev]) };
+            let events = if cfg!(windows) { reader.read(ev, Instant::now(), paste::ctrl_shift_held, paste::waiting) } else { Ok(vec![paste::Read::Event(ev)]) };
             let Ok(evs) = events else { return };
             if !send(evs) {
                 return;
@@ -346,6 +357,7 @@ fn handle(app: &mut App, msg: Msg, height: usize) -> Vec<Action> {
     match msg {
         Msg::Input(TermEvent::Key(k)) => app.on_key(k, Instant::now(), (height / 2).max(1)),
         Msg::Input(TermEvent::Paste(text)) => app.on_paste(&text),
+        Msg::Paste { text, after, full } => app.on_paste_read(&text, after, full),
         Msg::Input(TermEvent::Mouse(m)) => app.on_mouse(m, Instant::now()),
         Msg::Input(_) => Vec::new(),
         Msg::Server(Update::Event(e)) => app.on_event(&e),

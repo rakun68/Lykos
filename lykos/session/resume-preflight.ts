@@ -31,7 +31,7 @@ import { estimateTokensChars4 } from "../ledger/tool-schema.js";
 import { currentGitCommit } from "./identity.js";
 import { hostGit } from "../git/host-git.js";
 import { buildReplay, interruptedToolCalls, type ReplayBundle, type TranscriptRecord } from "./replay.js";
-import { activeBranch, nextTurn, pendingUndos } from "./active-branch.js";
+import { activeBranch, nextTurn, pendingUndos, promptStarting } from "./active-branch.js";
 import {
   readSessionMeta,
   readTranscript,
@@ -119,6 +119,8 @@ export interface PreflightInput {
   now?: Date;
   /** T266: the preflight is a fork's, which it says. Both replay, and price, only the active branch (T264). */
   fork?: boolean;
+  /** A fork from before one prompt: the branch is cut before the prompt that started this turn. */
+  forkAt?: number;
 }
 
 interface SessionRow {
@@ -384,6 +386,12 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   let recovery: Omit<RecoveryEvent, "kind"> | undefined;
   // Review finding 4: only the active branch is resumed, so a call a rewind undid is not reported.
   const kept = activeBranch(records);
+  if (input.forkAt !== undefined) {
+    const cut = promptStarting(kept, input.forkAt);
+    if (cut === undefined) {
+      checks.push({ id: "transcript_integrity", verdict: "refuse", message: `the transcript has no prompt that started turn ${input.forkAt} to fork from` });
+    } else kept.length = cut;
+  }
   const interrupted = interruptedToolCalls(kept).map((c) => c.id);
   if (records.length > 0 && (row.ended_utc === null || interrupted.length > 0)) {
     recovery = recoveryState(workspace, interrupted);

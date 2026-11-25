@@ -68,6 +68,12 @@ describe("parseInteractiveInput", () => {
   });
 
   // 2026-09-07 (UI feedback item 2).
+  it("parses a client's message actions: the prompt's text, however many lines, and how many alike come after it", () => {
+    assert.deepEqual(parseInteractiveInput("/__rewind 2 fix it\nand test"), { kind: "rewind-to", nth: 2, text: "fix it\nand test" });
+    assert.deepEqual(parseInteractiveInput("/__fork 0 go"), { kind: "fork-at", nth: 0, text: "go" });
+    assert.equal(parseInteractiveInput("/__fork go").kind, "prompt", "no count: not a message action");
+  });
+
   it("parses /rename and its /name alias, and treats a bare one as a question", () => {
     const named = parseInteractiveInput("/rename the parser rename");
     assert.equal(named.kind, "rename");

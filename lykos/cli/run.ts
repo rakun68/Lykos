@@ -342,7 +342,8 @@ async function runInteractive(cwd: string, opts: RunCliOptions, trustSource: "st
     const { createReadlineLineSource } = await import("../session/interactive.js");
     const lineSource = createReadlineLineSource();
     try {
-      return await runResume(cwd, ledgerPath, result.sessionId, { lineSource, fork: true });
+      const at = result.forkAt !== undefined ? { forkAt: result.forkAt.turn, inputText: result.forkAt.inputText } : {};
+      return await runResume(cwd, ledgerPath, result.sessionId, { lineSource, fork: true, ...at });
     } finally {
       lineSource.close();
     }

@@ -5,6 +5,9 @@
 //! A large paste or an image is one character of the buffer, a chip from Unicode's private use plane that draws as
 //! its label (OpenCode `pasteInputText`: `[Pasted ~N lines]` for 3 or more lines or over 150 characters). Editing
 //! stays as fast with a 1 MB paste as with none, and submitting expands each chip.
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use unicode_width::UnicodeWidthChar;
 
 /// Chip `i` is the character `CHIP_BASE + i`, in Supplementary Private Use Area-A, which no keyboard types.
@@ -54,6 +57,9 @@ struct Snap {
     cursor: usize,
 }
 
+/// A layout and what it was made for: the text's revision and the width.
+type Laid = (u64, usize, Rc<Vec<Row>>);
+
 /// One visual row of the input: a byte range of the buffer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Row {
@@ -74,6 +80,10 @@ pub struct Editor {
     chips: Vec<Chip>,
     /// What cut and copy took: the in-process clipboard (the system one is the terminal's).
     pub register: String,
+    /// Bumped by every change to the text: the layout below is reused until it moves.
+    rev: u64,
+    /// The last layout, by revision and width. A frame asks for it several times, and a long paste is slow to wrap.
+    laid: RefCell<Option<Laid>>,
 }
 
 fn is_word(c: char) -> bool {
@@ -210,6 +220,7 @@ impl Editor {
     }
 
     fn record(&mut self, kind: Kind) {
+        self.rev += 1;
         if self.last != Some(kind) || kind == Kind::Structural {
             self.undo.push(Snap { text: self.text.clone(), cursor: self.cursor });
             let mut bytes: usize = self.undo.iter().map(|s| s.text.len()).sum();
@@ -229,6 +240,7 @@ impl Editor {
 
     pub fn undo(&mut self) -> bool {
         let Some(s) = self.undo.pop() else { return false };
+        self.rev += 1;
         self.redo.push(Snap { text: std::mem::replace(&mut self.text, s.text), cursor: self.cursor });
         self.cursor = s.cursor.min(self.text.len());
         self.anchor = None;
@@ -238,6 +250,7 @@ impl Editor {
 
     pub fn redo(&mut self) -> bool {
         let Some(s) = self.redo.pop() else { return false };
+        self.rev += 1;
         self.undo.push(Snap { text: std::mem::replace(&mut self.text, s.text), cursor: self.cursor });
         self.cursor = s.cursor.min(self.text.len());
         self.anchor = None;
@@ -316,6 +329,22 @@ impl Editor {
             return;
         }
         self.insert_str(&clean);
+    }
+
+    /// A paste as its text, however long: Ctrl+Shift+V.
+    pub fn paste_text(&mut self, raw: &str) {
+        self.insert_str(&sanitize(raw));
+    }
+
+    /// Takes back `c` when it is just before the cursor, with nothing selected: a key that was a paste's start.
+    pub fn take_before(&mut self, c: char) -> bool {
+        if self.anchor.is_some() || !self.text[..self.cursor].ends_with(c) {
+            return false;
+        }
+        let at = self.cursor - c.len_utf8();
+        self.record(Kind::Structural);
+        self.delete_range(at, self.cursor);
+        true
     }
 
     pub fn attach_image(&mut self, path: &str) {
@@ -583,8 +612,19 @@ impl Editor {
 
     // --- Visual rows: wrapping at `width` columns, a chip never split.
 
-    pub fn layout(&self, width: usize) -> Vec<Row> {
+    pub fn layout(&self, width: usize) -> Rc<Vec<Row>> {
         let width = width.max(1);
+        if let Some((rev, w, rows)) = self.laid.borrow().as_ref() {
+            if *rev == self.rev && *w == width {
+                return rows.clone();
+            }
+        }
+        let rows = Rc::new(self.wrap(width));
+        *self.laid.borrow_mut() = Some((self.rev, width, rows.clone()));
+        rows
+    }
+
+    fn wrap(&self, width: usize) -> Vec<Row> {
         let mut rows = Vec::new();
         let mut start = 0;
         let mut col = 0;

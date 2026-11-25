@@ -423,21 +423,25 @@ fn push_wrapped(rows: &mut Vec<Row>, indent: u16, text: &str, width: usize, styl
 }
 
 /// One item, as it stands alone.
+/// A user message: a bar in the accent colour (muted for a follow-up) on a raised background, padded a row above
+/// and below.
+pub fn prompt_rows(text: &str, width: usize, user: bool, rows: &mut Vec<Row>) {
+    let user_bg = Style::default().on(c().surface);
+    let bar = Style::fg(if user { c().accent } else { c().muted }).on(c().surface);
+    let edge = Row { indent: 0, text: String::new(), style: theme::text(), bar: Some(bar), bg: Some(user_bg), spans: Vec::new() };
+    rows.push(edge.clone());
+    for line in wrap(text, width.saturating_sub(3)) {
+        rows.push(Row { indent: 2, text: line, style: theme::text(), bar: Some(bar), bg: Some(user_bg), spans: Vec::new() });
+    }
+    rows.push(edge);
+    rows.push(Row::blank());
+}
+
 fn item_rows(ctx: &Ctx, i: usize, indent: u16, rows: &mut Vec<Row>) {
     let w = ctx.width.saturating_sub(indent as usize);
     match &ctx.items[i] {
         // A user message: a bar in the accent colour on a raised background, padded a row above and below.
-        item @ (Item::User(text) | Item::Followup(text)) => {
-            let user_bg = Style::default().on(c().surface);
-            let bar = Style::fg(if matches!(item, Item::User(_)) { c().accent } else { c().muted }).on(c().surface);
-            let edge = Row { indent: 0, text: String::new(), style: theme::text(), bar: Some(bar), bg: Some(user_bg), spans: Vec::new() };
-            rows.push(edge.clone());
-            for line in wrap(text, ctx.width.saturating_sub(3)) {
-                rows.push(Row { indent: 2, text: line, style: theme::text(), bar: Some(bar), bg: Some(user_bg), spans: Vec::new() });
-            }
-            rows.push(edge);
-            rows.push(Row::blank());
-        }
+        item @ (Item::User(text) | Item::Followup(text)) => prompt_rows(text, ctx.width, matches!(item, Item::User(_)), rows),
         Item::Assistant(text) => {
             for spans in markdown::render(text.trim_end(), w.saturating_sub(3)) {
                 rows.push(Row::rich(indent + 3, spans));
@@ -537,6 +541,12 @@ impl Layout {
             let b = p.blocks.binary_search_by_key(&item, |b| b.first).ok()?;
             p.blocks[b].leaf.then_some(p.starts[b])
         })
+    }
+
+    /// The item of the block row `i` is in, when that block stands alone (a prompt or an answer).
+    pub fn item_at(&self, i: usize) -> Option<usize> {
+        let (b, _) = self.locate(i)?;
+        b.leaf.then_some(b.first)
     }
 
     /// The group whose line is row `i`.

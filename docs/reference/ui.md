@@ -170,8 +170,11 @@ names the file.
   command and inserts anything else; `Esc` hides. A picked image file becomes an image chip.
 - **Chips:** a paste of 3 lines or more, or over 150 characters, is one `[Pasted ~N lines]` chip,
   sent expanded. Pasting the same text again right after it, or clicking it, expands it in place.
+  `Ctrl+Shift+V` pastes the text itself, never a chip (on Windows the terminal's own paste key, so the TUI
+  reads ctrl and shift held as the paste's first character arrives).
 - **Queue:** `Ctrl+X Enter` queues the prompt; it shows as `queued: ...` and goes when the session is
-  idle. `Enter` while a turn runs sends the prompt at once as a steer.
+  idle. A new session's first prompt shows as a message at once while the session starts, as OpenCode's
+  does; the footer's spinner says it is starting. `Enter` while a turn runs sends the prompt at once as a steer.
 - **History:** the workspace's `.lykos/history.json`, the last 500 prompts, shared by every TUI in it.
 - **Stash:** `~/.lykos/tui/prompt-stash.jsonl` (or `$LYKOS_TUI_DIR`), the last 50.
 
@@ -447,15 +450,21 @@ The transcript (#44) follows OpenCode's `routes/session/grouping/` and `message-
   one activity line (`3 commands, 1 edit, 2 thoughts, 4 reads`). Medium shows each call, grouping
   only adjacent thoughts (while thinking is hidden) and adjacent reads and searches (while grouping
   is on); high opens those groups. A click on a group's line opens or closes it.
+- **Message actions:** a double click or a `Ctrl`+click on a prompt opens OpenCode's message dialog:
+  Revert (code and conversation back to before it, the prompt back in the box), Copy, and Fork (a copy of
+  the session cut before it, the prompt in its box). The session finds the prompt by its text
+  (`/__rewind`, `/__fork`). The transcript keeps what was reverted, as it does after `/undo`.
 - **Thinking:** hidden by default; shown, each thought is muted italic text under a `Thought` line.
 - **Markdown:** an answer is drawn, not shown as source (`markdown.rs`, no dependency). Headings lose their `#`
   and take a colour a level (the first underlined); `**bold**` is bold in a warmer colour; `*italic*`,
   `~~struck~~` (SGR 9), `<u>underline</u>` and `++underline++` take their attribute; `==marked==` and `` `code` ``
   take a background. Links (`[text](url)`, `<url>`, a bare `https://`) are underlined in the accent, and a click
-  opens them in the system's browser (`http`, `https` and `mailto` only). Lists get bullets by depth, task
+  opens them in the system's browser (`http`, `https` and `mailto` only); the link under the mouse is drawn
+  reversed. Lists get bullets by depth, task
   boxes `☐`/`☑`, quotes a bar (GitHub's `[!NOTE]` and the rest a label), `---` a rule, tables a box that fits the
   width. A fenced code block has a background, its language above it, and its syntax coloured (C-like,
-  `#`-comment and SQL-like languages, HTML and XML, CSS, diffs). The inline HTML a model writes (`<b>`, `<i>`,
+  `#`-comment and SQL-like languages, HTML and XML, CSS, diffs, whose added and removed lines are tinted
+  their whole width). The inline HTML a model writes (`<b>`, `<i>`,
   `<s>`, `<mark>`, `<a href>`, `<sub>`, `<sup>`, `<br>`, `<img>`, `<h1>`…, `<details>`) and entities are drawn
   too. LaTeX (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) loses its delimiters and takes a background of its own;
   what has a character is drawn as it (`\pi` → π, `\leq` → ≤, `x^2` → x², `x_1` → x₁, `\frac{a}{b}` → a/b,
@@ -659,7 +668,8 @@ workspace without its git branch (reading it would cost a process at startup), a
 - `/images` lists the attached images by path, without a pixel preview, to keep the binary small.
 - `/btw` takes its question on the command line; there is no question dialog.
 - On Windows, ConPTY drops the bracketed-paste markers, so keys that arrive together (two or more
-  already waiting, then gaps under 15 ms) are read as one paste and its returns as newlines.
+  already waiting, then gaps under 15 ms) are read as one paste and its returns as newlines. ConPTY can hand
+  over a paste's first character alone; a key typed alone within 30 ms before a paste is taken back into it.
 - A paste into a dialog's search or text field (the palette, a list, sessions, the timeline, a name)
   types it there on one line; a dialog that answers keys, such as a confirmation, takes none of it.
 - Undo keeps at most 16 MiB of snapshots, so a large paste cannot hold memory without bound.

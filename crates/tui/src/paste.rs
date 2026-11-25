@@ -4,7 +4,7 @@
 //! together, which no typist does. Such a run is one `Event::Paste`, with its returns as newlines. Elsewhere
 //! crossterm parses the markers and this is not used.
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -60,6 +60,68 @@ pub fn gather(first: Event, mut next: impl FnMut(usize) -> io::Result<Option<Eve
     Ok(out)
 }
 
+/// How soon after a key typed alone a paste may start and still take it: ConPTY can hand a paste's first character
+/// over before the rest, which then read as a typed key and a paste of the others.
+const JOIN_GAP: Duration = Duration::from_millis(30);
+
+/// What the input thread sends: an event, or a paste.
+#[derive(Debug, PartialEq)]
+pub enum Read {
+    Event(Event),
+    /// `after`: the key typed just before that belongs to the paste, to take back. `full`: Ctrl+Shift+V pasted it,
+    /// so it goes in as text, never as a chip.
+    Paste { text: String, after: Option<char>, full: bool },
+}
+
+/// The input thread's memory of the key it last sent alone.
+#[derive(Default)]
+pub struct Reader {
+    lone: Option<(char, Instant, bool)>,
+}
+
+impl Reader {
+    /// `first` and what came with it, as `gather` reads them; `held` says whether ctrl and shift are down now.
+    pub fn read(&mut self, first: Event, now: Instant, held: impl Fn() -> bool, next: impl FnMut(usize) -> io::Result<Option<Event>>) -> io::Result<Vec<Read>> {
+        let typed = plain(&first);
+        let full = typed.is_some() && held();
+        let evs = gather(first, next)?;
+        let mut out = Vec::with_capacity(evs.len());
+        let mut iter = evs.into_iter();
+        match iter.next() {
+            Some(Event::Paste(text)) => {
+                let joined = self.lone.take().filter(|(_, at, _)| now.duration_since(*at) <= JOIN_GAP);
+                out.push(Read::Paste { text, after: joined.map(|j| j.0), full: full || joined.is_some_and(|j| j.2) });
+            }
+            Some(ev) => {
+                self.lone = typed.filter(|c| *c != '\n').map(|c| (c, now, full));
+                out.push(Read::Event(ev));
+            }
+            None => {}
+        }
+        out.extend(iter.map(Read::Event));
+        Ok(out)
+    }
+}
+
+/// Whether ctrl and shift are held: Ctrl+Shift+V is the terminal's own paste, so its key never arrives, only what
+/// it pastes; the keys are still down when the paste's first character is read.
+#[cfg(windows)]
+pub fn ctrl_shift_held() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAsyncKeyState(key: i32) -> i16;
+    }
+    const VK_SHIFT: i32 = 0x10;
+    const VK_CONTROL: i32 = 0x11;
+    // SAFETY: GetAsyncKeyState reads the keyboard's state and takes no pointer.
+    unsafe { GetAsyncKeyState(VK_SHIFT) < 0 && GetAsyncKeyState(VK_CONTROL) < 0 }
+}
+
+#[cfg(not(windows))]
+pub fn ctrl_shift_held() -> bool {
+    false
+}
+
 /// Reads what is already waiting; inside a burst, what comes within `BURST_GAP`. A key typed alone waits for nothing.
 pub fn waiting(keys: usize) -> io::Result<Option<Event>> {
     if crossterm::event::poll(if keys >= 2 { BURST_GAP } else { Duration::ZERO })? {
@@ -94,6 +156,24 @@ mod tests {
     fn keys_that_came_together_are_one_paste_with_returns_as_newlines() {
         let got = run(vec![key(KeyCode::Char('a')), release(KeyCode::Char('a')), key(KeyCode::Enter), key(KeyCode::Char('b')), key(KeyCode::Esc)]);
         assert_eq!(got, vec![Event::Paste("a\nb".into()), key(KeyCode::Esc)]);
+    }
+
+    #[test]
+    fn a_first_key_read_alone_goes_back_into_the_paste_behind_it() {
+        let mut r = Reader::default();
+        let t = Instant::now();
+        let one = |r: &mut Reader, evs: Vec<Event>, at: Instant, held: bool| {
+            let mut it = evs.into_iter();
+            let first = it.next().unwrap();
+            r.read(first, at, || held, |_| Ok(it.next())).unwrap()
+        };
+        assert_eq!(one(&mut r, vec![key(KeyCode::Char('R'))], t, false), vec![Read::Event(key(KeyCode::Char('R')))]);
+        let got = one(&mut r, vec![key(KeyCode::Char('e')), key(KeyCode::Char('p'))], t + Duration::from_millis(3), false);
+        assert_eq!(got, vec![Read::Paste { text: "ep".into(), after: Some('R'), full: false }]);
+        // Typed a while before, a key stays typed; ctrl+shift held makes the paste a full one.
+        one(&mut r, vec![key(KeyCode::Char('x'))], t, false);
+        let got = one(&mut r, vec![key(KeyCode::Char('a')), key(KeyCode::Char('b'))], t + Duration::from_millis(500), true);
+        assert_eq!(got, vec![Read::Paste { text: "ab".into(), after: None, full: true }]);
     }
 
     #[test]

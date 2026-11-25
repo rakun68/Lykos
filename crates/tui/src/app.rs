@@ -181,7 +181,13 @@ pub enum Dialog {
     Output { job: String, command: String, text: String, offset: Option<u64>, scroll: usize, error: Option<String> },
     /// A browser sign-in the engine server runs with no session (`login.rs`).
     Login(crate::login::Login),
+    /// OpenCode `dialog-message.tsx`: what to do with prompt `item` of the session (`MESSAGE_ACTIONS`).
+    Message { item: usize, selected: usize },
 }
+
+/// The message actions, in the order the dialog lists them: a title and what it does.
+pub const MESSAGE_ACTIONS: [(&str, &str); 3] =
+    [("Revert", "undo this message, what came after and their file changes"), ("Copy", "the message text to the clipboard"), ("Fork", "continue in a copy of the session from before this message")];
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum List {
@@ -316,6 +322,8 @@ pub struct App {
     pub tick: u64,
     starting: bool,
     clicks: Option<(Instant, u16, u16, u8)>,
+    /// The prompt in the transcript last clicked, and when: a second click opens its message actions.
+    prompt_click: Option<(Instant, usize)>,
     /// The open session tabs (P5 #42).
     pub tabs: Tabs,
     /// The session list's rows, once `sessions.history` answered.
@@ -341,6 +349,8 @@ pub struct App {
     /// The message the message keys last went to.
     nav: Option<usize>,
     pub selection: Option<Selection>,
+    /// The link under the mouse, drawn highlighted.
+    pub hover: Option<String>,
     /// `--mini`: the transcript goes into the terminal's scrollback (`mini.rs`).
     pub mini: bool,
     /// `-s`: the ledger session to resume once connected.
@@ -479,6 +489,7 @@ impl App {
             tick: 0,
             starting: false,
             clicks: None,
+            prompt_click: None,
             tabs: Tabs::default(),
             past: None,
             worktrees: None,
@@ -494,6 +505,7 @@ impl App {
             opened: BTreeMap::new(),
             nav: None,
             selection: None,
+            hover: None,
             mini: false,
             resume: None,
             composer: None,
@@ -685,12 +697,30 @@ impl App {
     }
 
     /// The transcript under the mouse: a click on a group's line opens or closes it, a drag selects.
-    fn transcript_mouse(&mut self, m: &MouseEvent) -> Option<Vec<Action>> {
+    fn transcript_mouse(&mut self, m: &MouseEvent, now: Instant) -> Option<Vec<Action>> {
         let f = self.frame.get()?;
         let inside = m.column >= f.x && m.column < f.x + f.width && m.row >= f.y && m.row < f.y + f.height;
         let at = |m: &MouseEvent| (f.top + m.row.clamp(f.y, f.y + f.height.saturating_sub(1)).saturating_sub(f.y) as usize, m.column.saturating_sub(f.x).min(f.width.saturating_sub(1)) as usize);
+        if m.kind == MouseEventKind::Moved {
+            let (row, col) = at(m);
+            self.hover = inside.then(|| self.laid.borrow().as_ref().and_then(|l| l.row(row)).and_then(|r| r.link_at(col)).map(str::to_string)).flatten();
+            return None;
+        }
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) if inside => {
+                // OpenCode: a double click, or a ctrl+click, on a prompt opens its message actions.
+                let item = self.laid.borrow().as_ref().and_then(|l| l.item_at(at(m).0));
+                let prompt = item.filter(|i| matches!(self.current().and_then(|s| s.items.get(*i)), Some(Item::User(_))));
+                if let Some(i) = prompt {
+                    let again = self.prompt_click.is_some_and(|(t, j)| j == i && now.duration_since(t) < DOUBLE_CLICK);
+                    if again || m.modifiers.contains(KeyModifiers::CONTROL) {
+                        self.prompt_click = None;
+                        self.selection = None;
+                        self.dialog = Some(Dialog::Message { item: i, selected: 0 });
+                        return Some(Vec::new());
+                    }
+                }
+                self.prompt_click = prompt.map(|i| (now, i));
                 self.selection = Some(Selection { anchor: at(m), head: at(m), dragged: false });
                 self.clicks = None;
                 Some(Vec::new())
@@ -983,7 +1013,12 @@ impl App {
             self.reporting = None;
             return;
         }
-        let title = command.clone();
+        // The message actions' commands are internal: their popup is named for the action.
+        let title = match command.as_str() {
+            "/__rewind" => "Revert".to_string(),
+            "/__fork" => "Fork".to_string(),
+            c => c.to_string(),
+        };
         let text = text.trim_end_matches('\n');
         if let Some(Dialog::Aside { title: t, answer: Ok(a), .. }) = &mut self.dialog {
             if *t == title {
@@ -2048,6 +2083,22 @@ impl App {
         vec![Action::Prompt { session: id, text }]
     }
 
+    /// A paste read on Windows (`paste.rs`): the key typed just before that was its first character comes out of the
+    /// prompt and back into it, and Ctrl+Shift+V pastes the text itself, never a chip.
+    pub fn on_paste_read(&mut self, text: &str, after: Option<char>, full: bool) -> Vec<Action> {
+        let mut text = std::borrow::Cow::Borrowed(text);
+        let prompt = self.dialog.is_none() && !(self.terms.focused && self.terminal_shown());
+        if let Some(c) = after.filter(|c| prompt && self.editor.take_before(*c)) {
+            text = std::borrow::Cow::Owned(format!("{c}{text}"));
+        }
+        if full && prompt {
+            self.search = None;
+            self.editor.paste_text(&text);
+            return self.refresh_menu();
+        }
+        self.on_paste(&text)
+    }
+
     pub fn on_paste(&mut self, text: &str) -> Vec<Action> {
         if let Some(dialog) = &mut self.dialog {
             // A paste into a dialog's search or text field types its text there, on one line. A dialog that answers
@@ -2115,6 +2166,9 @@ impl App {
     /// The old TUI's mouse in the prompt box: a click puts the cursor, a drag selects, a double click selects a
     /// word and a triple click the whole prompt. The wheel scrolls the transcript.
     pub fn on_mouse(&mut self, m: MouseEvent, now: Instant) -> Vec<Action> {
+        if m.kind == MouseEventKind::Moved {
+            self.hover = None;
+        }
         // A click in the terminal pane gives it the keys; a click elsewhere gives them back.
         if let (MouseEventKind::Down(_), None) = (m.kind, &self.dialog) {
             if let Some((x, y, w, h)) = self.terms.area.get() {
@@ -2153,7 +2207,7 @@ impl App {
             }
         }
         if self.dialog.is_none() {
-            if let Some(out) = self.transcript_mouse(&m) {
+            if let Some(out) = self.transcript_mouse(&m, now) {
                 return out;
             }
         }
@@ -2506,6 +2560,14 @@ impl App {
         let step = |sel: usize, n: usize, up: bool| if n == 0 { 0 } else if up { (sel + n - 1) % n } else { (sel + 1) % n };
         let (prev, next) = (has("dialog.select.prev"), has("dialog.select.next"));
         match dialog {
+            Dialog::Message { item, selected } => {
+                if prev || next {
+                    self.dialog = Some(Dialog::Message { item, selected: step(selected, MESSAGE_ACTIONS.len(), prev) });
+                } else if has("dialog.select.submit") {
+                    self.dialog = None;
+                    return self.message_action(item, selected);
+                }
+            }
             Dialog::Palette { .. } | Dialog::Skills { .. } | Dialog::Provider(_) | Dialog::Login(_) | Dialog::Accounts { .. } | Dialog::ModelPicker { .. } | Dialog::List { .. } | Dialog::Sessions { .. } | Dialog::Timeline { .. } | Dialog::Worktrees { .. } | Dialog::Input { .. } => {}
             Dialog::Output { .. } => {
                 if has("dialog.select.submit") {
@@ -2899,6 +2961,24 @@ impl App {
     /// How many rows the help lists: a heading per group and a row per action, the leader first.
     pub fn help_rows(&self) -> usize {
         1 + keymap::GROUPS.len() + keymap::DEFS.len()
+    }
+
+    /// Message action `action` on prompt `item`: the session finds the prompt by its text, and by how many prompts
+    /// with the same text came after it (`/__rewind`, `/__fork`).
+    fn message_action(&mut self, item: usize, action: usize) -> Vec<Action> {
+        let Some(s) = self.current() else { return Vec::new() };
+        let Some(Item::User(text)) = s.items.get(item) else { return Vec::new() };
+        let text = text.clone();
+        let nth = s.items[item + 1..].iter().filter(|i| matches!(i, Item::User(t) if t.trim() == text.trim())).count();
+        match MESSAGE_ACTIONS.get(action).map(|a| a.0) {
+            Some("Revert") => self.command(format!("/__rewind {nth} {text}")),
+            Some("Copy") => {
+                self.toast(ToastKind::Success, "Copied to clipboard".into());
+                vec![Action::Copy(text)]
+            }
+            Some("Fork") => self.command(format!("/__fork {nth} {text}")),
+            _ => Vec::new(),
+        }
     }
 
     /// After removing item `removed` from a list now `n` long: close the dialog when empty, else keep the
@@ -3320,6 +3400,10 @@ mod tests {
         assert_eq!(app.connected(), vec![Action::Start { model: None }]);
         assert_eq!(app.started("s1".into()), vec![], "starting: still queued");
         assert_eq!(status(&mut app, 1, SessionStatus::Starting), vec![]);
+        // OpenCode: the prompt shows as sent at once, not a word that the session is starting.
+        let s: String = draw(&app).cells.iter().map(|c| c.ch).collect();
+        assert!(s.contains("hello") && !s.contains("starting the session") && !s.contains("queued:"), "{s}");
+        assert!(app.running(), "the footer's spinner says it is starting");
         assert_eq!(status(&mut app, 2, SessionStatus::Idle), vec![Action::Prompt { session: "s1".into(), text: "hello".into() }]);
         assert!(app.queue.is_empty());
     }
@@ -4503,6 +4587,47 @@ mod tests {
         // A click beside it opens nothing.
         app.on_mouse(MouseEvent { column: f.x + r.indent, ..at }, Instant::now());
         assert_eq!(app.on_mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: f.x + r.indent, ..at }, Instant::now()), vec![]);
+        // The mouse over it shows it reversed; off it, plain.
+        let reversed = |app: &App| {
+            let b = draw(app);
+            b.get(f.x + col, f.y + (row - f.top) as u16).style.attr.with(lykos_term::Attr::REVERSE) == b.get(f.x + col, f.y + (row - f.top) as u16).style.attr
+        };
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Moved, ..at }, Instant::now());
+        assert_eq!(app.hover.as_deref(), Some("https://example.com"));
+        assert!(reversed(&app));
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Moved, column: f.x + r.indent, ..at }, Instant::now());
+        assert!(app.hover.is_none() && !reversed(&app));
+    }
+
+    #[test]
+    fn a_double_click_or_ctrl_click_on_a_prompt_opens_its_message_actions() {
+        let mut app = idle();
+        event(&mut app, "s1", 2, EventData::MessageUser { text: "go".into() });
+        event(&mut app, "s1", 3, EventData::MessageDelta { text: "done".into() });
+        event(&mut app, "s1", 4, EventData::MessageUser { text: "go".into() });
+        draw(&app);
+        let lay = app.laid.borrow().clone().unwrap();
+        let f = app.frame.get().unwrap();
+        let first = lay.item_row(0).unwrap();
+        let r = lay.row(first).unwrap();
+        let at = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: f.x + r.indent + 1, row: f.y + (first - f.top) as u16, modifiers: KeyModifiers::NONE };
+        let up = MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), ..at };
+        let t = Instant::now();
+        app.on_mouse(at, t);
+        app.on_mouse(up, t);
+        assert_eq!(app.dialog, None, "one click opens nothing");
+        app.on_mouse(at, t + Duration::from_millis(100));
+        assert_eq!(app.dialog, Some(Dialog::Message { item: 0, selected: 0 }));
+        let s: String = draw(&app).cells.iter().map(|c| c.ch).collect();
+        assert!(s.contains("Message actions") && s.contains("Revert") && s.contains("Copy") && s.contains("Fork"), "{s}");
+        // Revert names the prompt by its text and the one alike after it.
+        assert_eq!(sent(&press(&mut app, key(KeyCode::Enter))), ["/__rewind 1 go"]);
+        app.on_mouse(MouseEvent { modifiers: KeyModifiers::CONTROL, ..at }, t + Duration::from_secs(5));
+        press(&mut app, key(KeyCode::Down));
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), vec![Action::Copy("go".into())]);
+        app.on_mouse(MouseEvent { modifiers: KeyModifiers::CONTROL, ..at }, t + Duration::from_secs(9));
+        press(&mut app, key(KeyCode::Up));
+        assert_eq!(sent(&press(&mut app, key(KeyCode::Enter))), ["/__fork 1 go"]);
     }
 
     #[test]

@@ -194,11 +194,18 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         let mut lay = transcript::layout(&app.layout_cache, session, app.look(), text_w as usize, app.tick, opened);
         // What is not the session's: its start, and the prompts waiting for the turn.
         let mut tail = Block { first: usize::MAX, ..Block::default() };
+        // OpenCode: a new session's first prompt shows at once, as sent; the footer's spinner says it is starting.
         if session.summary.status == SessionStatus::Starting {
-            tail.rows.push(Row::plain(3, format!("{} starting the session", spinner(app)), theme::muted()));
-        }
-        for q in &app.queue {
-            tail.rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
+            if app.queue.is_empty() {
+                tail.rows.push(Row::plain(3, format!("{} starting the session", spinner(app)), theme::muted()));
+            }
+            for q in &app.queue {
+                transcript::prompt_rows(q, text_w as usize, true, &mut tail.rows);
+            }
+        } else {
+            for q in &app.queue {
+                tail.rows.push(Row::plain(3, format!("queued: {}", first_line(q)), theme::muted()));
+            }
         }
         // `BackgroundToolHint` (P5 #48): a shell call has held the turn for 3 s.
         // It goes with the call: a tick may not come once nothing runs.
@@ -230,7 +237,7 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
         for (i, r) in (start..total - scroll).enumerate() {
             let Some(row) = lay.row(r) else { continue };
             let y = 1 + i as u16;
-            paint_row(buf, x, y, text_w, row);
+            paint_link_row(buf, x, y, text_w, row, app.hover.as_deref());
             // A selection shows reversed.
             if let Some(((r0, c0), (r1, c1))) = sel.filter(|((r0, _), (r1, _))| (*r0..=*r1).contains(&r)) {
                 let from = if r == r0 { c0 } else { 0 };
@@ -273,6 +280,11 @@ fn session_screen(app: &App, session: &Session, buf: &mut Buffer, pad: u16) -> O
 
 /// One transcript row: its background, its bar in the first column, its text from its indent.
 pub fn paint_row(buf: &mut Buffer, x: u16, y: u16, width: u16, row: &Row) {
+    paint_link_row(buf, x, y, width, row, None);
+}
+
+/// `paint_row`, with the link under the mouse shown reversed, every row of it.
+fn paint_link_row(buf: &mut Buffer, x: u16, y: u16, width: u16, row: &Row, hover: Option<&str>) {
     if let Some(bg) = row.bg {
         buf.fill(x, y, width, 1, bg);
     }
@@ -293,6 +305,10 @@ pub fn paint_row(buf: &mut Buffer, x: u16, y: u16, width: u16, row: &Row) {
         let style = match (span.style.bg, row.bg) {
             (lykos_term::Color::Reset, Some(bg)) => Style { bg: bg.bg, ..span.style },
             _ => span.style,
+        };
+        let style = match (hover, span.link.as_deref()) {
+            (Some(h), Some(l)) if h == l => Style { attr: style.attr.with(Attr::REVERSE), ..style },
+            _ => style,
         };
         col = buf.text(col, y, end.saturating_sub(col), &span.text, style);
     }
@@ -596,6 +612,12 @@ fn dialog(app: &App, buf: &mut Buffer) {
             app.queue.iter().map(|q| line(first_line(q), theme::text())).collect(),
             Some(*selected),
             format!("{} steer · {} edit · {} delete · {close}", k("dialog.select.submit"), k("queued_prompt.undo"), k("queued_prompt.delete")),
+        ),
+        Dialog::Message { selected, .. } => (
+            "Message actions".into(),
+            crate::app::MESSAGE_ACTIONS.iter().map(|(t, d)| pair(*t, *d, theme::text(), theme::muted())).collect(),
+            Some(*selected),
+            format!("{} choose · {close}", k("dialog.select.submit")),
         ),
         Dialog::Stash { selected } => (
             "Stashed prompts".into(),

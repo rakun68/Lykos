@@ -79,6 +79,8 @@ export interface ResumeOptions {
   dryRun?: boolean;
   /** T266: `--fork` — continue in a copy of the session, a new one, and leave the session as it is. */
   fork?: boolean;
+  /** With `fork`: the copy is cut before the prompt that started this turn (a client's fork from a message). */
+  forkAt?: number;
   /** Injected by tests; production reads the real terminal. */
   lineSource?: LineSource;
   /** P5 #42: asks for the agreement a `confirm` preflight needs, given the preflight; the engine server asks its client. */
@@ -267,6 +269,7 @@ export async function runResume(
       ...(opts?.force ? { allowMissingFiles: true } : {}),
       ...(opts?.now !== undefined ? { now: opts.now } : {}),
       ...(opts?.fork === true ? { fork: true } : {}),
+      ...(opts?.fork === true && opts.forkAt !== undefined ? { forkAt: opts.forkAt } : {}),
     });
 
     opts?.onPreflight?.(pre);
@@ -360,6 +363,7 @@ export async function runResume(
             status: "ok",
             sessionId: result.sessionId,
             ...(result.forkRequested ? { forkRequested: true } : {}),
+            ...(result.forkAt !== undefined ? { forkAt: result.forkAt } : {}),
             ...(result.rewindRebuild !== undefined ? { rewindRebuild: result.rewindRebuild } : {}),
           }
         : { status: "error", message: result.message };
@@ -392,7 +396,9 @@ export async function runResume(
   }
   // T266: `/fork` typed in the session this started: fork it, as `lykos run` does.
   if (result.forkRequested === true && result.sessionId !== undefined) {
-    return runResume(cwd, ledgerPath, result.sessionId, { ...opts, fork: true });
+    const { forkAt: _cut, inputText: _text, ...rest } = opts ?? {};
+    const at = result.forkAt !== undefined ? { forkAt: result.forkAt.turn, inputText: result.forkAt.inputText } : {};
+    return runResume(cwd, ledgerPath, result.sessionId, { ...rest, fork: true, ...at });
   }
   // T264: a rewind past the resume wrote its event and ended the session; it continues as itself, from there.
   if (result.rewindRebuild !== undefined && result.sessionId !== undefined) {

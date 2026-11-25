@@ -81,7 +81,7 @@ export function nextTurn(records: readonly TranscriptRecord[]): number {
 }
 
 /** The index of the prompt that started the latest turn numbered `turn`; undefined when there is none. */
-function promptStarting(branch: readonly TranscriptRecord[], turn: number | undefined): number | undefined {
+export function promptStarting(branch: readonly TranscriptRecord[], turn: number | undefined): number | undefined {
   if (turn === undefined) return undefined;
   for (let i = branch.length - 1; i >= 0; i -= 1) {
     const r = branch[i]!;

@@ -130,7 +130,7 @@ import { setStderrSink, stdoutWrite, stderrWrite } from "../io-mode.js";
 import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
-import { REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type PendingUndos, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
+import { promptIndex, REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type PendingUndos, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
 import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type AgentUiOptions, type SystemPart } from "../surface/s0.js";
 import type { AsideAnswer } from "./aside.js";
 import { runInteractiveSurface } from "../surface/interactive-surface.js";
@@ -322,6 +322,8 @@ export interface InteractiveLoopResult {
   resumeSessionId?: string;
   /** T266: `/fork` was typed. The loop ends this session; the caller continues in a copy of it, a new session. */
   forkRequested?: boolean;
+  /** A fork from before one prompt (`/__fork`): the copy is cut before turn `turn`, and `inputText` is in its input box. */
+  forkAt?: ForkAt;
   /**
    * T264: a rewind went back past this process's own prompts. The loop ends this session as `/exit` does; the
    * caller rebuilds it from its transcript, which the rewind event has cut, with `inputText` in the input box.
@@ -534,6 +536,7 @@ export async function runInteractiveLoop(opts: RunInteractiveLoopOpts): Promise<
   /** T114: set when the session browser chose the row, so the caller does not ask again. */
   let resumeSessionId: string | undefined;
   let forkRequested = false;
+  let forkAt: ForkAt | undefined;
   let rewindRebuild: { inputText: string } | undefined;
   let newRequested = false;
   let closeRequested = false;
@@ -847,6 +850,23 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         forkRequested = true;
         say("leaving this session and continuing in a fork of it — this one is kept as it is");
         return "exit";
+      case "fork-at": {
+        if (!session.isIdle) {
+          say("lykos: /fork cannot run while a turn is in flight");
+          return "ok";
+        }
+        const points = opts.rewind?.points() ?? [];
+        const index = promptIndex(points, parsed.text, parsed.nth);
+        const point = index === undefined ? undefined : points[index];
+        if (point?.turn === undefined) {
+          say("lykos: that prompt is not in this session's conversation; nothing was changed");
+          return "ok";
+        }
+        forkRequested = true;
+        forkAt = { turn: point.turn, inputText: point.text };
+        say("leaving this session and continuing in a fork of it from before that prompt — this one is kept as it is");
+        return "exit";
+      }
       case "rename": {
         const wanted = parsed.name.trim();
         if (wanted.length === 0) {
@@ -941,6 +961,29 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         const report = await opts.rewind.rewind(session, choice.index, choice.restore, opts.recorder, choice.note);
         say(report.lines.join("\n"));
         // T264: the conversation is the transcript's now; the session that continues it puts the prompt back.
+        if (report.rebuild === true && report.inputText !== undefined) {
+          rewindRebuild = { inputText: report.inputText };
+          return "exit";
+        }
+        if (report.inputText !== undefined) putBack(report.inputText);
+        return "ok";
+      }
+      case "rewind-to": {
+        if (!opts.rewind) {
+          say("lykos: revert is not available on this session");
+          return "ok";
+        }
+        if (!session.isIdle) {
+          say("lykos: revert cannot run while a turn is in flight");
+          return "ok";
+        }
+        const index = promptIndex(opts.rewind.points(), parsed.text, parsed.nth);
+        if (index === undefined) {
+          say("lykos: that prompt is not in this session's conversation; nothing was changed");
+          return "ok";
+        }
+        const report = await opts.rewind.rewind(session, index, "both", opts.recorder);
+        say(report.lines.join("\n"));
         if (report.rebuild === true && report.inputText !== undefined) {
           rewindRebuild = { inputText: report.inputText };
           return "exit";
@@ -1427,6 +1470,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     ...(resumeRequested ? { resumeRequested: true } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
     ...(forkRequested ? { forkRequested: true } : {}),
+    ...(forkAt !== undefined ? { forkAt } : {}),
     ...(rewindRebuild !== undefined ? { rewindRebuild } : {}),
     ...(humanName !== undefined
       ? { sessionName: humanName, nameIsHuman: true }
@@ -1448,11 +1492,18 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
  * number the transcript records.
  */
 /** What one process of a resumed session reports to `lykos resume` (`cli/resume.ts`). */
+/** A fork cut before one prompt: the turn that prompt started, and the prompt, for the fork's input box. */
+export interface ForkAt {
+  turn: number;
+  inputText: string;
+}
+
 export interface LaunchResult {
   status: "ok" | "error";
   sessionId?: string;
   message?: string;
   forkRequested?: boolean;
+  forkAt?: ForkAt;
   /** T264: a rewind went back past this process's prompts: rebuild the session from its transcript. */
   rewindRebuild?: { inputText: string };
 }
@@ -1632,6 +1683,8 @@ export type RunInteractiveStandaloneSessionResult =
       resumeSessionId?: string;
       /** T266: the session ended because `/fork` was typed. The caller forks it. */
       forkRequested?: boolean;
+      /** `/__fork`: the fork is cut before a prompt. */
+      forkAt?: ForkAt;
       /** T264: a rewind went back past this process's prompts. The caller resumes the session, `inputText` in its input box. */
       rewindRebuild?: { inputText: string };
       newRequested?: boolean;
@@ -2287,6 +2340,7 @@ export async function finishInteractiveSession(opts: {
     ...(loopResult.resumeRequested ? { resumeRequested: true } : {}),
     ...(loopResult.resumeSessionId !== undefined ? { resumeSessionId: loopResult.resumeSessionId } : {}),
     ...(loopResult.forkRequested ? { forkRequested: true } : {}),
+    ...(loopResult.forkAt !== undefined ? { forkAt: loopResult.forkAt } : {}),
     ...(loopResult.rewindRebuild !== undefined ? { rewindRebuild: loopResult.rewindRebuild } : {}),
     ...(loopResult.newRequested ? { newRequested: true } : {}),
     ...(loopResult.closeRequested ? { closeRequested: true } : {}),

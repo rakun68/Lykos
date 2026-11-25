@@ -143,6 +143,7 @@ impl App {
             Some(Dialog::ModelPicker { provider, query, .. }) => self.picker_rows(provider, query).len(),
             Some(Dialog::Accounts { provider, .. }) => self.accounts.as_ref().map_or(0, Vec::len) + self.account_adds(provider).len(),
             Some(Dialog::Queue { .. }) => self.queue.len(),
+            Some(Dialog::Message { .. }) => crate::app::MESSAGE_ACTIONS.len(),
             Some(Dialog::Stash { .. }) => self.stash.entries.len(),
             Some(Dialog::Provider(f)) => f.fields().len(),
             _ => 0,
@@ -154,6 +155,7 @@ impl App {
             Some(
                 Dialog::Queue { selected }
                 | Dialog::Stash { selected }
+                | Dialog::Message { selected, .. }
                 | Dialog::Palette { selected, .. }
                 | Dialog::Skills { selected, .. }
                 | Dialog::List { selected, .. }
@@ -179,6 +181,7 @@ impl App {
             Some(
                 Dialog::Queue { selected }
                 | Dialog::Stash { selected }
+                | Dialog::Message { selected, .. }
                 | Dialog::Palette { selected, .. }
                 | Dialog::Skills { selected, .. }
                 | Dialog::Sessions { selected, .. }

@@ -1185,7 +1185,16 @@ fn code_block(body: &[&str], lang: &str, width: usize, l: &Look, out: &mut Vec<V
         out.push(vec![Span::new(label, Style { fg: c().muted, bg: l.code_bg, attr: Attr::ITALIC }), Span::new(" ".repeat(width.saturating_sub(w)), pad)]);
     }
     for line in body {
-        let spans = highlight(line, fam, &mut state, &pal);
+        let mut spans = highlight(line, fam, &mut state, &pal);
+        // A diff's added and removed lines are tinted their whole width, as the diff viewer draws them.
+        let pad = match (fam, diff_kind(line)) {
+            (Family::Diff, Some(kind)) => {
+                let bg = crate::diff::background(kind).0.bg;
+                spans.iter_mut().for_each(|s| s.style.bg = bg);
+                Style::default().on(bg)
+            }
+            _ => pad,
+        };
         for row in wrap_spans(&spans, width.saturating_sub(2)) {
             let w: usize = row.iter().map(|s| s.text.width()).sum();
             let mut r = vec![Span::new(" ", pad)];
@@ -1196,6 +1205,18 @@ fn code_block(body: &[&str], lang: &str, width: usize, l: &Look, out: &mut Vec<V
     }
     if body.is_empty() {
         out.push(vec![Span::new(" ".repeat(width), pad)]);
+    }
+}
+
+/// A diff line's kind: added or removed; none for context, a hunk header or a file's header.
+fn diff_kind(line: &str) -> Option<crate::diff::Kind> {
+    if line.starts_with("+++") || line.starts_with("---") {
+        return None;
+    }
+    match line.chars().next() {
+        Some('+') => Some(crate::diff::Kind::Add),
+        Some('-') => Some(crate::diff::Kind::Del),
+        _ => None,
     }
 }
 
@@ -1548,6 +1569,20 @@ pub fn wrap_spans(spans: &[Span], width: usize) -> Vec<Vec<Span>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_diff_tints_its_changed_lines_the_whole_width() {
+        let rows = render("```diff\n--- a/x\n+++ b/x\n context\n-old\n+new\n```", 30);
+        let row = |t: &str| rows.iter().find(|r| r.iter().any(|s| s.text.contains(t))).unwrap();
+        let bgs = |t: &str| row(t).iter().map(|s| s.style.bg).collect::<Vec<_>>();
+        let added = crate::diff::background(crate::diff::Kind::Add).0.bg;
+        let removed = crate::diff::background(crate::diff::Kind::Del).0.bg;
+        assert!(bgs("+new").iter().all(|b| *b == added), "{:?}", row("+new"));
+        assert!(bgs("-old").iter().all(|b| *b == removed));
+        assert_eq!(row("+new").iter().map(|s| s.text.width()).sum::<usize>(), 30, "to the edge");
+        assert!(bgs("context").iter().all(|b| *b != added && *b != removed));
+        assert!(bgs("+++ b/x").iter().all(|b| *b != added), "a file header is not a change");
+    }
 
     fn plain(rows: &[Vec<Span>]) -> Vec<String> {
         rows.iter().map(|r| r.iter().map(|s| s.text.as_str()).collect()).collect()

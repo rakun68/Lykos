@@ -80,6 +80,10 @@ async function forkScenario(parentLines: string[], parentScript: ScriptStep[]) {
   const forked = await teed(() =>
     runResume(world.workspace, world.ledgerPath, parentId, {
       fork: true,
+      // A message's fork (`/__fork`) is cut before its prompt, as `cli/resume.ts` continues it.
+      ...(parent.value.status === "ok" && parent.value.forkAt !== undefined
+        ? { forkAt: parent.value.forkAt.turn, inputText: parent.value.forkAt.inputText }
+        : {}),
       yes: true,
       launch: async (input) => {
         const result = await session(["third: in the fork", "/exit"], input.resume);
@@ -159,6 +163,28 @@ describe("fork a session (T266)", () => {
     assert.match(copied, /first: hello/, "the fork's transcript holds the conversation it was copied from");
     assert.match(copied, /second: again/);
     assert.doesNotMatch(copied, /usage +hop=|outcome +state=/, "the parent's calls and outcome stay the parent's");
+  });
+
+  it("a message's fork: the copy is cut before that prompt, which waits in the input box", async () => {
+    const f = await forkScenario(["first: hello", "second: again", "/__fork 0 second: again"], [reply(say("one")), reply(say("two"))]);
+    assert.deepEqual(f.parent.status === "ok" && f.parent.forkAt, { turn: 1, inputText: "second: again" });
+    const sent = JSON.stringify(f.forkFirst.messages);
+    assert.match(sent, /first: hello/);
+    assert.doesNotMatch(sent, /second: again/, "the prompt forked from and what followed stay behind");
+    assert.match(sent, /third: in the fork/);
+    assert.equal(f.row(f.forkId).forked_from_turn, 0, "the last turn before the cut");
+    assert.ok(f.parentTranscriptAfter().equals(f.parentTranscriptBefore));
+  });
+
+  it("a message's revert takes code and conversation back to before that prompt", async () => {
+    const f = await forkScenario(
+      ["first: keep", "second: undo me", "/__rewind 0 second: undo me", "second: instead", "/exit"],
+      [reply(say("one")), reply(say("undone")), reply(say("two"))],
+    );
+    const sent = JSON.stringify(f.forkFirst.messages);
+    assert.match(sent, /first: keep/);
+    assert.match(sent, /second: instead/);
+    assert.doesNotMatch(sent, /undo me/, "the reverted turn is not carried");
   });
 
   it("lykos resume --fork on an ended session carries only the active branch, not the turns a rewind undid", async () => {

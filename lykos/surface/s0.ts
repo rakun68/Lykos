@@ -86,6 +86,13 @@ export type ParsedInput =
   | { kind: "resume"; sessionId?: string }
   /** T266: end this session and continue in a copy of it — a new session, `forked_from` this one. */
   | { kind: "fork" }
+  /**
+   * A client's message actions (OpenCode's revert and fork on a prompt): `/__rewind` rewinds code and conversation
+   * to before the prompt typed as `text`, `/__fork` continues in a copy of the session cut before it. `nth` counts
+   * prompts with the same text back from the last.
+   */
+  | { kind: "rewind-to"; nth: number; text: string }
+  | { kind: "fork-at"; nth: number; text: string }
   | { kind: "new-session" }
   | { kind: "close-session" }
   /**
@@ -151,6 +158,13 @@ export function parseInteractiveInput(line: string): ParsedInput {
   const space = trimmed.indexOf(" ");
   const name = (space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)).toLowerCase();
   const arg = space === -1 ? "" : trimmed.slice(space + 1).trim();
+  if (name === "__rewind" || name === "__fork") {
+    const m = /^(\d+)\s+([\s\S]+)$/.exec(arg);
+    if (m !== null) {
+      const at = { nth: Number(m[1]), text: m[2]! };
+      return name === "__rewind" ? { kind: "rewind-to", ...at } : { kind: "fork-at", ...at };
+    }
+  }
   // A skill first: `/handoff`, or `/skill:handoff` for one a built-in
   // shadows. Before T131 this fell through to `prompt` and the literal text
   // `/skill:review` was sent to the model.
