@@ -394,6 +394,9 @@ export async function runSessionChild(
     // A session that throws while it boots still ends with a reason the client is shown.
     send({ kind: "exit", ok: false, message: err instanceof Error ? err.message : String(err) });
     return 1;
+  } finally {
+    // A boot that never reached idle (a refused resume, an error) asks git afresh after it too.
+    releaseGit();
   }
 
   async function run(): Promise<number> {

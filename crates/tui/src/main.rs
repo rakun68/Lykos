@@ -450,7 +450,6 @@ fn suspend(input: &Input) {
 #[cfg(not(unix))]
 fn suspend(_: &Input) {}
 
-/// Where the TUI keeps what is the user's, not the workspace's: `LYKOS_TUI_DIR`, or `~/.lykos/tui`.
 /// The settings (`config.keybinds`) each directory had last, by directory: what the next start there draws with.
 fn settings_cache() -> Option<PathBuf> {
     state_dir().map(|d| d.join("settings-cache.json"))
@@ -470,6 +469,7 @@ fn remember_settings(cwd: &str, v: &serde_json::Value) {
     let _ = std::fs::write(&path, all.to_string());
 }
 
+/// Where the TUI keeps what is the user's, not the workspace's: `LYKOS_TUI_DIR`, or `~/.lykos/tui`.
 fn state_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("LYKOS_TUI_DIR").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(dir));

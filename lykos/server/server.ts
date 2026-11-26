@@ -883,7 +883,7 @@ export class EngineServer {
     return this.stopping;
   }
 }
-/** The title of the ledger session `id` resumes, or null when its history has none or cannot be read. */
+/** The history row of the ledger session `id` resumes, or undefined when its history has none or cannot be read. */
 function resumedRow(cwd: string, id: string): HistoryRow | undefined {
   try {
     return historyRows(projectRoot(cwd)).find((r) => r.id === id);
