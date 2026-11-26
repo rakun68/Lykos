@@ -15,7 +15,7 @@ number that is not published here.
 - [0019](0019-shipped-profiles-are-a-bundled-lowest-precedence-source.md) Shipped profiles are a bundled, lowest-precedence discovery source
 - [0020](0020-the-word-is-specialist.md) The word is specialist, and it names the same one concept
 - [0023](0023-the-specialist-vocabulary-is-seventeen-fields.md) The specialist vocabulary is seventeen fields
-- [0027](0027-pis-agent-directory-is-generated-under-lykos.md) Pi's agent directory is generated under `~/.lykos`
+- [0027](0027-pis-agent-directory-is-generated-under-lykos.md) Pi's agent directory is generated under `~/.lykos`, superseded by 0065
 - [0028](0028-a-default-extension-may-ship-off-and-its-list-entry-is-its-only-switch.md) A default extension may ship off, and its list entry is its only switch
 - [0030](0030-a-failed-gate-reruns-its-failed-test-files-once.md) A failed gate reruns its failed test files once
 - [0032](0032-the-glossary-is-glossary-md.md) The glossary is `GLOSSARY.md`
@@ -29,3 +29,4 @@ number that is not published here.
 - [0057](0057-auto-runs-the-sessions-own-verification-command.md) Auto runs the session's own verification command
 - [0063](0063-the-tui-and-desktop-app-are-new-rust-clients-built-to-be-the-fastest.md) The TUI and the desktop app are new Rust clients, built to be the fastest
 - [0064](0064-the-p5-tui-copies-opencode-on-a-local-engine-server-and-speed-gates-it.md) The P5 TUI copies OpenCode on a local engine server, and speed gates it
+- [0065](0065-lykos-is-a-fork-of-pi.md) Lykos is a fork of Pi

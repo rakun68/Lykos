@@ -1,7 +1,7 @@
 # Lykos
 
-A coding agent built on the Pi runtime. It runs standalone, as a worker under another agent, and
-under a desktop supervisor. Pi is its substrate.
+A coding agent, a fork of Pi. It runs standalone, as a worker under another agent, and under a
+desktop supervisor.
 
 ## Language
 
@@ -659,3 +659,20 @@ _Avoid_: command menu, quick open
 A dark and a light palette of one family (`rose-pine` and `rose-pine-dawn`) that `lykos-tui`'s mode
 switch moves between.
 _Avoid_: light theme, dark mode (that is one half of the pair)
+
+### The fork
+
+**Fork point**:
+The Pi release Lykos's engine was last imported from: tag `v1.6.1` (ADR-0065). Every engine change after
+it is a Lykos change, made through the upstream import or the patch series.
+_Avoid_: base version, Pi version
+
+**Upstream import**:
+One run of `scripts/upstream/` on a Pi tag: the tag lands unmodified on the `upstream` branch, is
+dropped, renamed and patched into Lykos source, and merged. It runs only on the maintainer's word.
+_Avoid_: sync, rebase, update from Pi
+
+**Patch series**:
+The ordered Lykos changes to engine code that the upstream import applies after the rename, kept in
+`scripts/upstream/patches/`. A patch that no longer applies stops the import.
+_Avoid_: fork changes, overrides

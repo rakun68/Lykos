@@ -9,11 +9,13 @@ Maintainers keep the plan, decisions and findings outside the repository. If
 
 ## What Lykos is
 
-A coding agent built on the Pi runtime, in TypeScript on Node, with a SQLite ledger. It runs
+A coding agent, a fork of Pi, in TypeScript on Node, with a SQLite ledger. It runs
 **standalone**, as an **MCP worker** under an orchestrator, and, later, **under human supervision**
 through a desktop application. The interface today is the terminal: `lykos-tui`, a Rust client in `crates/`.
 
-**What it is not.** Not a fork of Pi: translate at the boundary.
+**A fork of Pi, said once.** Its engine is Pi `v1.6.1`, renamed to Lykos's own and tracked upstream
+only on the maintainer's word ([ADR-0065](docs/adr/0065-lykos-is-a-fork-of-pi.md)). `LICENSE-PI` and one
+line of `README.md` name Pi; nothing else does. Until P23 lands, the engine is still the npm package.
 
 **Nothing it runs is ever deleted.** Every task is archived and every conversation is resumable.
 
@@ -38,9 +40,9 @@ lightweightness, memory and collaboration.
 **1. Check the premise against source at the moment you build it**, not at the moment it was
 written. A claim about the runtime is only as good as the last time somebody read the runtime.
 
-**2. Before building a mechanism, read `examples/extensions/` in the installed Pi package.** Pi
-may already ship it. Read source, never a summary of it. Other projects' source trees never enter
-this repository: they carry their own licences.
+**2. Before building a mechanism, read the engine's source.** It may already ship it. Read source,
+never a summary of it. Other projects' source trees never enter this repository: they carry their own
+licences. The one exception is the Pi fork, under `LICENSE-PI`.
 
 **3. Adopt what installs; reimplement what does not.** Read the source before depending on
 anything, and never delegate what Lykos must own: the gate, model policy, the MCP contract, the
@@ -56,8 +58,9 @@ backfilled.**
 a date or a threshold. **The one exception is the TUI and the desktop app** (rule 10): a change that
 makes either slower or heavier fails unless the maintainer accepts the trade.
 
-**7. Translate at the boundary; never patch Pi.** Where an extension expects a Pi path, generate that
-content from Lykos's own.
+**7. The engine changes only through the upstream script and its patch series** (`scripts/upstream/`,
+ADR-0065), so the next upstream import still merges. Pi community extensions load through
+`compat/pi-extensions.ts`, the one module that may name Pi.
 
 **8. Runtime state lives in `.lykos/`, never `.pi/`**, and **stdout belongs to the transport in MCP
 mode**: one place decides the IO mode, every writer asks it.

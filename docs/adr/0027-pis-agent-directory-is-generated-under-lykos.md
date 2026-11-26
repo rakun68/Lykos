@@ -1,5 +1,8 @@
 # Pi's agent directory is generated under `~/.lykos`
 
+**Superseded by ADR-0065.** Lykos is a fork of Pi: the engine's user files live in `~/.lykos/` itself,
+and `~/.lykos/pi-host/` is migrated there.
+
 Decided with the maintainer on 2026-09-23. This extends rule 8 ("runtime state lives in `.lykos/`,
 never `.pi/`") to the user-level directory Pi reads.
 
