@@ -19,6 +19,9 @@ prices.local.yaml
 # Node / Pi
 node_modules/
 dist/
+packages/*/dist/
+packages/ai/src/providers/data/
+packages/ai/src/providers/.model-generation-*/
 .pi/agents/
 .pi/sessions/
 *.log

@@ -5,14 +5,19 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "lykos": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-ledger-assets.mjs",
+    "build": "node scripts/build-engine.mjs && tsc && node scripts/copy-ledger-assets.mjs",
+    "build:engine": "node scripts/build-engine.mjs",
     "dev": "tsx lykos/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"lykos/**/*.test.ts\"",
+    "test:engine": "node scripts/test-engine.mjs",
     "postinstall": "node scripts/tui/install.mjs"
   },
   "engines": {
