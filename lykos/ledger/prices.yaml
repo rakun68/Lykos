@@ -13,8 +13,8 @@
 #
 # All figures are USD per 1,000,000 tokens.
 
-version: 2026-08-29
-source_checked: 2026-08-29
+version: 2026-11-26
+source_checked: 2026-11-26
 # Re-verified 2026-08-28 (T2.1) against claude.com/pricing#api (Anthropic) and
 # api-docs.deepseek.com/quick_start/pricing (DeepSeek): every figure below
 # still matches. Note for the next re-check: Claude Sonnet 5's $2/$10 pricing,
@@ -100,6 +100,21 @@ providers:
         ranges: ["01:00-04:00", "06:00-10:00"]
 
     models:
+      # DeepSeek-V4.1-Flash-1017 (checked 2026-11-26 on the same page). The page says the legacy names
+      # deepseek-v4-flash and deepseek-v4-flash-vision-exp are still accepted, served by this model and billed
+      # at its price. Their entries below keep the 2026-08-28 prices for rows already recorded.
+      deepseek-flash:
+        peak:
+          input_per_mtok:         0.3    # cache miss
+          cache_read_per_mtok:    0.006  # cache hit
+          output_per_mtok:        1.2
+        off_peak:
+          input_per_mtok:         0.15
+          cache_read_per_mtok:    0.003
+          output_per_mtok:        0.6
+        cache_write_per_mtok:     0.0    # no write premium
+        context_tokens:          1000000
+
       deepseek-v4-flash:
         peak:
           input_per_mtok:         0.44   # cache miss

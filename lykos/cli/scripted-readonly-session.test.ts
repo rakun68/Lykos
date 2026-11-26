@@ -18,20 +18,15 @@ const texts = (context: ModelContext): string[] =>
 
 describe("a top-level read-only session (T181)", () => {
   it("control: an ordinary session under the same lines is told to compact, so the lines are crossed", async () => {
-    let told = false;
     const run = await runScriptedSession({
       config: LOW,
       files: FILES,
       contextWindow: WINDOW,
-      script: [
-        reply(call("read", { path: "notes.txt" })),
-        (ctx) => {
-          told = texts(ctx).some((t) => /\[self-compact (notice|warning|cutoff)]/.test(t));
-          return reply(say("done"));
-        },
-      ],
+      script: [reply(call("read", { path: "notes.txt" })), reply(say("done"))],
     });
     assert.equal(run.result.status, "ok", JSON.stringify(run.result));
+    // Since Pi 1.6.1 usage is estimated before any reply, so the guidance may already ride the first call.
+    const told = run.sent.some((ctx) => texts(ctx).some((t) => /\[self-compact (notice|warning|cutoff)]/.test(t)));
     assert.ok(told, "self-compact spoke");
   });
 

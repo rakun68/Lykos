@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { getCurrentSystemPrompt, getCurrentTools, type TranscriptMessages } from "@earendil-works/pi-ai";
 import lykosSelfCompact from "./lykos-self-compact.js";
 import { AFFINITY_HEADERS_READ_FROM_PI, affinityHeaders, observeCacheKey, requestHandoffDocument, withLiveCacheKey } from "./self-compact-handoff.js";
 import { HANDOFF_USAGE_ENTRY_TYPE, SELF_COMPACT_ENTRY_TYPE, SELF_COMPACT_POLICY_ENV, encodeSelfCompactPolicyEnv, validateSelfCompactConfig } from "../../loop/self-compact.js";
@@ -78,6 +79,11 @@ describe("the live session's routing headers", () => {
     assert.deepEqual(affinityHeaders({ api: "anthropic-messages" }, "live"), {});
     assert.deepEqual(affinityHeaders({ api: "openai-completions", compat: {} }, "live"), {});
   });
+  it("are sent by an OpenRouter model without the flag, as x-session-id on both APIs (Pi 1.6.1)", () => {
+    assert.deepEqual(affinityHeaders({ api: "anthropic-messages", provider: "openrouter" }, "live", { apiKey: "k" }), { "x-session-id": "live" });
+    assert.deepEqual(affinityHeaders({ api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" }, "live"), { "x-session-id": "live" });
+    assert.deepEqual(affinityHeaders({ api: "openai-completions", provider: "openrouter", compat: { sendSessionAffinityHeaders: false } }, "live"), {});
+  });
 });
 
 const USAGE = { input: 10, output: 20, cacheRead: 300, cacheWrite: 40, cacheWrite1h: 5, totalTokens: 375, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -133,8 +139,9 @@ describe("requestHandoffDocument", () => {
     assert.equal(o.apiKey, "k");
     assert.deepEqual(o.thinkingBudgets, { high: 4096 });
     assert.equal(o.transport, "sse");
-    assert.deepEqual(seen.context!.tools, tools);
-    assert.equal(seen.context!.systemPrompt, "SYSTEM");
+    // Since Pi 1.6.1 the prompt and tools travel as system messages of the transcript.
+    assert.deepEqual(getCurrentTools(seen.context!.messages as TranscriptMessages), tools);
+    assert.equal(getCurrentSystemPrompt(seen.context!.messages as TranscriptMessages), "SYSTEM");
     const payload = (o.onPayload as (p: unknown) => { prompt_cache_key: string })({ prompt_cache_key: "side" });
     assert.equal(payload.prompt_cache_key, "live-key");
   });

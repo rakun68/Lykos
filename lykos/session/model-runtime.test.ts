@@ -91,6 +91,8 @@ describe("createLykosModelRuntime (Ticket 01)", () => {
     const fakeProvider = {
       id: "fake-native-provider",
       name: "Fake Native Provider",
+      // Pi 1.6.1 reads the provider's auth when it registers one.
+      auth: {},
     } as unknown as Provider;
 
     const runtime = await createLykosModelRuntime({

@@ -51,7 +51,7 @@ function snap(partial: {
         hop: "direct",
         source: "assistant_message",
         provider: "deepseek",
-        model: "deepseek-v4-flash",
+        model: "deepseek-flash",
         input: partial.input,
         output: partial.output,
         cacheRead: partial.cacheRead ?? 0,
@@ -71,7 +71,7 @@ function snap(partial: {
       hop: "nested",
       source: "assistant_message",
       provider: "deepseek",
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       input: partial.nested.input,
       output: partial.nested.output,
       cacheRead: 0,
@@ -84,7 +84,7 @@ function snap(partial: {
     sessionId: partial.sessionId,
     ...(partial.label !== undefined ? { label: partial.label } : {}),
     state: "done",
-    model: partial.model ?? "deepseek/deepseek-v4-flash",
+    model: partial.model ?? "deepseek/deepseek-flash",
     turns: 1,
     toolCalls: [],
     startedAt: OFF_PEAK.toISOString(),
@@ -169,7 +169,7 @@ describe("T39 ledger: Lykos child vs MCP hop-1", () => {
         workspace: dir,
         ledgerPath,
         config,
-        modelSpec: "deepseek/deepseek-v4-flash",
+        modelSpec: "deepseek/deepseek-flash",
         gate: new AutoApproveGate(),
         autoApprove: true,
         parentBrief: "parent brief",
@@ -294,7 +294,7 @@ describe("T39 ledger: Lykos child vs MCP hop-1", () => {
         workspace: dir,
         ledgerPath,
         config,
-        modelSpec: "deepseek/deepseek-v4-flash",
+        modelSpec: "deepseek/deepseek-flash",
         gate: new AutoApproveGate(),
         autoApprove: true,
         parentBrief: "budget parent",
@@ -371,7 +371,7 @@ function makeStub(onSession?: (opts: CreateAgentSessionOptions) => void): typeof
         // every ledger assertion agree with the stub instead of with the code:
         // a child really booting on the specialist's model still recorded
         // deepseek, and the test could not tell the two apart.
-        model: opts.model ?? { provider: "deepseek", id: "deepseek-v4-flash" },
+        model: opts.model ?? { provider: "deepseek", id: "deepseek-flash" },
         systemPrompt: "stub",
         getActiveToolNames: () => active,
         setActiveToolsByName: (n: string[]) => { active = [...n]; },
@@ -392,7 +392,7 @@ function makeCtx(dir: string, ledgerPath: string, createSession?: typeof createA
     workspace: dir,
     ledgerPath,
     config,
-    modelSpec: "deepseek/deepseek-v4-flash",
+    modelSpec: "deepseek/deepseek-flash",
     gate: new AutoApproveGate(),
     autoApprove: true,
     parentBrief: "brief",
@@ -707,7 +707,7 @@ describe("choosing the delegate's model (ticket 05)", () => {
 
   it("criterion 3: with the setting at parent, the child runs on the spawning session's model", async () => {
     const { model } = await childModel({ specialistYaml: WITH_MODEL, delegateSetting: "parent" });
-    assert.equal(model, "deepseek/deepseek-v4-flash");
+    assert.equal(model, "deepseek/deepseek-flash");
   });
 
   it("criterion 4: with the setting at a named model id, the child runs on that model", async () => {
@@ -720,7 +720,7 @@ describe("choosing the delegate's model (ticket 05)", () => {
 
   it("criterion 5: a specialist declaring no model inherits the parent's rather than erroring", async () => {
     const { model } = await childModel({ specialistYaml: NO_MODEL, delegateSetting: "specialist" });
-    assert.equal(model, "deepseek/deepseek-v4-flash");
+    assert.equal(model, "deepseek/deepseek-flash");
   });
 
   it("criterion 6: the shipped default for the setting is specialist", () => {

@@ -10,6 +10,7 @@ import { after, afterEach, describe, it } from "node:test";
 import { classifyFailure } from "../../credentials/classify.js";
 import { create, encodeJsonValue } from "../protobuf/codec.js";
 import type { AssistantMessage, AssistantMessageEvent, PiContext, PiModel, PiTool } from "../google-cca/types.js";
+import { plainContext } from "../test-context.js";
 import { type FakeCursorServer, type FakeRunContext, type FakeRunHandler, startFakeCursorServer } from "./fake-cursor-server.js";
 import {
   type AgentClientMessage,
@@ -120,7 +121,7 @@ afterEach(async () => {
 });
 after(() => resetCursorConversationState());
 
-const streamSimple = createCursorStreamSimple({ heartbeatMs: 20 });
+const streamSimple = plainContext(createCursorStreamSimple({ heartbeatMs: 20 }));
 const context = (text: string, extra: Partial<PiContext> = {}): PiContext => ({
   systemPrompt: "Be brief.",
   messages: [{ role: "user", content: text, timestamp: Date.now() }],

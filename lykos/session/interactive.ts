@@ -154,7 +154,8 @@ export interface InteractiveSession extends RewindableSession {
   /** Synchronous truth, not a promise chain's accumulated flag — the loop's inner steering race checks this directly so a coincidental tie (idle and a new line arriving on the same microtask) can never leave a completed turn misread as still running. */
   readonly isIdle: boolean;
   prompt(text: string): Promise<void>;
-  steer(text: string): Promise<void>;
+  /** Pi resolves whether the line was handled or queued; this loop does not read it. */
+  steer(text: string): Promise<unknown>;
   abort(): Promise<void>;
   waitForIdle(): Promise<void>;
   getActiveToolNames(): string[];
@@ -165,7 +166,7 @@ export interface InteractiveSession extends RewindableSession {
     message: { customType: string; content: string; display: boolean },
     options?: { triggerTurn?: boolean },
   ): Promise<void>;
-  followUp?(text: string): Promise<void>;
+  followUp?(text: string): Promise<unknown>;
   compact?(instructions?: string): Promise<unknown>;
   executeBash?(
     command: string,

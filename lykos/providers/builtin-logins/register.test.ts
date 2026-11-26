@@ -78,13 +78,17 @@ describe("the builtin-login wrapper delegates to Pi's provider (ticket 15, D1)",
     }
   });
 
-  it("only radius still uses Pi's own login function among Pi builtins with OAuth (ticket 16, D5.4)", async () => {
+  // Pi 1.6.1 added OAuth to meta and openai (ChatGPT). Lykos has no login of its own for them yet, so they keep Pi's.
+  const PI_OWN_LOGIN = new Set(["meta", "openai", "radius"]);
+  it("only radius, meta and openai still use Pi's own login function among Pi builtins with OAuth (ticket 16, D5.4)", async () => {
     const raw = await ModelRuntime.create();
     const rawBuiltinsWithOAuth = raw.getProviders().filter((p) => p.auth?.oauth !== undefined).map((p) => p.id).sort();
     assert.deepEqual(rawBuiltinsWithOAuth, [
       "anthropic",
       "github-copilot",
       "kimi-coding",
+      "meta",
+      "openai",
       "openai-codex",
       "openrouter",
       "radius",
@@ -95,9 +99,9 @@ describe("the builtin-login wrapper delegates to Pi's provider (ticket 15, D1)",
     for (const id of rawBuiltinsWithOAuth) {
       const provider = runtime.getProvider(id)!;
       assert.ok(provider, `expected provider ${id}`);
-      if (id === "radius") {
-        assert.equal(Object.getPrototypeOf(provider), Object.prototype, "radius is not wrapped");
-        assert.equal(runtime.getRegisteredNativeProvider("radius"), undefined, "radius was not replaced");
+      if (PI_OWN_LOGIN.has(id)) {
+        assert.equal(Object.getPrototypeOf(provider), Object.prototype, `${id} is not wrapped`);
+        assert.equal(runtime.getRegisteredNativeProvider(id), undefined, `${id} was not replaced`);
       } else {
         const builtin = Object.getPrototypeOf(provider) as typeof provider;
         assert.equal(builtin.id, id);

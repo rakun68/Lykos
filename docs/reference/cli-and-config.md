@@ -202,9 +202,9 @@ providers:
 
 # Models and routing defaults
 models:
-  default: "deepseek/deepseek-v4-flash"
+  default: "deepseek/deepseek-flash"
   roles:
-    scout: "deepseek/deepseek-v4-flash"
+    scout: "deepseek/deepseek-flash"
     worker: "deepseek/deepseek-v4-pro"   # a session whose specialist has no role of its own
     # T239: a role named after a specialist is that specialist's model, below --model and the
     # specialist file's own provider/model. The P18 roles default to Boxie's models (boxie.conf,

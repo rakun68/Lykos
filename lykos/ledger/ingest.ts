@@ -341,7 +341,7 @@ export function openWorkspaceLedger(workspace: string, ledgerPath?: string): Led
 }
 
 export function parseProviderModel(ref: string | undefined): { provider: string; model: string } {
-  if (!ref) return { provider: "deepseek", model: "deepseek-v4-flash" };
+  if (!ref) return { provider: "deepseek", model: "deepseek-flash" };
   const slash = ref.indexOf("/");
   if (slash <= 0) return { provider: "deepseek", model: ref };
   return { provider: ref.slice(0, slash), model: ref.slice(slash + 1) };

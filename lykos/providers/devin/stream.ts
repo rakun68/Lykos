@@ -32,6 +32,7 @@
 // - Mid-stream tool arguments are closed by a small completer below and parsed with
 //   `JSON.parse`; unparseable text yields `{}`.
 
+import type { JsonObject } from "@earendil-works/pi-ai";
 import { createHash, randomUUID } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { CcaEventStream } from "../google-cca/stream.js";
@@ -48,6 +49,7 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "../google-cca/types.js";
+import { flattenTranscript } from "../google-cca/types.js";
 import { create, fromBinary, type MessageCodec, type ProtoMessage, toBinary } from "../protobuf/codec.js";
 import {
   AssignModelRequestSchema,
@@ -255,14 +257,14 @@ export function completePartialJson(text: string): unknown {
 }
 
 /** Streaming tool arguments: whole JSON, else a repaired prefix, else `{}`. */
-export function parseStreamingJson(partialJson: string | undefined): Record<string, unknown> {
+export function parseStreamingJson(partialJson: string | undefined): JsonObject {
   const trimmed = partialJson?.trimStart();
   if (!trimmed) return {};
   try {
-    return JSON.parse(trimmed) as Record<string, unknown>;
+    return JSON.parse(trimmed) as JsonObject;
   } catch {
     const repaired = completePartialJson(trimmed);
-    return repaired !== null && typeof repaired === "object" && !Array.isArray(repaired) ? (repaired as Record<string, unknown>) : {};
+    return repaired !== null && typeof repaired === "object" && !Array.isArray(repaired) ? (repaired as JsonObject) : {};
   }
 }
 
@@ -272,7 +274,7 @@ function parseStreamingJsonThrottled(
   partialJson: string | undefined,
   lastParsedLen: number,
   minGrowthBytes: number = STREAMING_JSON_PARSE_MIN_GROWTH,
-): { value: Record<string, unknown>; parsedLen: number } | null {
+): { value: JsonObject; parsedLen: number } | null {
   const len = partialJson?.length ?? 0;
   if (len === 0) return null;
   const growth = Math.max(minGrowthBytes, len >> 5);
@@ -930,7 +932,7 @@ async function run(
 export function createDevinStreamSimple(deps: DevinStreamDeps = {}): StreamSimpleFn {
   return (model, context, options) => {
     const stream = new CcaEventStream();
-    void run(stream, model, context, options, deps);
+    void run(stream, model, flattenTranscript(context), options, deps);
     return stream as unknown as PiEventStream;
   };
 }

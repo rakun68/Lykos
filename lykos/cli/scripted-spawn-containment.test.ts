@@ -25,7 +25,7 @@ process.env.LYKOS_PI_HOST_DIR = mkdtempSync(join(tmpdir(), "lykos-pi-host-"));
 const stubSession = (async (opts: CreateAgentSessionOptions = {}) => ({
   session: {
     sessionId: `c-${Math.random().toString(36).slice(2)}`,
-    model: opts.model ?? { provider: "deepseek", id: "deepseek-v4-flash" },
+    model: opts.model ?? { provider: "deepseek", id: "deepseek-flash" },
     systemPrompt: "stub",
     getActiveToolNames: () => [],
     setActiveToolsByName: () => {},
@@ -70,7 +70,7 @@ async function parentAt(
     workspace: dir,
     ledgerPath: join(dir, "ledger.db"),
     config,
-    modelSpec: "deepseek/deepseek-v4-flash",
+    modelSpec: "deepseek/deepseek-flash",
     gate: new AutoApproveGate(),
     autoApprove: true,
     parentBrief: "brief",

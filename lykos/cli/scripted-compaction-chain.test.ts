@@ -92,13 +92,13 @@ describe("the compaction method chain (T190)", () => {
       contextWindow: WINDOW,
       script: [
         BIG,
-        PAD,
+        // Pi compacts between a tool's result and the next model call (since 0.84.4), so the side call follows this turn.
         (ctx) => {
           liveKey = ctx.sessionId;
           liveTools = ctx.tools;
           liveSystem = ctx.systemPrompt;
           assert.equal(ctx.toolChoice, undefined, "the live turn leaves tool choice at its default");
-          return DONE;
+          return PAD;
         },
         sideCall((ctx) => {
           // It uses no tools, but sends the live ones: they open the cached prefix, and a request without them reads it cold.
@@ -118,10 +118,11 @@ describe("the compaction method chain (T190)", () => {
           assert.ok(JSON.stringify(ctx.messages).includes("x".repeat(1000)), "it reads the whole conversation the live turn had");
           return HANDOFF_DOC;
         }),
+        DONE,
       ],
     });
     assert.equal(run.result.status, "ok", JSON.stringify(run.result));
-    assert.equal(run.unusedSteps, 0, "the side call was the last model request: no summariser ran");
+    assert.equal(run.unusedSteps, 0, "the run finished right after the side call: no summariser ran");
     const rows = run.query<Row>(ROWS, run.sessionId);
     assert.equal(rows.length, 1);
     const [row] = rows as [Row];
@@ -130,7 +131,8 @@ describe("the compaction method chain (T190)", () => {
     assert.equal(row.trigger, "pi-threshold");
     assert.equal(row.result, "ok");
     assert.ok((row.tokens_before ?? 0) > 111_000, `tokens_before ${row.tokens_before}`);
-    assert.ok(row.tokens_after !== null && row.tokens_after < 30_000, `tokens_after ${row.tokens_after}`);
+    // Pi compacts with the last tool result (~25 000 tokens) still kept whole, so the bound is relative.
+    assert.ok(row.tokens_after !== null && row.tokens_after < (row.tokens_before ?? 0) / 3, `tokens_after ${row.tokens_after}`);
     // The faux provider only estimates a cache hit (it serialises text and puts tools last), so the SIZE of a hit is
     // not measured here -- only that the call's usage is on the row with read and write apart, as the provider reported it.
     // The faux reports no one-hour split, so that column is NULL, not 0.
@@ -165,7 +167,7 @@ describe("the compaction method chain (T190)", () => {
     const run = await runScriptedSession({
       config: config("[note, handoff, summary]"),
       contextWindow: WINDOW,
-      script: [BIG, PAD, DONE, sideCall(() => fail("scripted provider outage")), summary()],
+      script: [BIG, PAD, sideCall(() => fail("scripted provider outage")), summary(), DONE],
     });
     assert.equal(run.result.status, "ok", JSON.stringify(run.result));
     assert.equal(run.unusedSteps, 0);
@@ -220,7 +222,8 @@ describe("the compaction method chain (T190)", () => {
         config: config(),
         contextWindow: WINDOW,
         files: FILES,
-        script: [...READS, DONE, sideCall(() => fail("scripted provider outage"))],
+        // Pi compacts as soon as a read result crosses its line, mid-run: after the thirteenth read.
+        script: [...READS.slice(0, COUNT - 1), sideCall(() => fail("scripted provider outage")), READS[COUNT - 1]!, DONE],
       });
       assert.equal(run.unusedSteps, 0);
       assert.equal(run.modelCalls, 16, "the side call is the one extra request");
@@ -237,7 +240,7 @@ describe("the compaction method chain (T190)", () => {
       const run = await runScriptedSession({
         config: config("[shake, summary]"),
         contextWindow: WINDOW,
-        script: [BIG, PAD, DONE, summary()],
+        script: [BIG, PAD, summary(), DONE],
       });
       assert.equal(run.unusedSteps, 0);
       const [row] = run.query<Row>(ROWS, run.sessionId) as [Row];
@@ -280,7 +283,7 @@ describe("the compaction method chain (T190)", () => {
     const run = await runScriptedSession({
       config: config("[handoff, summary]"),
       contextWindow: WINDOW,
-      script: [BIG, PAD, DONE, sideCall(() => "   "), summary()],
+      script: [BIG, PAD, sideCall(() => "   "), summary(), DONE],
     });
     assert.equal(run.unusedSteps, 0);
     const [row] = run.query<Row>(ROWS, run.sessionId) as [Row];

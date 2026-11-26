@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { classifyFailure } from "../../credentials/classify.js";
 import type { AssistantMessage, AssistantMessageEvent, PiContext, PiModel, PiTool, ToolCall } from "../google-cca/types.js";
+import { plainContext } from "../test-context.js";
 import { create, toBinary } from "../protobuf/codec.js";
 import {
   chatFrame,
@@ -88,7 +89,7 @@ afterEach(async () => {
   server = undefined;
 });
 
-const streamSimple = createDevinStreamSimple();
+const streamSimple = plainContext(createDevinStreamSimple());
 
 describe("devin-agent stream (D3, D6.2)", () => {
   it("streams a text turn with thinking and usage, sending Devin's paths, headers and metadata", async () => {
@@ -323,7 +324,7 @@ describe("devin-agent stream (D3, D6.2)", () => {
         },
       }),
     );
-    const routed = createDevinStreamSimple({ compat: () => ({ modelRouter: true }) });
+    const routed = plainContext(createDevinStreamSimple({ compat: () => ({ modelRouter: true }) }));
     const { result } = await collect(routed(model(fake.baseUrl, "adaptive"), hi("route me"), { apiKey: "token", sessionId: "cascade-42" }));
     assert.equal(result.stopReason, "stop", result.errorMessage);
     assert.deepEqual(fake.requests.map((r) => r.path), [DEVIN_AUTH_PATH, DEVIN_ASSIGN_MODEL_PATH, CHAT_MESSAGE_PATH]);

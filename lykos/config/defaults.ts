@@ -132,11 +132,11 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
     deepseek: { auth: "api_key", priced: true },
   },
   models: {
-    default: "deepseek-v4-flash",
+    default: "deepseek-flash",
     roles: {
-      worker: "deepseek-v4-flash",
-      scout: "deepseek-v4-flash",
-      watcher: "deepseek-v4-flash",
+      worker: "deepseek-flash",
+      scout: "deepseek-flash",
+      watcher: "deepseek-flash",
       // T239: the P18 roles on Boxie's models (boxie.conf ROLE_*, read 2026-11-06 at Boxie 5e8561c). Each
       // role is the specialist of the same name. Boxie reaches these through OmniRoute; Lykos needs an
       // `omniroute` provider (and `opencode` for the free lane) declared under `providers:`.

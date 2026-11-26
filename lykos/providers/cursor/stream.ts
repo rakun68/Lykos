@@ -53,6 +53,7 @@
 // `permission_denied` 403, the Connect protocol's own code-to-HTTP mapping. That
 // mapping has not been observed from Cursor.
 
+import type { JsonObject } from "@earendil-works/pi-ai";
 import { createHash, randomUUID } from "node:crypto";
 import http2 from "node:http2";
 import { create, decodeJsonValue, encodeJsonValue, fromBinary, type JsonValue, toBinary } from "../protobuf/codec.js";
@@ -70,6 +71,7 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "../google-cca/types.js";
+import { flattenTranscript } from "../google-cca/types.js";
 import {
   AgentClientMessageSchema,
   AgentConversationTurnStructureSchema,
@@ -1104,26 +1106,26 @@ function parseToolArgsJson(text: string): unknown {
   }
 }
 
-function decodeMcpArgsMap(args: Record<string, Uint8Array> | undefined): Record<string, unknown> | undefined {
+function decodeMcpArgsMap(args: Record<string, Uint8Array> | undefined): JsonObject | undefined {
   if (!args) return undefined;
   const decoded: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) decoded[key] = decodeMcpArgValue(value);
-  return decoded;
+  return decoded as JsonObject;
 }
 
 /** Completion wins, except a string that downgraded a streamed structure. */
 export function mergeCursorMcpToolCallArgs(
   streamed: Record<string, unknown> | undefined,
   completion: Record<string, unknown> | undefined,
-): Record<string, unknown> {
+): JsonObject {
   const merged: Record<string, unknown> = { ...streamed };
-  if (!completion) return merged;
+  if (!completion) return merged as JsonObject;
   for (const [key, completionValue] of Object.entries(completion)) {
     const streamedValue = merged[key];
     if (typeof completionValue === "string" && streamedValue !== null && typeof streamedValue === "object") continue;
     merged[key] = completionValue;
   }
-  return merged;
+  return merged as JsonObject;
 }
 
 function buildMcpExternalHandoffResult() {
@@ -1191,11 +1193,11 @@ function endCurrentThinkingBlock(state: CursorTurnState): void {
   state.thinking = null;
 }
 
-function parseArgsText(text: string): Record<string, unknown> | undefined {
+function parseArgsText(text: string): JsonObject | undefined {
   if (!text.trim()) return undefined;
   try {
     const parsed = JSON.parse(text) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
+    return isRecord(parsed) ? (parsed as JsonObject) : undefined;
   } catch {
     return undefined;
   }
@@ -1233,7 +1235,7 @@ function mcpCallOf(toolCall: ProtoToolCall | undefined): { args?: McpArgs } | un
   return oneof?.case === "mcpToolCall" ? oneof.value : undefined;
 }
 
-function openMcpBlock(state: CursorTurnState, id: string, name: string, args: Record<string, unknown>, envelopeId: string | undefined): OpenToolCall {
+function openMcpBlock(state: CursorTurnState, id: string, name: string, args: JsonObject, envelopeId: string | undefined): OpenToolCall {
   endCurrentTextBlock(state);
   endCurrentThinkingBlock(state);
   const block: ToolCall = { type: "toolCall", id, name, arguments: args };
@@ -1909,7 +1911,7 @@ async function run(
 export function createCursorStreamSimple(deps: CursorStreamDeps = {}): StreamSimpleFn {
   return (model, context, options) => {
     const stream = new CcaEventStream();
-    void run(stream, model, context, options, deps);
+    void run(stream, model, flattenTranscript(context), options, deps);
     return stream as unknown as PiEventStream;
   };
 }

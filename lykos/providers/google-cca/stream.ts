@@ -24,6 +24,7 @@
 // Errors carry the HTTP status and body as `Cloud Code Assist API error: <status> <body>`
 // so ticket 05's classifier can read them from the error event's message.
 
+import type { JsonObject } from "@earendil-works/pi-ai";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { antigravityUserAgent, extractGoogleValidationUrl, formatGoogleValidationRequiredMessage, geminiCliHeaders } from "./project.js";
 import type {
@@ -41,6 +42,7 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "./types.js";
+import { flattenTranscript } from "./types.js";
 import { ANTIGRAVITY_MODEL_WIRE_PROFILES, type Effort, type WireModel, wireModel } from "./wire-models.js";
 
 const DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com";
@@ -892,7 +894,7 @@ async function run(
             type: "toolCall",
             id: needsNewId ? nextToolCallId(part.functionCall.name || "tool") : provided,
             name: part.functionCall.name || "",
-            arguments: (part.functionCall.args ?? {}) as Record<string, unknown>,
+            arguments: (part.functionCall.args ?? {}) as JsonObject,
             ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
           };
           output.content.push(toolCall);
@@ -964,7 +966,7 @@ async function run(
 export function createCcaStreamSimple(deps: CcaStreamDeps = {}): StreamSimpleFn {
   return (model, context, options) => {
     const stream = new CcaEventStream();
-    void run(stream, model, context, options, deps);
+    void run(stream, model, flattenTranscript(context), options, deps);
     return stream as unknown as PiEventStream;
   };
 }

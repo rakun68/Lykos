@@ -90,7 +90,7 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
       return {
         session: {
           sessionId: "subagent-session-1",
-          model: opts.model ?? { provider: "deepseek", id: "deepseek-v4-flash" },
+          model: opts.model ?? { provider: "deepseek", id: "deepseek-flash" },
           systemPrompt: "stub",
           getActiveToolNames: () => active,
           setActiveToolsByName: (n: string[]) => { active = [...n]; },
@@ -120,7 +120,7 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
       workspace: dir,
       ledgerPath,
       config,
-      modelSpec: "deepseek/deepseek-v4-flash",
+      modelSpec: "deepseek/deepseek-flash",
       gate: parentGate,
       autoApprove: false,
       parentBrief: "parent task",
@@ -191,7 +191,7 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
       return {
         session: {
           sessionId: "subagent-session-2",
-          model: opts.model ?? { provider: "deepseek", id: "deepseek-v4-flash" },
+          model: opts.model ?? { provider: "deepseek", id: "deepseek-flash" },
           systemPrompt: "stub",
           getActiveToolNames: () => active,
           setActiveToolsByName: (n: string[]) => { active = [...n]; },
@@ -211,7 +211,7 @@ describe("T213 integration: delegated sessions and subagent inheritance", () => 
       workspace: dir,
       ledgerPath,
       config,
-      modelSpec: "deepseek/deepseek-v4-flash",
+      modelSpec: "deepseek/deepseek-flash",
       gate: parentGate,
       autoApprove: false,
       parentBrief: "parent task",

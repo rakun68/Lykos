@@ -495,7 +495,7 @@ export const TOOL_CATALOG: Record<string, CatalogTool> = {
       {
         pattern: str("Search pattern (regex or literal string)"),
         path: str("Directory or file to search (default: current directory)"),
-        glob: str("Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'"),
+        glob: str("Filter files by glob pattern relative to path, e.g. 'src/**/*.ts'. Without '/', e.g. '*.ts', it matches file names at any depth"),
         ignoreCase: bool("Case-insensitive search (default: false)"),
         literal: bool("Treat pattern as literal string instead of regex (default: false)"),
         context: num("Number of lines to show before and after each match (default: 0)"),
@@ -511,7 +511,7 @@ export const TOOL_CATALOG: Record<string, CatalogTool> = {
       "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 50KB (whichever is hit first).",
     parameters: objectSchema(
       {
-        pattern: str("Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"),
+        pattern: str("Glob pattern relative to the search directory, e.g. 'src/**/*.ts'. Without '/', e.g. '*.ts', it matches file names at any depth"),
         path: str("Directory to search in (default: current directory)"),
         limit: num("Maximum number of results (default: 1000)"),
       },
@@ -555,7 +555,7 @@ export const TOOL_CATALOG: Record<string, CatalogTool> = {
       "file CONTENTS use grep.",
     parameters: objectSchema(
       {
-        pattern: str("Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"),
+        pattern: str("Glob pattern relative to the search directory, e.g. 'src/**/*.ts'. Without '/', e.g. '*.ts', it matches file names at any depth"),
         path: str("Directory to search in (default: current directory)"),
         limit: num("Maximum number of results (default: 1000)"),
       },

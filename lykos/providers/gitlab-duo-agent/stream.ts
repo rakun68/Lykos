@@ -42,6 +42,7 @@
 // so ticket 05's classifier reads the status (a 401 is auth). A FAILED/STOPPED workflow status
 // surfaces the server's message.
 
+import type { JsonObject } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
 import { CcaEventStream } from "../google-cca/stream.js";
 import type {
@@ -56,6 +57,7 @@ import type {
   StreamSimpleFn,
   ToolCall,
 } from "../google-cca/types.js";
+import { flattenTranscript } from "../google-cca/types.js";
 import {
   discoverGitLabDuoWorkflowRuntimeNamespace,
   type GitLabDuoWorkflowNamespaceSelection,
@@ -898,17 +900,17 @@ function isMcpAction(name: string): boolean {
   return (GITLAB_DUO_WORKFLOW_ACTION_NAMES as readonly string[]).includes(name);
 }
 
-function parseMcpArguments(value: unknown): Record<string, unknown> {
+function parseMcpArguments(value: unknown): JsonObject {
   if (value === undefined) return {};
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value) as unknown;
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as JsonObject) : {};
     } catch {
       return {};
     }
   }
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
 }
 
 function stripMcpPrefix(rawName: string): string {
@@ -1749,7 +1751,7 @@ export function createGitLabDuoAgentStreamSimple(deps: GitLabDuoAgentStreamDeps 
     };
     stream.push({ type: "start", partial: output });
     const state: StreamState = { stream, output };
-    void run(model, context, options, deps, state)
+    void run(model, flattenTranscript(context), options, deps, state)
       .catch((error: unknown) => {
         if (stream.finished) return;
         const aborted = options?.signal?.aborted ?? false;

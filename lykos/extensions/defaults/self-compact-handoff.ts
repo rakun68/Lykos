@@ -47,6 +47,7 @@
 // failure with its usage, not thrown away: the call was paid for either way.
 
 import { convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { SELF_COMPACT_HANDOFF_PROMPT } from "../../loop/self-compact-template.js";
 
 type Complete = ExtensionContext["modelRegistry"]["complete"];
@@ -103,31 +104,35 @@ export function withLiveCacheKey<T>(payload: T, key: LiveCacheKey | undefined, m
  * fails when the installed one differs. Pi runs the pi-ai copy bundled inside that package
  * (`dist/bundle`), so its version, which package.json pins exactly, is the one that counts.
  */
-export const AFFINITY_HEADERS_READ_FROM_PI = "0.84.3";
+export const AFFINITY_HEADERS_READ_FROM_PI = "1.6.1";
 
 /**
- * The routing headers Pi writes from the session id for a model that sets
- * `compat.sendSessionAffinityHeaders`, with the live turn's id. **Copied from
- * pi-coding-agent 0.84.3's pi-ai** (`api/openai-completions.js` and
- * `api/anthropic-messages.js` `createClient`), because Pi exposes no function for it.
- * Empty for any other model, and for anthropic-messages on the github-copilot or
- * OAuth-token paths, which never write it. Both providers also drop the id when
- * `cacheRetention` is "none"; that is not handled because Pi only sends "none" from its own
- * compaction, never from the live agent turn this call repeats.
+ * The routing headers Pi writes from the session id for a model that sends session-affinity
+ * headers, with the live turn's id. **Copied from pi-coding-agent 1.6.1's pi-ai**
+ * (`api/openai-completions.js` `createClient` and `getCompat`, `api/anthropic-messages.js`
+ * `createClient` and `getAnthropicCompat`), because Pi exposes no function for it. A model on
+ * OpenRouter sends them unless its compat says otherwise; any other model only when
+ * `compat.sendSessionAffinityHeaders` is set. Empty for anthropic-messages on the github-copilot or
+ * OAuth-token paths, which never write it. Both providers also drop the id when `cacheRetention`
+ * is "none"; that is not handled because Pi only sends "none" from its own compaction, never from
+ * the live agent turn this call repeats.
  */
 export function affinityHeaders(
   model: { api?: string; provider?: string; baseUrl?: string; compat?: unknown },
   liveSessionId: string | undefined,
   request: { apiKey?: string | undefined } = {},
 ): Record<string, string> {
+  if (liveSessionId === undefined || liveSessionId.length === 0) return {};
   const compat = (model.compat ?? {}) as { sendSessionAffinityHeaders?: boolean; sessionAffinityFormat?: string };
-  if (compat.sendSessionAffinityHeaders !== true || liveSessionId === undefined || liveSessionId.length === 0) return {};
+  const isOpenRouter = model.provider === "openrouter" || (model.baseUrl ?? "").includes("openrouter.ai");
+  if ((compat.sendSessionAffinityHeaders ?? isOpenRouter) !== true) return {};
   if (model.api === "anthropic-messages") {
     if (model.provider === "github-copilot" || (request.apiKey ?? "").includes("sk-ant-oat")) return {};
-    return { "x-session-affinity": liveSessionId };
+    const format = compat.sessionAffinityFormat ?? (isOpenRouter ? "openrouter" : undefined);
+    return { [format === "openrouter" ? "x-session-id" : "x-session-affinity"]: liveSessionId };
   }
   if (model.api !== "openai-completions") return {};
-  const format = compat.sessionAffinityFormat ?? (model.provider === "openrouter" || (model.baseUrl ?? "").includes("openrouter.ai") ? "openrouter" : "openai");
+  const format = compat.sessionAffinityFormat ?? (isOpenRouter ? "openrouter" : "openai");
   if (format === "openrouter") return { "x-session-id": liveSessionId };
   return {
     ...(format === "openai" ? { session_id: liveSessionId } : {}),
@@ -174,12 +179,14 @@ export async function requestHandoffDocument(
     focus !== undefined && focus.trim().length > 0
       ? `${SELF_COMPACT_HANDOFF_PROMPT}\n\n<instruction>\nAdditional focus: ${focus.trim()}\n</instruction>`
       : SELF_COMPACT_HANDOFF_PROMPT;
+  // Since Pi 1.6.1 the session's messages carry its system messages. They are dropped here and the prompt and
+  // tools are given once, or `normalizeContext` would send the prompt twice.
   const context = {
     systemPrompt: ctx.getSystemPrompt(),
     messages: convertToLlm([
       ...(messages as Parameters<typeof convertToLlm>[0]),
       { role: "user" as const, content: [{ type: "text" as const, text: instruction }], timestamp: Date.now() },
-    ]),
+    ]).filter((m) => m.role !== "system"),
     tools,
   };
   const requestModel = auth.baseUrl !== undefined ? { ...model, baseUrl: auth.baseUrl } : model;
@@ -197,7 +204,7 @@ export async function requestHandoffDocument(
     onPayload: (payload: unknown) => withLiveCacheKey(payload, live.cacheKey, model),
     signal,
   };
-  const stream = provider.streamSimple(requestModel, context, options);
+  const stream = provider.streamSimple(requestModel, normalizeContext(context), options);
   const response = await stream.result();
   const usage = response.usage;
   if (response.stopReason === "error" || response.stopReason === "aborted") {

@@ -47,7 +47,7 @@ function makeStub(): typeof createAgentSession {
     return {
       session: {
         sessionId: `c-${Date.now()}`,
-        model: opts.model ?? { provider: "deepseek", id: "deepseek-v4-flash" },
+        model: opts.model ?? { provider: "deepseek", id: "deepseek-flash" },
         systemPrompt: "stub",
         getActiveToolNames: () => active,
         setActiveToolsByName: (n: string[]) => {
@@ -70,7 +70,7 @@ function makeCtx(dir: string, createSession?: typeof createAgentSession): SpawnC
     workspace: dir,
     ledgerPath: join(dir, "ledger.db"),
     config,
-    modelSpec: "deepseek/deepseek-v4-flash",
+    modelSpec: "deepseek/deepseek-flash",
     gate: new AutoApproveGate(),
     autoApprove: true,
     parentBrief: "brief",

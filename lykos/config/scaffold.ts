@@ -27,11 +27,11 @@ providers:
 models:
   # Lykos declares the default per role. The caller may override per call,
   # and both are recorded.
-  default: deepseek-v4-flash
+  default: deepseek-flash
   roles:
-    worker:  deepseek-v4-flash
-    scout:   deepseek-v4-flash
-    watcher: deepseek-v4-flash
+    worker:  deepseek-flash
+    scout:   deepseek-flash
+    watcher: deepseek-flash
 
 budget:
   per_run_usd: 0.50
@@ -161,7 +161,7 @@ context_strategy: self-compact
 #     - { window: 1M,   notice: 120k, warning: 240k, cutoff: 320k }
 #     - { window: 2M,   notice: 120k, warning: 240k, cutoff: 320k }
 #   models:
-#     deepseek/deepseek-v4-flash: { notice: 30k, warning: 60k, cutoff: 90k }
+#     deepseek/deepseek-flash: { notice: 30k, warning: 60k, cutoff: 90k }
 #   specialists:
 #     minimal: { notice: 20k, warning: 40k, cutoff: 60k }
 #   keep_recent_tokens: 20000   # recent context every compaction keeps (Pi's default)
@@ -176,7 +176,7 @@ continuation:
 # that did not write the code): one read-only child session after the gate,
 # on a session that edited files. OFF by default because it is an extra paid
 # call. Runs on the session's own model unless model names another
-# (e.g. "deepseek/deepseek-v4-flash"). Removing lykos-reviewer from
+# (e.g. "deepseek/deepseek-flash"). Removing lykos-reviewer from
 # lykos_extensions switches it off too.
 reviewer:
   enabled: false
@@ -304,7 +304,7 @@ ui:
 
 const SCOUT_AGENT_MD = `---
 name: scout
-model: deepseek-v4-flash
+model: deepseek-flash
 tools: read, grep, glob
 extensions: false
 allowed_subagents: none
@@ -325,7 +325,7 @@ worker pays for a summary, not for the exploration.
 
 const WATCHER_AGENT_MD = `---
 name: watcher
-model: deepseek-v4-flash
+model: deepseek-flash
 tools: read, grep, glob, bash
 extensions: false
 allowed_subagents: none

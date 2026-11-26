@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { classifyFailure } from "../../credentials/classify.js";
 import type { AssistantMessage, AssistantMessageEvent, PiContext, PiModel, PiTool } from "../google-cca/types.js";
+import { plainContext } from "../test-context.js";
 import { type FakeDuoServer, type FakeRestRequest, type FakeRestResponse, startFakeDuoServer } from "./fake-duo-server.js";
 import { createGitLabDuoAgentStreamSimple, resetGitLabDuoAgentState, UNSUPPORTED_ACTION_MESSAGE } from "./stream.js";
 
@@ -142,7 +143,7 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
         );
       },
     });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace }));
     const { events, result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
 
     assert.equal(result.stopReason, "stop", result.errorMessage);
@@ -228,7 +229,7 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
         );
       },
     });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace }));
     const model = modelAt(server.baseUrl);
     const options = { apiKey: "gl-access", sessionId: "duo-tool-session" };
 
@@ -272,7 +273,7 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
         socket.send({ status: "FAILED", message: "The model refused the request." });
       },
     });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace }));
     const { events, result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
     assert.equal(result.stopReason, "error");
     assert.equal(result.errorMessage, "The model refused the request.");
@@ -283,7 +284,7 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
   it("a 401 on direct_access is an error the rotation classifier reads as auth", async () => {
     const rest = duoRest({ directAccess: { status: 401, body: { message: "401 Unauthorized" } } });
     server = await startFakeDuoServer({ rest: rest.rest });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace }));
     const { result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
     assert.equal(result.stopReason, "error");
     assert.equal(result.errorMessage, "GitLab Duo Workflow direct_access failed with HTTP 401: 401 Unauthorized");
@@ -310,7 +311,7 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
         socket.send(checkpoint("INPUT_REQUIRED", [{ message_type: "agent", message_id: "a", content: "Understood." }]));
       },
     });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace }));
     const { result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
     assert.equal(result.stopReason, "stop", result.errorMessage);
     assert.deepEqual(result.content, [{ type: "text", text: "Understood." }]);
@@ -330,7 +331,7 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
         socket.send(checkpoint("INPUT_REQUIRED", [{ message_type: "agent", message_id: "r", content: "After restart" }]));
       },
     });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace, idleTimeoutMs: 200 });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace, idleTimeoutMs: 200 }));
     const { result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
     assert.equal(result.stopReason, "stop", result.errorMessage);
     assert.deepEqual(result.content, [{ type: "text", text: "After restart" }]);
@@ -351,7 +352,7 @@ describe("gitlab-duo-agent stream (ticket 13, D6.2)", () => {
         await socket.next();
       },
     });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace, idleTimeoutMs: 150 });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace, idleTimeoutMs: 150 }));
     const { result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
     assert.equal(server.sockets.length, 2);
     assert.deepEqual(rest.created, ["workflow-1", "workflow-2"]);
@@ -379,7 +380,7 @@ describe("gitlab-duo-agent project discovery (ticket 13, D4)", () => {
         join(repo, ".git", "config"),
         `[core]\n\tbare = false\n[remote "origin"]\n\turl = ${server.baseUrl}/duo-group/app.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`,
       );
-      const streamSimple = createGitLabDuoAgentStreamSimple({ env: {}, cwd: repo });
+      const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: {}, cwd: repo }));
       const { result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
       assert.equal(result.stopReason, "stop", result.errorMessage);
       assert.ok(server.requests.some((r) => r.method === "GET" && pathOf(r) === "/api/v4/projects/duo-group%2Fapp"));
@@ -402,7 +403,7 @@ describe("gitlab-duo-agent project discovery (ticket 13, D4)", () => {
         socket.send({ status: "FAILED", message: "Project required." });
       },
     });
-    const streamSimple = createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace });
+    const streamSimple = plainContext(createGitLabDuoAgentStreamSimple({ env: namespaceEnv, cwd: workspace }));
     const { result } = await collect(streamSimple(modelAt(server.baseUrl), userContext, { apiKey: "gl-access" }) as never);
     assert.equal(result.stopReason, "error");
     assert.match(result.errorMessage!, /^Project required\. \(no GitLab project resolved for this workspace/);

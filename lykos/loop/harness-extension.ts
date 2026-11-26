@@ -250,6 +250,9 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
     factory: (pi) => {
       // A model on `auto` sends no effort: Pi would send the "auto" its thinkingLevelMap holds (`config/model-efforts.ts`).
       pi.on("before_provider_request", (event, ctx) => withoutAutoEffort(event.payload, ctx.model, ctx.thinkingLevel));
+      // Pi 1.6.1 re-sends the last request while idle to keep its prompt cache warm. That spends money the
+      // ledger has not measured, so it stays off until a measurement decides it (ADR-0065, decision 9).
+      pi.on("cache_warming_decision", () => ({ action: "stop" }));
 
       // T150: the T109 continuation threshold watch that lived here is now the
       // `lykos-continuation` default extension (`extensions/defaults/`).

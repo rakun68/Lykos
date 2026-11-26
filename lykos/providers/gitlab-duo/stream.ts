@@ -11,7 +11,7 @@ import { CcaEventStream } from "../google-cca/stream.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
-  PiContext,
+  PiTranscript,
   PiEventStream,
   PiModel,
   PiSimpleStreamOptions,
@@ -27,7 +27,7 @@ export interface GitLabDuoStreamSimpleDeps {
 }
 
 export function createGitLabDuoStreamSimple(deps: GitLabDuoStreamSimpleDeps): StreamSimpleFn {
-  return (model: PiModel, context: PiContext, options?: PiSimpleStreamOptions) => {
+  return (model: PiModel, context: PiTranscript, options?: PiSimpleStreamOptions) => {
     const stream = new CcaEventStream();
     void run(stream, model, context, options, deps);
     return stream as unknown as PiEventStream;
@@ -37,7 +37,7 @@ export function createGitLabDuoStreamSimple(deps: GitLabDuoStreamSimpleDeps): St
 async function run(
   stream: CcaEventStream,
   model: PiModel,
-  context: PiContext,
+  context: PiTranscript,
   options: PiSimpleStreamOptions | undefined,
   deps: GitLabDuoStreamSimpleDeps,
 ): Promise<void> {

@@ -43,6 +43,7 @@
 // home. Import it only from a test file.
 
 import { execFileSync } from "node:child_process";
+import { flattenTranscript, type PiTranscript } from "../providers/google-cca/types.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -70,7 +71,7 @@ interface FauxAssistantMessage {
   stopReason: string;
   [k: string]: unknown;
 }
-/** What the model was sent on one request: Pi's `Context`. */
+/** What the model was sent on one request: Pi's `Context`, flattened from its transcript. */
 export interface ModelContext {
   systemPrompt?: string;
   messages: Array<{ role: string; content: unknown; toolName?: string; isError?: boolean; [k: string]: unknown }>;
@@ -430,8 +431,9 @@ async function scriptedModel(script: ScriptStep[], contextWindow: number | undef
   handle.setResponses(
     script.map((step, index) => (context: ModelContext, streamOptions?: { sessionId?: string; toolChoice?: string; transport?: string }) => {
       // T190: the request's cache key, tool choice and transport ride along, so a test can say what a call asked for.
+      // Pi 1.6.1 sends the prompt and tools as system messages; a script reads the flat form.
       context = {
-        ...context,
+        ...(flattenTranscript(context as unknown as PiTranscript) as unknown as ModelContext),
         ...(streamOptions?.sessionId !== undefined ? { sessionId: streamOptions.sessionId } : {}),
         ...(streamOptions?.toolChoice !== undefined ? { toolChoice: streamOptions.toolChoice } : {}),
         ...(streamOptions?.transport !== undefined ? { transport: streamOptions.transport } : {}),

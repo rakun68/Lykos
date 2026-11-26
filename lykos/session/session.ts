@@ -41,7 +41,7 @@ import { sessionRoleModel } from "../config/roles.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { computeHitQuality, type HitQualityToolCall } from "./hit-quality.js";
-import { type ModelRuntime, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { type AgentSession, type ModelRuntime, type AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { createLykosModelRuntime, forwardRotationsToSink, RotationRelay, type Provider } from "./model-runtime.js";
 import { formatAuthenticationFailure } from "../credentials/auth-failure.js";
 import { servedCredentialFor } from "../credentials/rotate.js";
@@ -172,7 +172,7 @@ export interface RunStandaloneTaskInput {
   prompt: string;
   /** T268: images sent with `prompt` as image parts. A model that takes no image input refuses the session before boot. */
   images?: ImageAttachment[];
-  /** `provider/model`, e.g. `deepseek/deepseek-v4-flash`. Default: T20's documented default (parseProviderModel(undefined)). */
+  /** `provider/model`, e.g. `deepseek/deepseek-flash`. Default: T20's documented default (parseProviderModel(undefined)). */
   model?: string;
   /** Caller override. Default: T20's documented hop-0 surface, same as `runTask()`. */
   tools?: string[];
@@ -327,6 +327,40 @@ export type RunStandaloneTaskResult =
   | { status: "blocked"; reason: string; skippedExtensions?: string[] }
   /** `sessionId` is present when the session got far enough to have a ledger row and a transcript. */
   | { status: "error"; message: string; sessionId?: string; containment?: ContainmentRecord; skippedExtensions?: string[]; denied?: DeniedAction[] };
+
+/**
+ * Waits until Pi is idle and no run's `agent_settled` handlers are still running. Pi's `waitForIdle` can
+ * resolve while they run (a compaction they start ends with an idle check), and a run an extension command
+ * starts is not awaited by `prompt`; disposing the session then leaves the handler a stale ctx. Subscribe
+ * before the prompt, so the run's `agent_start` is seen.
+ */
+export function watchSettled(session: Pick<AgentSession, "subscribe" | "waitForIdle" | "isIdle">): { settled(): Promise<void>; stop(): void } {
+  let running = false;
+  let wake: (() => void) | undefined;
+  const stop = session.subscribe((ev: AgentSessionEvent) => {
+    if (ev.type === "agent_start") running = true;
+    else if (ev.type === "agent_settled") running = false;
+    else return;
+    wake?.();
+  });
+  return {
+    async settled() {
+      for (;;) {
+        await session.waitForIdle();
+        if (running) {
+          await new Promise<void>((resolve) => (wake = resolve));
+          wake = undefined;
+          continue;
+        }
+        // A prompt deferred by a settled handler starts after the event, so give it a turn to begin.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        // Only a run that started in that turn keeps this waiting; a session that reports no `isIdle` is taken at its word.
+        if (!running && session.isIdle !== false) return;
+      }
+    },
+    stop,
+  };
+}
 
 export function isAuthenticationError(err: unknown): boolean {
   if (!err) return false;
@@ -1778,9 +1812,10 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   // function call on the happy path and changes nothing else.
   const fallbackPolicy = resolveFallbackPolicy(config.models.fallback);
   const fallbackState = newFallbackState(modelSpec);
+  const settle = watchSettled(session);
   try {
     await session.prompt(input.prompt, promptImages !== undefined ? { images: promptImages } : undefined);
-    await session.waitForIdle();
+    await settle.settled();
   } catch (err) {
     runState = "error";
     sawError = err instanceof Error ? err.message : String(err);
@@ -1817,7 +1852,7 @@ ${decision.note}
         // rather than restarting it. The warm prefix does not survive, and
         // the note above already said so.
         await session.prompt(input.prompt, promptImages !== undefined ? { images: promptImages } : undefined);
-        await session.waitForIdle();
+        await settle.settled();
         runState = "done";
         sawError = undefined;
       } catch (fallbackErr) {
@@ -1830,6 +1865,7 @@ ${decision.note}
     }
   } finally {
     unsubscribe();
+    settle.stop();
     detach();
     stopRotationEvents();
   }

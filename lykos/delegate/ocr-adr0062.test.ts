@@ -84,7 +84,7 @@ process.exit(${code});
   return { argv: [process.execPath, script], seen: () => JSON.parse(readFileSync(seenPath, "utf8")) as { args: string[]; env: Record<string, string | undefined> } };
 }
 
-const ENDPOINT: OcrEndpoint = { url: "http://127.0.0.1:9/v1", token: "sk-test-not-a-key", model: "deepseek-v4-flash", protocol: "openai", provider: "deepseek" };
+const ENDPOINT: OcrEndpoint = { url: "http://127.0.0.1:9/v1", token: "sk-test-not-a-key", model: "deepseek-flash", protocol: "openai", provider: "deepseek" };
 
 const RESULT = {
   status: "complete",
@@ -121,7 +121,7 @@ describe("ADR-0062: lykos review with delegation.review_engine: ocr", () => {
     assert.ok(!args.join(" ").includes(ENDPOINT.token), "the key is never on the command line");
     assert.equal(env["OCR_LLM_TOKEN"], ENDPOINT.token);
     assert.equal(env["OCR_LLM_URL"], ENDPOINT.url);
-    assert.equal(env["OCR_LLM_MODEL"], "deepseek-v4-flash");
+    assert.equal(env["OCR_LLM_MODEL"], "deepseek-flash");
     assert.equal(env["OCR_LLM_PROTOCOL"], "openai");
     assert.ok(env["HOME"]?.startsWith(join(ws, ".lykos", "reviews")), `OCR's HOME is the run's own folder: ${env["HOME"]}`);
     assert.ok(!git(ws, "worktree", "list").includes("worktree"), "the detached worktree is removed");
@@ -158,10 +158,10 @@ describe("ADR-0062: the endpoint comes from Lykos's own model runtime", () => {
     process.env.DEEPSEEK_API_KEY = "sk-env-test";
     const ws = repo();
     const config = loadConfig({ cwd: ws }).resolved;
-    const r = await ocrEndpoint(config, ws, "deepseek/deepseek-v4-flash");
+    const r = await ocrEndpoint(config, ws, "deepseek/deepseek-flash");
     assert.ok(r.ok, JSON.stringify(r));
     assert.equal(r.endpoint.token, "sk-env-test");
-    assert.equal(r.endpoint.model, "deepseek-v4-flash");
+    assert.equal(r.endpoint.model, "deepseek-flash");
     assert.equal(r.endpoint.protocol, "openai");
     assert.match(r.endpoint.url, /^https:\/\/api\.deepseek\.com/);
   });

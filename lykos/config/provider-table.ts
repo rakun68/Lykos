@@ -4,7 +4,7 @@ export const PI_NATIVE_PROVIDERS: readonly string[] = [
   "amazon-bedrock",
   "ant-ling",
   "anthropic",
-  "azure-openai-responses",
+  "azure",
   "baseten",
   "cerebras",
   "cloudflare-ai-gateway",
@@ -17,6 +17,7 @@ export const PI_NATIVE_PROVIDERS: readonly string[] = [
   "groq",
   "huggingface",
   "kimi-coding",
+  "meta",
   "minimax",
   "minimax-cn",
   "mistral",
@@ -31,8 +32,10 @@ export const PI_NATIVE_PROVIDERS: readonly string[] = [
   "qwen-token-plan",
   "qwen-token-plan-cn",
   "qwen-token-plan-individual",
+  "qwen-token-plan-individual-cn",
   "radius",
   "together",
+  "typesafe",
   "vercel-ai-gateway",
   "xai",
   "xiaomi",
@@ -17182,72 +17185,6 @@ export const BUILTIN_PROVIDERS: Record<string, BuiltinProvider> = {
         ],
         "contextWindow": 262144,
         "maxTokens": 65536
-      }
-    ]
-  },
-  "meta": {
-    "api": "openai-responses",
-    "baseUrl": "https://api.meta.ai/v1",
-    "envVars": [
-      "MODEL_API_KEY",
-      "META_API_KEY"
-    ],
-    "local": false,
-    "models": [
-      {
-        "id": "muse-spark-1.1",
-        "name": "Muse Spark 1.1",
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
-      {
-        "id": "muse-spark-1.2",
-        "name": "Muse Spark 1.2",
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
-      {
-        "id": "muse-spark-1.2-contributor",
-        "name": "Muse Spark 1.2 (C)",
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
-      {
-        "id": "muse-spark-1.3",
-        "name": "Muse Spark 1.3",
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
-      {
-        "id": "muse-spark-1.3-contributor",
-        "name": "Muse Spark 1.3 (C)",
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "contextWindow": 1048576,
-        "maxTokens": 131072
       }
     ]
   },

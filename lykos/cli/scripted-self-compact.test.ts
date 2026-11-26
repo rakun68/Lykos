@@ -8,8 +8,8 @@
 //
 // The thresholds come from a per-model override on the faux model, because
 // the faux model's prompt is a few thousand tokens and the shipped table's
-// lines are tens of thousands: notice at 1 000 is crossed by the first
-// response, and warning at 60 000 only by the ~70 000-token file the model
+// lines are tens of thousands: notice at 1 000 is crossed before the first
+// call (since Pi 1.6.1 usage is estimated before any reply), and warning at 60 000 only by the ~70 000-token file the model
 // writes on its second call.
 
 import assert from "node:assert/strict";
@@ -67,14 +67,13 @@ describe("self-compact: the gauge (T151)", () => {
       script: [
         (ctx) => {
           assert.ok(ctx.tools?.some((t) => t.name === "context_usage"), "the tool rides the request");
-          assert.ok(!has(ctx, NOTICE) && !has(ctx, WARNING), "nothing before any usage is known");
+          // Pi 1.6.1 estimates usage before any reply, and the prompt alone is past the 1 000-token notice line.
+          assert.ok(has(ctx, NOTICE) && !has(ctx, WARNING), "the estimate before any reply crosses the notice line");
+          assert.equal(ctx.messages[ctx.messages.length - 1]!.role, "user", "the guidance is the last message of the call");
           return reply(call("context_usage", {}));
         },
         (ctx) => {
-          const last = ctx.messages[ctx.messages.length - 1]!;
-          assert.equal(last.role, "user", "the guidance is the last message of the call");
-          assert.ok(has(ctx, NOTICE), "the first response crossed the notice line");
-          assert.ok(!has(ctx, WARNING));
+          assert.ok(!has(ctx, NOTICE) && !has(ctx, WARNING), "the notice was dropped after its one call");
           const usage = JSON.parse(lastToolResult(ctx).text) as Record<string, unknown>;
           assert.equal(usage.window, WINDOW);
           assert.equal(usage.tier, "400k");
@@ -83,7 +82,6 @@ describe("self-compact: the gauge (T151)", () => {
         },
         (ctx) => {
           assert.ok(has(ctx, WARNING), "the big write crossed the warning line");
-          assert.ok(!has(ctx, NOTICE), "the notice was dropped after its one call");
           return reply(call("context_usage", {}));
         },
         (ctx) => {
