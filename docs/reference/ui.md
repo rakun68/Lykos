@@ -7,21 +7,33 @@
 
 ## 0. UI Architecture
 
-Lykos provides a zero-dependency, pure Node terminal user interface operating across three levels:
+Lykos has four terminal surfaces:
 
-1. **Inline HUD (`lykos hud`):** A lightweight single-line or two-line status banner drawn during
-   plain streaming execution.
-2. **Full-screen Interactive Surface (`lykos run --interactive`):** An alternate-screen terminal
-   application with a dedicated multi-line composer, scrollback transcript, interactive approval
-   modal, and slash command dispatcher.
-3. **Live Watch Surface (`lykos watch`):** A multi-panel dashboard monitoring in-flight or
+1. **`lykos-tui` (`lykos`, §5):** the interface. A Rust client (`crates/tui`, ADR-0063) on the
+   engine server (`lykos serve`, [engine-server.md](engine-server.md)). The client crate
+   `crates/client` connects to it, starts it when none answers, and rebuilds each session from its
+   event stream.
+2. **The line session (`lykos run --interactive` without a terminal):** reads prompts from stdin
+   and prints the conversation as lines. In a terminal, `lykos run --interactive` opens `lykos-tui`
+   unless it is given an option `lykos-tui` does not carry yet (`--specialist`, `--output-style`,
+   `--yes`, `--tools`, `--subagents`, `--task`, `--project`, `--ask-outcome`); then the line session
+   runs there too. The session child `lykos-tui` drives is this same session, on the server's seams.
+3. **Inline HUD (`lykos hud`):** a single-line or two-line status banner drawn during plain
+   streaming execution.
+4. **Live Watch Surface (`lykos watch`, §4):** a multi-panel dashboard monitoring in-flight or
    historical sessions.
+
+P5 #55 removed the TypeScript full-screen TUI (`lykos/tui/`, `lykos --old-tui`). What it held
+besides pixels lives on: the IO-mode decision in `lykos/io-mode.ts` (rule 8), the line session, the
+command roster and the HUD renderers in `lykos/surface/`, and the interaction modes in
+`lykos/gate/mode-gate.ts`.
 
 ---
 
 ## 1. Themes & Color Resolution
 
-The UI themes are purely declarative palettes defined in `lykos/tui/theme/palettes.ts`.
+The HUD's and `lykos watch`'s themes are declarative palettes in `lykos/surface/theme/palettes.ts`.
+`lykos-tui` has its own (§5).
 Themes provide semantic color tokens (`primary`, `secondary`, `accent`, `muted`, `success`,
 `warning`, `error`, `border`, `bg`, etc.).
 
@@ -34,26 +46,10 @@ Themes provide semantic color tokens (`primary`, `secondary`, `accent`, `muted`,
 
 ---
 
-## 2. Full-Screen Interactive Surface
+## 2. The Session's Slash Commands
 
-The full-screen interface uses standard VT escape sequences to claim the alternate screen buffer
-(`\x1b[?1049h`), installing a stderr sink so asynchronous diagnostics do not corrupt rendering.
-
-### 2.1 Composer & Input Controls
-The input composer is a multi-line buffer with word-wrapping and bracketed paste handling:
-
-| Keybinding | Action |
-|---|---|
-| `Enter` | Submit current prompt (or insert newline if unclosed block) |
-| `Shift+Enter` | Insert literal newline |
-| `Shift+Tab` | Cycle primary specialists; queues the specialist stream message for the next turn (ADR-0044) |
-| `Ctrl+Up` | Recall previous prompt from `.lykos/history.json` |
-| `Ctrl+Down` | Recall next prompt from `.lykos/history.json` |
-| `Ctrl+R` | Interactive prefix-filtered history search |
-| `Shift+Tab` | Reserved (no longer cycles modes; reserved for specialist cycling in T216) |
-| `PgUp` / `PgDn` | Scroll transcript viewport up/down |
-| Mouse Wheel | Scroll transcript viewport smoothly |
-| `Escape` | Dismiss completion popup or cancel search |
+The session runs these, in `lykos-tui` and in the line session alike: `lykos-tui` sends what it does
+not handle itself to the session as typed (§5). Its keys are in §5.
 
 ### 2.2 Built-in Slash Commands
 Commands are dispatched locally without incurring LLM turns:
@@ -68,13 +64,20 @@ Commands are dispatched locally without incurring LLM turns:
 - `/model <provider/model>`: Switch active model for the remainder of the session (advisory: next turn may pay for cold prefix).
 - `/effort <off|low|mid|max>`: Adjust reasoning effort level and composer border hue.
 - `/session`: Display current session ID, token totals, and running cost.
+- `/rewind`: Pick an earlier prompt, then restore code and conversation, conversation only, or code only, or summarize from here (or cancel). Summarize asks for an optional note ("add context for the summary (optional)"; Enter with none, Esc back) and makes one model call; the prompt and the turns after it become one summary in context, the files untouched (T265). A conversation rewind or a summarize puts the prompt back in the input box; nothing is deleted and `/rewind` has no redo (`sessions-and-archive.md` §2.2.1). A resumed session lists its prompts from before the resume too; rewinding the conversation to one ends the session and resumes it from its transcript there, same id, the prompt in the input box; summarize is refused for those (T264). Refused while a turn runs.
+- `/undo`, `/redo`: Undo the last prompt, code and conversation, the prompt back in the input box; each `/undo` goes one further. `/redo` takes back every undo since the last prompt at once and is refused once a prompt has been sent (OpenCode `session.undo`, `session.redo`; P5 #42, `sessions-and-archive.md` §2.2.1). Refused while a turn runs.
+- `/export [file]`: Write this session's conversation as Markdown to `file` (relative to the working directory), or with no file put it on the clipboard through OSC 52. Read from the transcript (sessions-and-archive §2.4). A session too large for the terminal's clipboard is refused with a message, never claimed as copied; the file form still works.
 - `/output-style [name]`: List available output styles (bare) or switch active output style in stream (`<name>`).
+- `/fork`: End this session and continue in a copy of it, a new session forked from it at its last turn; the turns a rewind undid are not copied, and this session is kept as it is (`sessions-and-archive.md` §2.1.1; T266). Refused while a turn runs.
 - `/close-session`: Mark current session closed and exit.
 - `/new`: Start a fresh session.
-- `/skill:<name>`: Load and invoke a specific registered skill.
+- `/skill:<name>`: Load and invoke a specific registered skill; `/<name>` too when no built-in owns the word (`/handoff`).
+- `/context`: What the context holds: the usage Pi measures, the system prompt, context files, skills and tools.
+- `/followup <text>`: Send `text` as the next prompt; typed while a turn runs, it is queued for after it.
 
-### 2.3 Tab Completion of Slash Commands
-`/` then `Tab` offers every slash command the session can run, from one list built the way Claude
+### 2.3 Completion of Slash Commands
+`lykos-tui` completes `/` from every slash command the session can run, sent as the `commands` event
+once the session boots ([engine-server.md](engine-server.md)), from one list built the way Claude
 Code builds its own (`src/commands.ts` `getCommands`: every source merged into one list, each
 command carrying where it came from). The sources, in the order a colliding word is dispatched:
 
@@ -95,14 +98,16 @@ No registered command is dropped silently.
 
 ---
 
-## 3. Interaction Modes & The Approval Modal
+## 3. Interaction Modes & The Approval Prompt
 
 Permission modes persist per project in `~/.lykos/permissions.json` (keyed by project ID) and default to
 **Manual** on first run (ADR-0041). Permission modes cannot be configured in `config.yaml`.
-Modes can be viewed or changed live with `/mode` or `/permissions mode <name>` (or `--mode` on startup).
-`Shift+Tab` is reserved and no longer cycles modes.
+Modes can be viewed or changed live with `/mode` or `/permissions mode <name>` (or `--mode` on startup);
+in `lykos-tui` the command palette's mode entry sends `/mode`. The mode is held by `ModeGate`
+(`lykos/gate/mode-gate.ts`) in front of the gate that asks, in the session `lykos-tui` drives. The line
+session asks for every gated action and has no mode.
 
-The approval modal pauses the session loop when a tool request requires human consent:
+The approval prompt pauses the session loop when a tool request requires human consent:
 
 | Mode | Reads | Writes / Edits | Safe Bash (`npm test`) | Destructive Bash (`rm -rf`) |
 |---|---|---|---|---|
@@ -113,7 +118,11 @@ The approval modal pauses the session loop when a tool request requires human co
 When prompted, answers are:
 - `y` (or `yes`): Allow this single execution.
 - `n` (or `no`): Deny execution.
-- `a` (or `always`): Allow and remember the command pattern (`npm test`) for this project session. Destructive commands cannot be allowlisted.
+- `a` (or `always`): Allow and remember the command pattern (`npm test`) for this project session. Destructive commands cannot be allowlisted; `a` on one allows it once.
+- `f` (or `folder`): Allow and remember the file's folder as an extra directory for this project.
+
+A path rule's ask (a file outside the project, T210) asks in every mode, Auto included, and never
+remembers a command pattern. A protected path (T211) offers only `y`, for this session, and `n`.
 
 ---
 
@@ -130,3 +139,582 @@ When prompted, answers are:
   - `context`: Token usage gauge against provider window limits.
   - `health`: Tool schema overhead and prefix stability indicators.
   - `session`: Session ID, task ID, agent, and model specifications.
+
+---
+
+## 5. The Rust TUI (`lykos-tui`, P5)
+
+`crates/tui` builds `lykos-tui`; `lykos` with no arguments runs it, and so does `lykos run
+--interactive` in a terminal (§0). It ships prebuilt for Windows and Linux x64
+([cli-and-config.md](cli-and-config.md) §1.1). It draws its first frame before it connects, then connects to the
+engine server on a thread, starting one when none answers ([engine-server.md](engine-server.md)).
+It sleeps while nothing on screen moves and draws only after a key, an event or a spinner tick.
+Its layout and keys follow OpenCode's TUI at `4332e24`, read from source; each place in the code
+names the file.
+
+- **Home screen:** the logo and the prompt box centred, the box at most 75 columns wide, the
+  workspace in the bottom row. The first prompt starts a server session with origin `tui`.
+- **Session screen:** the transcript in one bordered box titled with the session's title, newest at
+  the bottom, and the prompt box under it. User messages sit on a raised background behind a bar;
+  tool calls show an icon (`→` read, `←` write or edit, `✱` search, `%` web, `$` shell, `⚙` other;
+  a spinner while running, `✗` on failure).
+- **Prompt box:** a bar in the accent colour (gold while a turn runs), the input, then the model and
+  the thinking effort (`model · effort`, the effort in bold gold). Under it, the footer: the spinner
+  and `esc interrupt` (`esc again to interrupt` once armed) while a turn runs, else the workspace;
+  on the right, `N tokens · P% used` from the last `usage` event.
+
+- **Completion:** `/` at the start of the prompt lists the TUI's own commands, then the session's
+  (from its `commands` event); `@` at the start or after a space lists the workspace's files
+  (`git ls-files -co --exclude-standard`, else a walk capped at 20,000 that skips dot directories,
+  `node_modules` and `target`). Up, Down, `Ctrl+P`, `Ctrl+N` move; `Tab` inserts; `Enter` runs a TUI
+  command and inserts anything else; `Esc` hides. A picked image file becomes an image chip.
+- **Chips:** a paste of 3 lines or more, or over 150 characters, is one `[Pasted ~N lines]` chip,
+  sent expanded. Pasting the same text again right after it, or clicking it, expands it in place.
+  `Ctrl+Shift+V` pastes the text itself, never a chip (on Windows the terminal's own paste key, so the TUI
+  reads ctrl and shift held as the paste's first character arrives).
+- **Queue:** `Ctrl+X Enter` queues the prompt; it shows as `queued: ...` and goes when the session is
+  idle. A new session's first prompt shows as a message at once while the session starts, as OpenCode's
+  does; the footer's spinner says it is starting. `Enter` while a turn runs sends the prompt at once as a steer.
+- **History:** the workspace's `.lykos/history.json`, the last 500 prompts, shared by every TUI in it.
+- **Stash:** `~/.lykos/tui/prompt-stash.jsonl` (or `$LYKOS_TUI_DIR`), the last 50.
+
+TUI commands: `/btw <question>` (asks aside: the answer opens in a dialog, `c` copies it, `Esc`
+closes; the transcript is untouched), `/editor`, `/images`, `/queue` (`Ctrl+U` takes a queued prompt
+back into the box, `Ctrl+D` deletes it), `/stash`, `/stash list` (`Enter` restores, `Ctrl+D`
+deletes), `/stash pop`.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Submit. Before a session is up, the prompt waits and shows as `queued` |
+| `Shift+Enter`, `Ctrl+Enter`, `Alt+Enter`, `Ctrl+J` | New line |
+| `Ctrl+X` then, within 2 s, `Enter` / `E` / `I` / `Q` | Queue the prompt / open `$VISUAL` or `$EDITOR` / the images / the queue |
+| `Esc`, then `Esc` within 5 s | Interrupt the running turn |
+| `Ctrl+C` | Copy the selection; else clear the prompt; on an empty prompt, quit |
+| `Ctrl+D` | Delete forward; on an empty prompt, quit |
+| `Left`, `Right`, `Ctrl+B`, `Ctrl+F`; with `Shift` to select | Move a character |
+| `Up`, `Down` | Move a row; at the first row, the start, then the previous prompt (`Down` mirrors) |
+| `Ctrl+Up`, `Ctrl+Down` | Previous, next prompt |
+| `Ctrl+R` | Search the history by what is typed, newest first; again for the next, `Enter` submits, `Esc` keeps |
+| `Home`, `End`, `Ctrl+A`, `Ctrl+E`; `Alt+A`, `Alt+E` | Line start, end; visual row start, end (`Shift` selects) |
+| `Shift+Home`, `Shift+End`, `Super+A`, triple click | Select to the start, to the end, all |
+| `Alt+F`, `Alt+B`, `Ctrl+Right`, `Ctrl+Left` | Word forward, back (`Shift` selects) |
+| `Alt+D`, `Ctrl+Delete`; `Ctrl+W`, `Ctrl+Backspace`, `Alt+Backspace` | Delete a word forward; back |
+| `Ctrl+K`, `Ctrl+U`, `Ctrl+Shift+D` | Delete to the line end, to the line start, the line |
+| `Ctrl+X` (with a selection), `Ctrl+V` | Cut, paste what was cut or copied |
+| `Ctrl+Z` (Windows), `Ctrl+-`; `Ctrl+Y`, `Ctrl+.`, `Ctrl+Shift+Z` | Undo; redo (200 steps, at most 16 MiB) |
+| Click, drag, double click | Place the cursor, select, select a word |
+| `PageUp`, `PageDown`, `Ctrl+Alt+B`, `Ctrl+Alt+F` | Scroll the transcript a page |
+| Mouse wheel | Scrolls what is under the cursor: a popup's list moves its selection, a page (help, a report, `/context`, a job's output) scrolls, the completion moves its selection, a request's text scrolls; anywhere else the transcript |
+| Mouse over a row, click | Selects the row; a click is `Enter` on it. In a popup's list, the completion and a request's options. In the provider form a click only moves to the field. A click outside a list or a page closes it; outside a form being filled it does nothing |
+| `Ctrl+Alt+Y`, `Ctrl+Alt+E`; `Ctrl+Alt+U`, `Ctrl+Alt+D` | Scroll a line; half a page |
+| `Ctrl+G`, `Alt+Home`; `Ctrl+Alt+G` | Oldest, newest |
+| `Ctrl+P` | The command palette |
+| `Ctrl+H` | Delete a word back, as `Ctrl+W` |
+
+Copying writes OSC 52, so it reaches the system clipboard where the terminal allows it.
+
+**Keybinds (#39).** Every key above is an action with an id, named as OpenCode's `config/keybind.ts`
+names it (`input.undo`, `session.page.up`, `prompt.autocomplete.next`), plus Lykos's own
+(`prompt.copy`, `prompt.cut`, `prompt.history.search`, `dialog.close`, `aside.copy`). The table is
+in `crates/tui/src/keymap.rs`. `tui.keybinds` in any config layer rebinds an action:
+
+```yaml
+tui:
+  keybinds:
+    leader: ctrl+o              # the leader; default ctrl+x
+    app.exit: ctrl+q            # a key list: "a,b"
+    input.undo: [ctrl+z, alt+u] # or a list of keys
+    session.aside: <leader>b    # <leader> then a key
+    input.redo: none            # "none" or false unbinds
+```
+
+The last layer to name an action wins. A key reads `ctrl+`, `alt+`, `shift+`, `super+` before a key
+name (`return`, `escape`, `pageup`, `a`, `-`). An unknown action or a key that does not parse is
+skipped, and the TUI says so in a notice. Where two actions share a key, the first that applies
+runs: `Ctrl+C` copies a selection, else clears the prompt, else asks for a second press within 2 s and then quits
+(#58). `Ctrl+A` selects the whole input on Windows; `Home` is the line's start there.
+
+`Ctrl+P` opens the palette over the dimmed screen: a search box, then every action of the App, Session, Agent,
+System, Prompt and Input groups and every slash command in a Commands group, each under its group's heading, with its
+keys in their own colour and, where it is not a default, the layer that set it. Each heading sits on a band of the
+overlay colour, with a blank row before it. A scroll bar shows where the view is in a longer list, and the bottom row counts the items above and below it
+(`↑ 3  ↓ 25`); the selection stays in the middle of the view except near either end, in every dialog list and in the
+completion, whose count row reads the same. Typing filters it
+by title, group and id (the title weighted twice) across the groups; `Enter` runs the selected row. A setting
+(verbosity, thinking, tool call grouping, scrollbar, animations, diff wrapping, sidebar, terminal pane, terminal title)
+is drawn `Name: value`, the value in the accent colour; `Enter` and `Right` change it to the next value, `Left` to the
+previous, and the palette stays open. Skills are one `Skills` row with their count: it opens a wider list of its
+own, the name on the left and the description on the right over two rows, cut with `…` past them, searched by name
+and description; `Enter`
+puts the skill in the prompt. With no session, or before one has listed its skills, the engine server's `skills.list`
+runs Pi's loader as a session boots it: `~/.lykos/pi-host/skills`, `.lykos/skills`, and in a trusted project
+`.pi/skills` and `.agents/skills` up to the git root, and `~/.agents/skills`; a specialist's roster narrows it in a
+session. `~/.claude/skills` is not read. A palette search finds commands, not skills. A slash command that does what an action does is that action's row,
+its name shown on the right when no key is bound (`Connect a provider` · `/connect`). `/help` lists every key of every group and
+the layer that set it.
+
+**Colours (#58).** `tui.colors` in any config layer sets a role over every theme; the last layer to name a role wins,
+and a value that is not `#rrggbb` or `#rgb` is named in a notice:
+
+```yaml
+tui:
+  colors:
+    accent: "#ff8800"     # the bar, selections in lists, headings
+    selection: "#44415a"  # selected text in the input; default: the accent part way into the surface
+    keybind: "#f6c177"    # keys beside their action; default: the theme's warning colour
+```
+
+The roles: `background` (painted under every cell, as a light theme does), `surface`, `overlay`, `muted`, `subtle`,
+`text`, `error`, `warning`, `success`, `accent`, `selection`, `keybind`. The palette in effect is resolved once per
+theme or colour change; a frame reads it through a reference.
+
+**Toasts (#58).** Short messages (`Copied to clipboard`, `Press ctrl+c again to exit`) show at the top right over
+everything, three at most, each for 2.5 s, 48 columns wide with longer text wrapped, with a bar in its kind's colour:
+success, warning, error or info. Errors that need reading stay in the footer.
+
+**Starting.** Until the engine server has sent its settings, the full screen shows only the logo, a bar and the
+step it is on (`Starting the engine server…`, `Loading settings…`, or the link's error in red), so the footer never
+shows a half-loaded `lykos`. `--mini` skips it.
+
+**Tabs.** A click on a tab in the strip at the top shows that session.
+
+**Context window.** `/context` (a local command, so it completes before the session has booted) opens its own
+window: a 10×10 grid of the window's share by part, the model and `used/window`, then each part (system prompt,
+tools, memory files, skills, messages) with its tokens and items, and free space. The session answers it with a
+`report` event carrying `context` (a `ContextBreakdown`). The head (system prompt and tools) is estimated at four
+characters a token; messages are the measured total less the head when the provider has reported one. `/status`
+shows the head estimate as the context bar until a request measures it, never `unknown`.
+
+**Login.** `/connect` lists every provider Lykos supports, from the engine server's `providers.list`, with or
+without a session: the built-in ones, Pi's, the config's and any with a credential. Each row says `browser`,
+`API key`, `browser` or `browser · API key`, as Pi's runtime offers an OAuth login and
+an API key for it (Anthropic takes both, Google Antigravity a browser only). A provider with no endpoint (one the
+runtime does not know and no declaration gives a base URL, such as a name with only a stored key) is left out. A
+provider already configured (a credential in its pool, its environment
+variable, or a declared source) is drawn in the accent colour. A configured provider opens its accounts: each
+credential in its pool by label, kind and date added, `d` twice to remove one (disabled as `lykos logout` does, never
+deleted, by the server's `credential.remove`), and a row for each way to add another; `Esc` goes back to the list. One
+configured only by its environment variable says so. An unconfigured provider that takes both opens the same dialog
+with its two rows. A browser sign-in opens its popup at once, session or none: the engine server runs it
+(`provider.login`) and opens the browser, the popup shows the link and what the sign-in says, asks what it asks (a
+pasted code, masked when secret), and closes with a toast once the credential is stored; `Esc` ends it. No session
+starts or hears of it, and `/login <name>` typed opens the same popup. One with an API key only has it asked for in a popup of its own, drawn as `•`, and stored by
+the server's `credential.add` without a session. An engine server older than its build on disk, or one that answers `unknown
+method`, says so in a notice. It outlives TUI windows while it has sessions; `Restart the engine server` in the palette
+stops it (its sessions are closed, archived and resumable), the next request starts the one on disk, and this tab's
+session is resumed there.
+
+**Custom providers.** The `/connect` list opens on `Add a custom provider…`, a popup with every field at once, with
+or without a session: `↑`/`↓` or `Tab` move between fields, `←`/`→` change a choice, `Enter` goes to the next field
+and saves on the last; a missing field or the server's refusal shows under the fields and the popup stays. The
+server's `provider.add` writes it: the provider's name, its API (`openai-completions`, `openai-responses`,
+`anthropic-messages`, `google-generative-ai`), its base URL, its model ids (optional: the model picker adds them
+later), and whether to save it to the global or the project `config.yaml`. It appends the declaration to that file's
+`providers:` block, leaving the rest of the file as it was, then stores the key when one was typed (it is optional).
+A new session uses it, as `<name>/<model>`. A name in use or a URL that is not http or https stops it with the
+reason, and nothing is written.
+`/provider add` on the line surface asks the same questions as lines.
+
+**Command answers (#58).** What a session's slash command answers (`/session`, the lists of `/specialist` and
+`/output-style`, `/rewind`, `/compact`, `/mode`, `/model`) comes as a `report` event, not a line of the conversation:
+one short line is a toast (an error toast for `lykos:` refusals), more opens a popup titled with the command, and a
+second answer to the same command joins it. Only a command this TUI sent in the last minute opens one, so a replay or
+another client's command does not. `/context` opens the Context window; `/usage` opens Usage.
+The line surface prints them as before.
+
+Where the keybinds differ from OpenCode on purpose:
+
+- Lykos's defaults are this table's: `app.exit` has no `<leader>q` (that is the queue), and the
+  input actions keep the readline keys of section 2.1 (`Ctrl+A` line start, `Ctrl+Z` undo on Windows, where it does not suspend).
+- A value is a string or a list of strings; OpenCode's key stroke objects are not read.
+- The palette has no suggested section, and leaves out the palette itself.
+- OpenCode's help dialog only points at the palette; Lykos's lists every key.
+- The keys inside the images list (`Left`, `Right`), the aside dialog (`j`, `k`, `q`), the history
+  search and the answer digits are fixed.
+
+**Lists and dialogs (#41).** OpenCode's model, variant, agent, theme and provider dialogs, and its
+status and debug dialogs. A list opens on the row in use (marked `●`), typing filters it, `Enter`
+chooses. The lists come from the session (`session.options`, [engine-server.md](engine-server.md)),
+asked for when it boots and each time a list opens; a choice goes to the session as its slash
+command, so it takes effect on the next request.
+
+| Key | Command | Action |
+| --- | --- | --- |
+| `Ctrl+X M` | `/model` | The models shown: Favorites, Recent, then a section for each connected provider ending in `Select models…`; `Ctrl+F` favorites the row, `Ctrl+A` the providers, `Ctrl+U` usage. Sends `/model provider/id`, then `/effort` when the picker set one; with no session open, the next session starts on it |
+| `F2`, `Shift+F2` | | Next, previous recently used model |
+| `Ctrl+T` | `/effort` | Next thinking effort, wrapping; `/effort` lists them. Sends `/effort level` |
+| `Ctrl+X A`, `Shift+Tab` | `/agents`, `/specialist` | The primary specialists; `Shift+Tab` the next. Sends `/specialist name` |
+| | `/themes` | The themes, previewed under the cursor; `Esc` puts back the one open before |
+| | `/connect`, `/login` | The providers; a browser sign-in and an API key each open a popup of their own, with no session |
+| `Ctrl+X S` | `/status` | Engine server, session, model, effort, specialist, theme, MCP servers |
+| | `/mcps` | MCP servers |
+| | `/debug` | Version, OS, terminal, session id, model; `c` copies |
+
+`model.cycle_favorite`, `variant.list`, `usage.show`, `theme.switch_mode` and the rest have no key
+by default; the palette runs them. With an argument, `/model`, `/effort` and `/specialist` go to the session
+as before; `/login <name>` opens the sign-in popup. **A command never starts a session.** With none open, `/model`,
+`/effort` and `/specialist` set what the next session starts with (it is told them before the first prompt), the
+effort and specialist lists come from the server's `session.preview`, and a command that needs a conversation
+(`/compact`, `/fork`, `/undo`) says so in a toast. A skill (`/skill:name`) is a prompt, and starts one as a prompt
+does. Eight themes: `sky` (the default), `rose-pine`, `rose-pine-moon`,
+`rose-pine-dawn`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`; the mode switch goes to the other of a
+dark and light pair. The theme, the last 10 models (newest first), the favorites and what the model picker set are
+kept in `~/.lykos/tui/state.json` (or `$LYKOS_TUI_DIR`).
+
+**Model picker.** `Select models…` opens a provider's models, as the server's `provider.models` lists them: a
+provider declared with a base URL is asked (`GET <baseUrl>/models`, its key in the header its API takes), its
+declared models first; any other is the runtime's catalog. Every model starts hidden from the model list. Each takes
+two rows: `●` shown or `○` hidden and its name, the effort a switch to it sets on the right (`auto` leaves the
+session's), and its id under it. `Enter` shows or hides it, `←`/`→` change the effort, `Ctrl+R` or `F2` renames it
+(its id stays; an empty name or its own puts its own back), typing filters, and `Esc` goes back to the model list on
+that provider's row. A model only the endpoint lists is added to the provider's declaration when shown
+(`provider.model.add`, the project file when it declares the provider, else the global one), so a new session can
+switch to it.
+
+**Empty lists.** A list says what it waits for only while its call is out (`Loading providers…`); a search that
+matches nothing says `No match`, and a call that failed leaves its list empty, saying so, with the error in a toast
+or notice.
+
+Where the lists differ from OpenCode on purpose:
+
+- Thinking effort replaces variants, and its cycle wraps with no "default" step.
+- Primary specialists replace agents.
+- Before a session exists the effort and specialist lists are empty: they come from the session's own runtime. The
+  model list is the picker's choice, so it shows with no session.
+- The model list shows no usage limits; the usage dialog shows Lykos's own cost and cache figures.
+- No variant list follows a model choice.
+- Eight palettes, no `ansi16` or `mono`, and no `theme.mode.lock`; `ui.theme` in config is not read.
+- A Lykos session connects to no MCP servers, so both dialogs say so.
+- An API key is never typed into the TUI.
+- The debug dialog has no date row.
+- `/usage` and `/thinking` stay the session's commands.
+
+**Sessions and tabs (#42).** OpenCode's session list, tabs, timeline and session actions. The list,
+rename, archive, export and worktrees go to the engine server (`sessions.history`, `session.rename`,
+`session.archive`, `session.export`, `session.move`, `worktree.*`,
+[engine-server.md](engine-server.md)); fork, compact, undo and redo go to the session as `/fork`,
+`/compact`, `/undo` and `/redo` (section 2.2).
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+X N` | New session: the home screen; the next prompt starts it in a new tab |
+| `Ctrl+X L`; `Ctrl+O` | The session list of this project; of every project |
+| `Alt+Up`, `Alt+Down`, `Ctrl+Shift+Tab`, `Ctrl+Tab` | Previous, next tab, wrapping |
+| `Alt+Shift+Up`, `Alt+Shift+Down` | Previous, next unread tab: a session whose turn ended out of sight |
+| `Ctrl+X W`; `Ctrl+Shift+T` | Close the tab (the session keeps running on the server); reopen the last closed, where it was |
+| `Ctrl+X 1` to `Ctrl+X 0`, `Ctrl+1` to `Ctrl+0` | Tab 1 to 10 |
+| `Ctrl+X G` | The timeline: the session's prompts, newest first; `Enter` scrolls to one |
+| `Ctrl+X C`; `Ctrl+X U`; `Ctrl+X R` | Compact; undo the last prompt, back into the box; redo |
+| `Ctrl+X X` | Export: P22's Markdown, as `lykos export` writes it, to `session-<id>.md` in the workspace |
+
+TUI commands: `/sessions` (bare `/resume` too) the list, `/open` every project's, `/timeline`,
+`/worktrees`; bare `/new` and `/rename` run the TUI's, and with an argument go to the session.
+
+The session list shows root sessions that are not archived: Pinned first, then by the UTC day they
+started (`Today`, else the date), newest first, the one shown marked `●` and a pinned one `*`.
+Typing filters by title. `Enter` shows the session's tab when it runs here, and resumes it otherwise
+(it asks nothing: the TUI agrees to the resume's preflight). `Ctrl+D` twice archives it: the ledger row and
+transcript stay, `lykos session --all` lists it, and a resume clears the archive. `Ctrl+R` renames it,
+`Ctrl+F` pins it (kept in `state.json`), `Ctrl+A` switches between this project and every project.
+
+Manage workspaces (`/worktrees`) lists the
+project's worktrees. `Enter` or `Ctrl+M` moves the session there: it closes and resumes in that
+directory under the same ledger session. `Ctrl+A` creates a worktree, at
+`~/.lykos/worktrees/<project id>/<name>` on the branch `lykos/<name>`; `Ctrl+D` twice removes one,
+committing work left in it onto its branch first; `Ctrl+R` refreshes. A worktree session writes the
+main checkout's ledger, so removing the worktree leaves its sessions listed and resumable.
+`session.cd` moves the session to a directory typed in.
+
+No key by default, the palette runs them: rename, fork, copy the transcript (Markdown), copy the
+session id, manage workspaces, change directory, tab history back and forward, and the parent and
+child sessions (`session.parent`, `session.child.first`, `.next`, `.previous`, from the ledger's
+parent links).
+
+Where sessions and tabs differ from OpenCode on purpose:
+
+- Delete archives; nothing is deleted.
+- Fork forks at the current point (P22's `/fork`), not from a chosen message.
+- Worktrees are on a `lykos/<name>` branch, not detached, and removal commits what was left in them.
+- The parent and child keys (OpenCode's arrows) and tab history forward (`Ctrl+I`, which a terminal
+  sends as `Tab`) are unbound; `session.rename` has no key in the prompt, where `Ctrl+R` searches
+  history.
+- The session list groups by UTC day and shows the start time; there is no server-side search and
+  no quick-switch slots (they share `Ctrl+X 1` to `9` with the tabs).
+- Export writes Markdown only, to the workspace, named after the session; there are no export options.
+- The timeline shows no times: the transcript keeps none per message.
+- Closing a tab leaves its session running until the server's idle timeout.
+
+The transcript (#44) follows OpenCode's `routes/session/grouping/` and `message-parts.tsx`:
+
+- **Verbosity:** low, the default, folds each run of tool calls and thoughts between answers into
+  one activity line (`3 commands, 1 edit, 2 thoughts, 4 reads`). Medium shows each call, grouping
+  only adjacent thoughts (while thinking is hidden) and adjacent reads and searches (while grouping
+  is on); high opens those groups. A click on a group's line opens or closes it.
+- **Message actions:** a double click or a `Ctrl`+click on a prompt opens OpenCode's message dialog:
+  Revert (code and conversation back to before it, the prompt back in the box), Copy, and Fork (a copy of
+  the session cut before it, the prompt in its box). The session finds the prompt by its text
+  (`/__rewind`, `/__fork`). The transcript keeps what was reverted, as it does after `/undo`.
+- **Thinking:** hidden by default; shown, each thought is muted italic text under a `Thought` line.
+- **Markdown:** an answer is drawn, not shown as source (`markdown.rs`, no dependency). Headings lose their `#`
+  and take a colour a level (the first underlined); `**bold**` is bold in a warmer colour; `*italic*`,
+  `~~struck~~` (SGR 9), `<u>underline</u>` and `++underline++` take their attribute; `==marked==` and `` `code` ``
+  take a background. Links (`[text](url)`, `<url>`, a bare `https://`) are underlined in the accent, and a click
+  opens them in the system's browser (`http`, `https` and `mailto` only); the link under the mouse is drawn
+  reversed. Lists get bullets by depth, task
+  boxes `☐`/`☑`, quotes a bar (GitHub's `[!NOTE]` and the rest a label), `---` a rule, tables a box that fits the
+  width. A fenced code block has a background, its language above it, and its syntax coloured (C-like,
+  `#`-comment and SQL-like languages, HTML and XML, CSS, diffs, whose added and removed lines are tinted
+  their whole width). The inline HTML a model writes (`<b>`, `<i>`,
+  `<s>`, `<mark>`, `<a href>`, `<sub>`, `<sup>`, `<br>`, `<img>`, `<h1>`…, `<details>`) and entities are drawn
+  too. LaTeX (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) loses its delimiters and takes a background of its own;
+  what has a character is drawn as it (`\pi` → π, `\leq` → ≤, `x^2` → x², `x_1` → x₁, `\frac{a}{b}` → a/b,
+  `\sqrt{x}` → √x, `\mathbb{R}` → ℝ), and a display formula is centred. `$5 and $10` stays as it is.
+- **The turn's word:** while the model works, a word from `BUSY_WORDS` (`transcript.rs`: `Prowling`, `Noodling`,
+  `Hornswoggling`…) stands where `Thinking` would, the same one a turn in the transcript and beside the spinner in
+  the footer (`⠋ Prowling… esc interrupt`).
+- **Selection:** a drag in the transcript selects rows (shown reversed). `Ctrl+C` copies it; off
+  Windows, letting go copies it, as OpenCode does. `/copy` and `<leader>y` copy the last answer.
+- **Scrollbar:** off by default; on, a one-column bar at the transcript's right edge.
+- **Animations:** off, the spinner is a still `⋯`.
+
+| Key | Action |
+| --- | --- |
+| `Alt+End` | The last user message |
+| `<leader>y` | Copy the last assistant message |
+
+No key by default, the palette runs them: next and previous message, next and previous user message,
+toggle thinking, the scrollbar, tool call grouping, animations and diff wrapping, and cycle
+verbosity. The toggles and verbosity persist in `~/.lykos/tui/state.json` (`thinking`, `scrollbar`,
+`grouping`, `verbosity`, `diffWrap`, `animations`).
+
+A settled block (nothing in it runs and something came after it) is laid out once; the settled run
+from the first item is shared from frame to frame, so a frame lays out only what is new. A scroll
+moves the rows with a scroll region (DECSTBM, then SU or SD) and writes only the rows that came in.
+Scrolling a 10,000-message transcript (`node scripts/tui/scroll-measure.mjs`, release build,
+Windows 10 ConPTY, 2026-11-24), frame time at the median: 0.279 ms for a 3-row wheel step, 0.162 ms
+for 1 row; 100 messages take 0.271 ms, so the cost does not grow with the transcript. The gate's
+frame limit (0.187 ms + 0.010) comes from a 1-row streaming frame: the 3-row step is over it and
+waits on the maintainer.
+
+**Mini mode** (`lykos-tui --mini`, OpenCode's `src/mini`): the transcript goes into the terminal's
+own scrollback, and only a footer is drawn, on the bottom rows: the rows still changing (at most 4),
+then the prompt box. It starts with a blank row and `▪ lykos mini v<version> · <workspace>`; on exit it
+prints `Session  <title>` and `Continue lykos-tui --mini -s <ledger id>`. `-s ID` resumes that session.
+A row is printed once, when it can no longer change: a prompt when sent, a streaming answer up to its
+last full row, a group when it settles.
+
+Where the transcript and mini mode differ from OpenCode on purpose:
+
+- The toggles and verbosity persist in `state.json`, not in the config.
+- There is no file context part.
+- At low verbosity a shell call reads `$ bash ls`.
+- Mini mode has no `Ctrl+L`, takes no mouse, and cannot open a group once it is in the scrollback;
+  when the footer shrinks, the rows it gives back stay blank until the next print.
+
+
+**Prompts, the diff viewer and the sidebar (#46).** OpenCode's `routes/session/permission.tsx`,
+`question.tsx`, `component/diff-viewer/` and `routes/session/sidebar.tsx` at `4332e24`.
+
+- **Approval:** the prompt box gives its place to `△ Permission required`, then what the tool will
+  do: `$ command` for a shell call, `← Edit path` with the patch for a write or edit (split past 120
+  columns, wrapped while diff wrapping is on), `→ Read path`, or `⚙ title`. The decisions the gate
+  offers are buttons; `←` `→` (`h` `l`) move, `↑` `↓` scroll the body, `Enter` confirms, `Esc` denies
+  (or leaves full screen), `Ctrl+F` shows the
+  request full screen. A standing decision (allow always, allow for a folder) replaces the body with
+  what it will keep allowing. `y`, `a`, `f` and `n` still answer directly. The answer goes to the
+  gate unchanged, so each decision behaves and is recorded as it is in the line TUI.
+- **Question:** `Question`, the title, the options numbered, then `N+1. Type your own answer` and
+  `If nobody answers: …`. A number, `↑` `↓` and `Enter`, or typing answers; `Esc` dismisses it with
+  the stated assumption. A question that wants more conversation is answered by typing.
+- **Diff viewer:** `/diff` (or the palette's `Open diff viewer`) shows the workspace's changes from
+  the engine server's `vcs.diff` (12 lines of context, `.lykos/` left out, untracked files included).
+  Docked on the right half from 108 columns, full screen below that or with `f`. Each file is a card
+  with its counts; past 88 columns a file list sits beside the cards; past 100 the patch splits.
+
+| Key | Action |
+| --- | --- |
+| `Esc` `q` | Close |
+| `j` `k`, `↓` `↑` | Line down, up |
+| `PageDown` `Ctrl+F`, `PageUp` `Ctrl+B` | Page |
+| `Ctrl+D`, `Ctrl+U` | Half page |
+| `Home` `gg`, `End` `G` | Start, end |
+| `]`, `[` | Next, previous hunk |
+| `n` `Alt+Down`, `p` `Alt+Up` | Next, previous file |
+| `b` | File list |
+| `s` | One file at a time |
+| `d` | Source: All (the branch against its merge base with the default branch), Committed, Uncommitted (against `HEAD`), Last turn |
+| `v` | Split or unified |
+| `f` | Full screen |
+| `m` | Mark the file reviewed: it folds to its header, and in single-file mode the next opens |
+| `?` | Every shortcut |
+
+- **Sidebar:** 42 columns on the right with the session's title, Context (tokens, % used, $ spent),
+  Todo (the `todo` tool's latest list; past two items a click on the header folds it to
+  `▶ Todo (N remaining)`), Modified Files (each file the session's tools changed, `+added -removed`)
+  and the working directory. It shows by itself past 120 columns. `<leader>b` hides it (remembered
+  as `sidebar: "hide"` in `state.json`) or shows it; on a narrower screen it opens over the session
+  on a dimmed backdrop and `Esc` closes it. The wheel scrolls it. The diff viewer takes its place.
+
+Measured (`node scripts/tui/scroll-measure.mjs`, release build, Windows 10 ConPTY, 2026-11-24,
+120x40 unless named): a 5,000-line diff (`--diff 5000`) opens in 6.2 to 9.4 ms (its first frame
+lays it out once) and scrolls at a median 0.358 ms per 3-row wheel step (p95 0.47), 0.219 to 0.23 ms
+per row. A 10,000-message transcript at 160 columns (`--cols 160`) scrolls at 0.364 ms with the
+sidebar beside it and 0.316 ms with it hidden (`--no-sidebar`). Both are over the gate's 1-row frame
+limit (0.187 ms + 0.010) and wait on the maintainer.
+
+Where #46 differs from OpenCode on purpose:
+
+- A denial takes no message: there is no reject-with-reason stage. The buttons take no mouse.
+- `d` cycles the sources where OpenCode opens a dialog, and there is no base-branch chooser.
+- Last turn is the uncommitted diff kept to the files the last turn's tools wrote.
+- The file list is flat, not a directory tree.
+- Docked, the viewer takes every key but `Ctrl+C`; a pending request takes them first.
+- Untracked files are diffed in process (jsdiff), not by git.
+- The viewer's choices (file list, split, wrap, reviewed files) last until it closes.
+- The sidebar has no MCP section (a Lykos session connects to no MCP server), no getting-started
+  card and no branch after the directory; its title is cut to one row; Modified Files is a Lykos
+  section; the Todo fold is not saved.
+
+**The old TUI's numbers and commands (#53).** The footer's right side is the old footer's triad
+(`renderers/line.ts`): `↑1.2k ⚡74% ✎ 500 ↓230 · 12,345 tokens · 6% used · cache 74% fresh · $0.038 ·
+⚠ context.full +1`, fresh input, cache hit, cache write and output, then the context, the cache gauge,
+the run's cost and the most severe alert with how many more. It takes two thirds of the row at most
+and drops whole segments, widest first, down to the cost and the alert. The usage dialog
+(`usage.show`) lists every counter, the cache reading, the recorded outcome (`verified by
+verification_command`, or `unverified`) and each alert with its remedy. Every number is the engine
+server's (`UsageData`, [engine-server.md](engine-server.md)), formatted as the old TUI formats it; the
+TUI opens no ledger and derives no number. The gate's verdict, the seal's checks and the outcome
+question at a session's end are the session's system lines, as in the old TUI. `/mode`,
+`/permissions`, `/output-style` and `/credential` are palette actions (Agent) that send the command;
+`/login` is `Connect a provider` and `/specialist` is `List specialists`.
+
+**The old TUI's last commands (#55).** `/handoff` (a skill), `/self-compact` (a Pi extension command),
+`/context` and `/followup` are not the TUI's, so it sends them to the session as typed and the session
+runs them as the old TUI's did (section 2.2). `/mode` holds: the session `lykos-tui` drives applies the
+interaction modes (section 3), which before #55 only the old TUI's approval prompt did. The old session
+browser's this-project and every-project scopes are the session list's `Ctrl+X L` and `Ctrl+O`, and
+`Ctrl+A` inside it; its preview pane of a session's last turns is not carried. In a terminal, `lykos resume`
+opens `lykos-tui`, at the session when given an id (`--fork` is refused there: `/fork` forks); without
+one, it prints the numbered list.
+
+**MCP and `lykos run` sessions (#51).** The session list shows the project's delegated sessions
+that run now, with their owner and state (`MCP running`, `lykos run waiting`). `Enter` on one
+watches it (`session.watch`, [engine-server.md](engine-server.md)): its owner keeps running it, the
+tab title starts with the owner, and the transcript shows as it is written. A prompt steers it as
+`lykos steer` does, an interrupt stops it as `lykos stop` does, and closing the tab ends only the
+watch. Where it differs from OpenCode, which runs every session in its own server: the session
+stays with its owner, so ownership and `lykos recover` are unchanged; a watch follows one session
+id, not a successor started at the context limit; only the cwd's project is listed; a waiting
+session's question is answered with a prompt.
+
+**Background work, the composer and the terminal pane (#48).** OpenCode's `component/prompt/composer/`,
+`component/dialog-shell-output.tsx`, `component/terminal-pane.tsx`, `context/session-terminals.tsx`
+and the `terminal.*` actions of `app.tsx` at `4332e24`.
+
+- **Background:** a shell call that holds the turn for 3 s adds `Press ctrl+b to move running work to
+  the background` under the transcript. `Ctrl+B` (`session.background`) calls the engine server's
+  `session.background`: the call becomes a job, its output goes to the job's log, and the turn goes
+  on. `Ctrl+B` does nothing while no shell call holds the turn.
+- **Composer:** the footer shows what runs, `down 1 script · 2 subagents · 1 shell`. `Down` at the
+  end of the prompt (`session.child.first`) opens the composer in the prompt box's place, on the
+  first busy tab. `←` `→` change tab, `↑` `↓` move (`↑` on the first row closes it), `Esc` closes.
+
+| Tab | Rows | `Enter` | `Ctrl+D` |
+| --- | --- | --- | --- |
+| Shell | the session's background jobs | its output, read every half second, `↑` `↓` scroll | stops the job's process tree |
+| Subagents | the turn's `agent` calls | opens that child session | interrupts the turn |
+| Scripts | the turn's `eval` calls | | interrupts the turn |
+| Terminals | each terminal, then `+ New terminal` | shows it | |
+
+- **Terminal pane:** a shell on a pseudo-terminal (ConPTY on Windows, `openpty` elsewhere), drawn
+  from a vt100 screen with 1,000 lines kept. The right half of the screen from 108 columns, the whole
+  screen below that. The sidebar steps aside while it shows; the diff viewer covers it.
+
+| Key | Action |
+| --- | --- |
+| `<leader>t` | Show or hide the terminal pane; opens a terminal when there is none |
+| `<leader>down` | The composer's Terminals tab |
+| `<leader>up` | Close the shown terminal |
+| `<leader>right`, `<leader>left` | Focus the terminal, the session |
+| `Ctrl+Z` | Suspend `lykos-tui` to the shell (not on Windows) |
+
+  A focused terminal takes every key but the leader; a click focuses it, a click outside the pane
+  gives the keys back. Its title is what the shell sets, else the shell's name.
+- **Terminal title:** the window's title is `Lykos`, or `Lykos | <session title>` (past 40 characters, 37 and `…`), and is
+  cleared on exit. `Disable terminal title` in the palette turns it off (`terminalTitle` in
+  `state.json`).
+
+Where #48 differs from OpenCode on purpose:
+
+- Terminals belong to `lykos-tui`, one list for every session, and end with it. OpenCode keeps them
+  on its server, per session.
+- Subagents are the turn's `agent` calls, so `Ctrl+D` interrupts the turn and `Enter` opens the
+  k-th child session by start time. Scripts are `eval` calls.
+- `Down` opens the composer only at the end of the prompt, not while history is browsed.
+- The shell is PowerShell on Windows, `$SHELL` (else `/bin/sh`) elsewhere.
+- The pseudo-terminal is Lykos's own, on ConPTY and `openpty` alone. portable-pty loaded WS2_32,
+  advapi32, RPCRT4, sechost and bcrypt at every start, about 0.75 MB of memory.
+
+Where it differs from OpenCode on purpose: the context use is always on screen as well as in the
+sidebar, the metadata row has no specialist name, the footer shows the
+workspace without its git branch (reading it would cost a process at startup), and
+`--trust-workspace` replaces a trust dialog. In the prompt:
+
+- `Ctrl+X` cuts when text is selected, and is the leader otherwise.
+- `Ctrl+R` searches the history, as the old TUI did, where OpenCode renames the session.
+- `Home` and `End` are line start and end; OpenCode's are buffer start and end.
+- `Ctrl+A` is line start, so select all is `Super+A` or a triple click.
+- `Enter` steers a running turn even with prompts queued; only `Ctrl+X Enter` queues.
+- `/images` lists the attached images by path, without a pixel preview, to keep the binary small.
+- `/btw` takes its question on the command line; there is no question dialog.
+- On Windows, ConPTY drops the bracketed-paste markers, so keys that arrive together (two or more
+  already waiting, then gaps under 15 ms) are read as one paste and its returns as newlines. ConPTY can hand
+  over a paste's first character alone; a key typed alone within 30 ms before a paste is taken back into it.
+- A paste into a dialog's search or text field (the palette, a list, sessions, the timeline, a name)
+  types it there on one line; a dialog that answers keys, such as a confirmation, takes none of it.
+- Undo keeps at most 16 MiB of snapshots, so a large paste cannot hold memory without bound.
+
+1 MB in the prompt (in-process, release build, 2026-11-23, Windows 10:
+`cargo test --release -p lykos-tui -- --ignored --nocapture one_megabyte`): a keystroke's handling
+and frame take 12 us at the median with the paste as a chip, and 6.93 ms (p95 10.57 ms) with it
+expanded into the buffer. End to end in a pty on Linux (`node scripts/tui/paste-measure.mjs`,
+podman, 2026-11-23), keystroke to screen at the median: 10.84 ms with no paste, 10.66 ms with the
+chip, 10.60 ms with 1 MB of text; the paste reaches the screen as a chip in 40 ms.
+
+Speed (rule 10): `node scripts/tui/gate.mjs target/release/lykos-tui.exe --ready "Ask anything"`
+holds startup, keystroke latency, frame time, idle CPU, peak memory and binary size against
+`bench/tui-limits.json`. `node scripts/tui/tui-test.mjs` drives it end to end in a pty against the
+real server and the scripted session child. `node scripts/tui/mcp-session.mjs` runs a person's first
+session (`lykos`, trust, a prompt, the palette, `/help`, quit) through the TUI-testing MCP server
+[tui-mcp](https://github.com/nvms/tui-mcp) 1.2.3 (MIT): every key is sent and every check is read
+with its tools (`TUI_MCP` names its `src/server.js`, else `npx -y tui-mcp@1.2.3` runs it).
+
+**The P5 demonstration (#56), 2026-11-24.** `node scripts/tui/compare.mjs --runs 5` measures each TUI in a
+real pty in this repository, with nothing sent to a model: startup from spawn to the input box on screen,
+keystroke to screen over 200 keystrokes, idle CPU over 3 s after typing settles, and the resident memory
+of the whole process tree the TUI starts (lykos-tui counts the `lykos` launcher and the engine server
+it starts). lykos-tui is started as a user starts it: `lykos`. One machine: Windows 10 19045, 8 logical
+processors; Linux is podman on WSL2 (kernel 6.18.58.1) on the same machine, 11.7 GiB given to the VM.
+
+| TUI | Platform | Startup p50 | Keystroke p50 / p95 | Idle CPU ms/s | Memory |
+| --- | --- | --- | --- | --- | --- |
+| lykos-tui | Windows | 268 ms | 15.56 / 16.17 ms | 0 | 206 MiB |
+| OpenCode 1.19.4 | Windows | 4109 ms | 15.68 / 31.73 ms | 4.5 | 607 MiB |
+| Claude Code 2.1.235 | Windows | 1059 ms | 15.63 / 16.24 ms | 1089.8 | 669 MiB |
+| Codex 0.171.0-alpha.13 (`--no-daemon`) | Windows | 108 ms | 47.75 / 278.91 ms | 0 | 453 MiB |
+| lykos-tui | Linux | 50 ms | 10.59 / 11.63 ms | 0 | 212 MiB |
+| OpenCode 1.19.6 | Linux | 3687 ms | 9.79 / 16.13 ms | 20.0 | 574 MiB |
+| Claude Code, Codex | Linux | unmeasured | unmeasured | unmeasured | unmeasured |
+
+Notes on method. On Windows every keystroke number near 15.6 ms is ConPTY's own cadence, not the TUI's.
+Codex draws its input box while it still says "loading", and accepts typing then (first echo at
+166 ms). Claude Code's idle CPU is its tree, which includes the MCP servers its configuration starts.
+OpenCode waits for the terminal's colour replies before its first frame; the harness answers them as
+a real terminal does. Claude Code and Codex were not installed in the Linux container: each needs a
+signed-in account to show its input box, and no credential was copied in.
+
+Result: lykos-tui uses the least memory and no idle CPU on both platforms, and has the lowest p95
+keystroke latency. It does not match or beat every other TUI on all four: Codex starts faster on
+Windows (108 ms against 268 ms, of which about 80 ms is Node starting the `lykos` launcher), and
+OpenCode's median keystroke is lower on Linux (9.79 ms against 10.59 ms). The person's session
+(demonstration 1) has not been run. P5 stays open.

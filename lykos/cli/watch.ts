@@ -3,22 +3,22 @@
 // only — never opens Ledger.open() (migrations write).
 
 import { join } from "node:path";
-import { collect } from "../tui/collect.js";
-import { derive } from "../tui/derive.js";
-import { setIoMode, stdoutWrite } from "../tui/io-mode.js";
-import { renderJson } from "../tui/renderers/json.js";
+import { collect } from "../surface/collect.js";
+import { derive } from "../surface/derive.js";
+import { setIoMode, stdoutWrite } from "../io-mode.js";
+import { renderJson } from "../surface/renderers/json.js";
 import {
   DEFAULT_WATCH_PANELS,
   renderWatchFrame,
   type WatchPanel,
-} from "../tui/renderers/watch.js";
-import { findDefaultSessionId, readChildSessions, resolveSessionSnapshot } from "../tui/session-snapshot.js";
-import { ensureBuiltinSegments } from "../tui/segments/builtin.js";
-import { validateFormat } from "../tui/segments/registry.js";
-import { detectColorCapability, detectGlyphSet, resolveTheme, type ColorFlag } from "../tui/theme/resolve.js";
+} from "../surface/renderers/watch.js";
+import { findDefaultSessionId, readChildSessions, resolveSessionSnapshot } from "../surface/session-snapshot.js";
+import { ensureBuiltinSegments } from "../surface/segments/builtin.js";
+import { validateFormat } from "../surface/segments/registry.js";
+import { detectColorCapability, detectGlyphSet, resolveTheme, type ColorFlag } from "../surface/theme/resolve.js";
 import type { ResolvedConfig } from "../config/types.js";
 import type { LiveSnapshot } from "../ledger/live.js";
-import type { RunSnapshot } from "../tui/types.js";
+import type { RunSnapshot } from "../surface/types.js";
 
 export interface RunWatchOptions {
   cwd: string;

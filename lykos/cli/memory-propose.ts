@@ -16,7 +16,7 @@
 // activate a memory" is a fact about what is reachable, not a rule somebody
 // has to remember.
 
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import {
   acceptProposal,
   DEFAULT_PROMOTE_AFTER,

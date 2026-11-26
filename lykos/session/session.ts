@@ -133,7 +133,7 @@ import {
 } from "../loop/fallback.js";
 import { HANDOFF_USAGE_ENTRY_TYPE } from "../loop/self-compact.js";
 import { CompactionLatencyTracker, LatencyTracker } from "../loop/latency.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { extensionFailureNotice, renderSessionEndReports, type ChildSessionResult, type SessionEndEvent } from "../extensions/api.js";
 import { readSessionMeta, transcriptDir, writeSessionMeta } from "./transcript.js";
 import { buildContinuationPrompt, decideContinuation, type ContinuationPlan } from "../loop/continuation.js";
@@ -155,10 +155,23 @@ export {
   type BootedStandaloneSession,
 } from "../session.js";
 
+/**
+ * T268: an image attached to the prompt (`@shot.png` in `lykos run`): Pi's `ImageContent` fields plus the file it was
+ * read from, so a refusal can name it.
+ */
+export interface ImageAttachment {
+  path: string;
+  mimeType: string;
+  /** Base64. */
+  data: string;
+}
+
 export interface RunStandaloneTaskInput {
   /** The project directory this task runs against. */
   workspace: string;
   prompt: string;
+  /** T268: images sent with `prompt` as image parts. A model that takes no image input refuses the session before boot. */
+  images?: ImageAttachment[];
   /** `provider/model`, e.g. `deepseek/deepseek-v4-flash`. Default: T20's documented default (parseProviderModel(undefined)). */
   model?: string;
   /** Caller override. Default: T20's documented hop-0 surface, same as `runTask()`. */
@@ -494,7 +507,7 @@ export interface StandaloneSessionState {
   modelSwitches?: number;
   modelPath?: string;
   modelSwitchedPending?: boolean;
-  /** Specialists ticket 04: mid-session `/specialist <name>` switches, same shape as the model fields above. Set directly by the surface that applies a switch (`tui/interactive-surface.ts`), not observed off the event stream — unlike a model switch, a specialist switch is never inferred from a message. */
+  /** Specialists ticket 04: mid-session `/specialist <name>` switches, same shape as the model fields above. Set directly by the surface that applies a switch (`surface/interactive-surface.ts`), not observed off the event stream — unlike a model switch, a specialist switch is never inferred from a message. */
   specialistSwitches?: number;
   specialistPath?: string;
   specialistSwitchedPending?: boolean;
@@ -713,8 +726,52 @@ export function subscribeStandaloneUsage(
         break;
     }
   });
+  // T265: a summarize's summarizer call raises no session event; the rewind reports it, and it is a compaction's call.
+  // Optional chaining because a hand-built test session has no rewind.
+  const stopSummaries = booted.rewind?.onSummarizerCall((c) => addCompactionCall(c.usage, c.latencyMs));
 
-  return { state, unsubscribe };
+  return {
+    state,
+    unsubscribe: () => {
+      unsubscribe();
+      stopSummaries?.();
+    },
+  };
+}
+
+/**
+ * A model call made outside a turn (a `/btw` aside, P5 #38), counted as `subscribeStandaloneUsage` counts a
+ * compaction's: in the totals, and as a `calls` row of its own source, so the ledger ingests it with the rest.
+ */
+export function addSideCall(
+  state: StandaloneSessionState,
+  msg: { provider?: string; model?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number; reasoning?: number; cost?: { total?: number } } },
+  source: string,
+  latencyMs?: number,
+): void {
+  const u = msg.usage ?? {};
+  state.usage.input += u.input ?? 0;
+  state.usage.output += u.output ?? 0;
+  state.usage.cacheRead += u.cacheRead ?? 0;
+  state.usage.cacheWrite += u.cacheWrite ?? 0;
+  state.usage.cacheWrite1h += u.cacheWrite1h ?? 0;
+  state.usage.reasoning += u.reasoning ?? 0;
+  state.usage.calls.push({
+    hop: "direct",
+    source,
+    ...(msg.provider !== undefined ? { provider: msg.provider } : {}),
+    ...(msg.model !== undefined ? { model: msg.model } : {}),
+    input: u.input ?? 0,
+    output: u.output ?? 0,
+    cacheRead: u.cacheRead ?? 0,
+    cacheWrite: u.cacheWrite ?? 0,
+    cacheWrite1h: u.cacheWrite1h ?? 0,
+    reasoning: u.reasoning ?? 0,
+    // No price from the provider means no figure: never a zero-dollar default.
+    ...(u.cost?.total !== undefined ? { costUsd: u.cost.total } : {}),
+    ts: Date.now(),
+    ...(latencyMs !== undefined ? { latencyMs } : {}),
+  });
 }
 
 /** Builds the same `DelegateSnapshot` shape the one-shot and interactive paths both feed to `ingestDelegateSnapshot()`. */
@@ -1202,6 +1259,12 @@ export function sessionEditedPaths(toolCalls: readonly HitQualityToolCall[], cha
  * T39.1: when `parentSessionId` is set, this run is a Lykos-spawned child —
  * same lifecycle, `execution_shape=subagent`, resumable=1.
  */
+/** T268: why `model` cannot be sent `images`, or undefined when it can (or there are none). */
+export function refuseImages(model: { provider: string; id: string; input: readonly string[] }, images: readonly ImageAttachment[] | undefined): string | undefined {
+  if (images === undefined || images.length === 0 || model.input.includes("image")) return undefined;
+  return `${model.provider}/${model.id} takes no image input, so ${images.map((i) => i.path).join(", ")} cannot be attached`;
+}
+
 export async function runStandaloneTask(input: RunStandaloneTaskInput): Promise<RunStandaloneTaskResult> {
   // T183: the caller is told what was skipped on every outcome, not only a finished session. A delegated session
   // always ends in a result (a throw becomes an `error`), so that does not depend on whether anything was skipped.
@@ -1375,6 +1438,10 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
     ...(input.nativeProviders !== undefined ? { nativeProviders: input.nativeProviders } : {}),
   });
   const model = await resolveHostModel(modelSpec, modelRuntime);
+  // T268: an attached image goes to a model that declares image input, or the session does not start.
+  const imageRefusal = refuseImages(model, input.images);
+  if (imageRefusal !== undefined) return { status: "error", message: `${imageRefusal}; choose a model that takes images with --model` };
+  const promptImages = input.images?.map((i) => ({ type: "image" as const, mimeType: i.mimeType, data: i.data }));
   // T184: the interaction mode, when the caller named one, decides whether this session writes and whether it asks.
   const readOnly = input.readOnly === true || config.readOnly === true || (input.interactionMode !== undefined && !modeWrites(input.interactionMode));
   const autoApprove = input.autoApprove === true;
@@ -1383,7 +1450,8 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   // handed its parent's executor and records nothing of its own.
   let containment: Containment | undefined;
   // The container is labelled with the id the session will carry, so that id exists before the session does.
-  const containedSessionId = input.resume?.fromSessionId ?? (input.continuation === undefined ? input.sessionId : undefined) ?? randomUUID();
+  // T266: a fork's id is its own, minted with its plan; a resume keeps the original's.
+  const containedSessionId = (input.resume !== undefined ? (input.resume.fork?.sessionId ?? input.resume.fromSessionId) : undefined) ?? (input.continuation === undefined ? input.sessionId : undefined) ?? randomUUID();
   if (ownsContainment) {
     try {
       containment = await startContainment({
@@ -1542,7 +1610,8 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
       ? {
           resumeTaskListFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           resumeHandoffFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
-          sessionIdOverride: input.resume.fromSessionId,
+          sessionIdOverride: input.resume.fork?.sessionId ?? input.resume.fromSessionId,
+          ...(input.resume.firstTurn !== undefined ? { firstTurn: input.resume.firstTurn } : {}),
         }
       : (containment !== undefined && containment.record.used !== "off") ||
           ((input.workTree !== undefined || input.sessionId !== undefined) && input.continuation === undefined)
@@ -1649,6 +1718,10 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
         }
       : {}),
     ...(input.trustSource !== undefined ? { trustSource: input.trustSource } : {}),
+    // T266: a fork's row is new, and says which session and turn it was copied from.
+    ...(input.resume?.fork !== undefined
+      ? { forkedFrom: { sessionId: input.resume.fromSessionId, ...(input.resume.fork.turn !== undefined ? { turn: input.resume.fork.turn } : {}) } }
+      : {}),
     ...(input.resume?.taskId !== undefined
       ? { taskId: input.resume.taskId }
       : input.taskId !== undefined
@@ -1690,16 +1763,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   if (input.resume !== undefined) {
     // T57's `injectReplay`, for this shape: the marker first, then the
     // conversation appended after the frozen head without starting a turn.
-    recorder?.resumeMarker({
-      from: input.resume.fromSessionId,
-      events: input.resume.replayEvents,
-      user_turns: input.resume.replayUserTurns,
-      estimate_tokens: input.resume.estimateTokens,
-      estimate_usd: input.resume.estimateUsd,
-      price_version: input.resume.priceVersion,
-      ...(input.resume.flags !== undefined ? { inherited_flags: input.resume.flags } : {}),
-    });
-    if (input.resume.recovery !== undefined) recorder?.recovery(input.resume.recovery);
+    recorder?.continues(input.resume);
     await session.sendCustomMessage(
       { customType: "lykos_resume", content: input.resume.replayText, display: false },
       { triggerTurn: false },
@@ -1715,7 +1779,7 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
   const fallbackPolicy = resolveFallbackPolicy(config.models.fallback);
   const fallbackState = newFallbackState(modelSpec);
   try {
-    await session.prompt(input.prompt);
+    await session.prompt(input.prompt, promptImages !== undefined ? { images: promptImages } : undefined);
     await session.waitForIdle();
   } catch (err) {
     runState = "error";
@@ -1741,6 +1805,9 @@ async function runStandaloneTaskInner(input: RunStandaloneTaskInput, skippedSink
 ${decision.note}
 `);
         const altModel = await resolveHostModel(decision.to, modelRuntime);
+        // T268: the prompt is sent again with its images, so the fallback must take images too.
+        const altRefusal = refuseImages(altModel, input.images);
+        if (altRefusal !== undefined) throw new Error(altRefusal);
         // `persist: false` — session-only. Writing the user's global model
         // default because their provider had a bad minute would be the same
         // boundary violation T83 refused for the retry policy.
@@ -1749,7 +1816,7 @@ ${decision.note}
         // The conversation survives the switch, so this continues the task
         // rather than restarting it. The warm prefix does not survive, and
         // the note above already said so.
-        await session.prompt(input.prompt);
+        await session.prompt(input.prompt, promptImages !== undefined ? { images: promptImages } : undefined);
         await session.waitForIdle();
         runState = "done";
         sawError = undefined;

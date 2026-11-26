@@ -37,6 +37,7 @@ import { observeSkillCall, observeSkillRead, type SkillInvocationState, type Ski
 import { SKILL_TOOL_NAME } from "../tools/skill-tools.js";
 import { resolveActualToolArgs, resolveActualToolName, tierForToolCall } from "../tools/tool-call.js";
 import { createCheckpoint, type CheckpointDeps } from "./checkpoint.js";
+import { withoutAutoEffort } from "../config/model-efforts.js";
 import { isFileChangingCall } from "../tools/tool-call.js";
 import type { HookRegistry } from "./hooks.js";
 import { specCheckRefusal } from "../delegate/spec-check.js";
@@ -166,6 +167,15 @@ export interface HarnessExtensionOpts {
     isExtensionTool?: (name: string) => boolean;
   };
   /**
+   * T263: told at every turn start the session-wide turn that started and the
+   * checkpoint holding the tree it started from: the one written then, or the
+   * ref's tip when the tree had not changed. Undefined when there is none (no
+   * checkpointing, or git failed). The live session's rewind reads it.
+   */
+  onTurnStart?: (turn: number, checkpoint: string | undefined) => void;
+  /** T264: the first turn's number: a resumed process continues the session's count. Absent, 0. */
+  firstTurn?: number;
+  /**
    * T105: the hook surface. Present → `pre_tool` runs on Pi's `tool_call`
    * event (which sees every tool, including the `read` that
    * `gate/approval.ts` deliberately does not shadow) and `post_tool` runs
@@ -230,7 +240,7 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
   const events = opts.events ?? NULL_EVENT_SINK;
   // T146: outside the factory so a reload of the extension does not restart the count.
   const checkpointTurns: { next: number; unstamped: { turn: number; tree: string } | undefined } = {
-    next: 0,
+    next: opts.firstTurn ?? 0,
     unstamped: undefined,
   };
   // T105: notes raised by a `pre_tool` hook, waiting for a result to ride on.
@@ -238,6 +248,9 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
   return {
     name: "lykos-harness",
     factory: (pi) => {
+      // A model on `auto` sends no effort: Pi would send the "auto" its thinkingLevelMap holds (`config/model-efforts.ts`).
+      pi.on("before_provider_request", (event, ctx) => withoutAutoEffort(event.payload, ctx.model, ctx.thinkingLevel));
+
       // T150: the T109 continuation threshold watch that lived here is now the
       // `lykos-continuation` default extension (`extensions/defaults/`).
 
@@ -260,6 +273,7 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
           const result = createCheckpoint(deps, `before turn ${turn}`, { turn });
           if (result.status === "created") obs.checkpoints += 1;
           checkpointTurns.unstamped = result.status === "unchanged" ? { turn, tree: result.tree } : undefined;
+          opts.onTurnStart?.(turn, result.status === "skipped" ? undefined : result.commit);
         });
         // T146: a turn that began on an unchanged tree wrote no commit, so
         // its "before" state is only the previous checkpoint — which belongs
@@ -278,6 +292,10 @@ export function createHarnessExtension(opts: HarnessExtensionOpts): InlineExtens
           if (result.status === "created") obs.checkpoints += 1;
           return undefined;
         });
+      } else if (opts.onTurnStart !== undefined) {
+        // T263: no checkpoints, but the turns are still counted the same way.
+        const told = opts.onTurnStart;
+        pi.on("turn_start", () => told(checkpointTurns.next++, undefined));
       }
 
       // P4 T149: a read-only child refuses anything that is not a read,

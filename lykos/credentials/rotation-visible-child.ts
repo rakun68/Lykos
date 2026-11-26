@@ -54,7 +54,6 @@ const result = await runInteractiveStandaloneSession({
   tools: [],
   lineSource,
   askOutcome: false,
-  noFullscreen: true,
 });
 process.stderr.write(`\nrotation-visible-child: ${JSON.stringify({ status: result.status })}\n`);
 process.exit(result.status === "ok" ? 0 : 1);

@@ -25,8 +25,8 @@ import { openLedgerSync, type Ledger } from "../ledger/use.js";
 
 import { readTranscript } from "../session/transcript.js";
 import { loadSessions, type SessionListRow } from "../session/listing.js";
-import { stdoutWrite } from "../tui/io-mode.js";
-import { truncate } from "../tui/format.js";
+import { stdoutWrite } from "../io-mode.js";
+import { truncate } from "../surface/format.js";
 import type { SessionSource } from "./sessions.js";
 
 export interface SearchFilters {

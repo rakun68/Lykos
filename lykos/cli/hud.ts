@@ -6,13 +6,13 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { collect, type ClaudeCodeStatuslineInput } from "../tui/collect.js";
-import { derive } from "../tui/derive.js";
-import { setIoMode, stdoutWrite } from "../tui/io-mode.js";
-import { renderJson } from "../tui/renderers/json.js";
-import { renderStderrLine } from "../tui/renderers/stderr.js";
-import { renderStatusline } from "../tui/renderers/statusline.js";
-import { detectColorCapability, detectGlyphSet, resolveTheme, type ColorFlag } from "../tui/theme/resolve.js";
+import { collect, type ClaudeCodeStatuslineInput } from "../surface/collect.js";
+import { derive } from "../surface/derive.js";
+import { setIoMode, stdoutWrite } from "../io-mode.js";
+import { renderJson } from "../surface/renderers/json.js";
+import { renderStderrLine } from "../surface/renderers/stderr.js";
+import { renderStatusline } from "../surface/renderers/statusline.js";
+import { detectColorCapability, detectGlyphSet, resolveTheme, type ColorFlag } from "../surface/theme/resolve.js";
 import type { ResolvedConfig } from "../config/types.js";
 
 export interface RunHudOptions {

@@ -16,7 +16,7 @@ import { hostGit } from "../git/host-git.js";
 import type { Ledger } from "../ledger/use.js";
 import { isTestFileName } from "./result-flags.js";
 
-export type PackEntryKind = "rules" | "traps" | "glossary" | "doc" | "history" | "file" | "test" | "verification";
+export type PackEntryKind = "rules" | "traps" | "glossary" | "doc" | "history" | "file" | "content" | "test" | "verification";
 
 export interface PackEntry {
   kind: PackEntryKind;
@@ -67,6 +67,12 @@ const QUOTE_CAP = 3000;
 const PACK_CAP = 24000;
 const LIST_CAP = 8;
 const FILE_CAP = 200_000;
+// Task files pasted whole: the session reads them anyway, and a paste saves it one model turn each. Boxie's replay of
+// 65 Gemini first implement rounds (2026-11-10): 24,000 a file and 48,000 in all paste the files behind 230 of 685
+// reads made before the first edit; larger caps add little (32,000 a file adds 15). A file over the cap is not pasted.
+// These count apart from PACK_CAP, which bounds the rest of the pack.
+export const PASTE_MAX = 24_000;
+export const PASTE_TOTAL = 48_000;
 
 function atBase(input: { repo: string; base: string }, rel: string): string | undefined {
   const run = hostGit(["show", `${input.base}:${rel}`], input.repo, { raw: true, maxBuffer: FILE_CAP * 8 });
@@ -185,6 +191,14 @@ export function buildContextPack(input: ContextPackInput): ContextPack {
     }
   }
 
+  // The task files' contents at the base, in the order the task names them, while the caps allow.
+  let pasted = 0;
+  for (const [rel, text] of contents) {
+    if (text.length > PASTE_MAX || pasted + text.length > PASTE_TOTAL || text.includes("\0")) continue;
+    pasted += text.length;
+    entries.push({ kind: "content", path: abs(rel), text });
+  }
+
   // Glossary terms the task and its files use, quoted from GLOSSARY.md at the base.
   const glossary = at("GLOSSARY.md");
   if (glossary !== undefined) {
@@ -251,8 +265,14 @@ function renderPack(base: string, root: string, entries: readonly PackEntry[]): 
   section("Recent history", ["history"], (e) => `${e.path}\n${e.text}`);
   section("Related tests", ["test"], (e) => `- ${e.path} (${e.text})`);
   section("Verification command", ["verification"], (e) => e.text);
-  const text = lines.join("\n");
-  return text.length <= PACK_CAP ? text : `${text.slice(0, PACK_CAP).trimEnd()}\n[... pack cut at ${PACK_CAP} characters]`;
+  const joined = lines.join("\n");
+  const text = joined.length <= PACK_CAP ? joined : `${joined.slice(0, PACK_CAP).trimEnd()}\n[... pack cut at ${PACK_CAP} characters]`;
+  // Pasted files come last, outside PACK_CAP: their own caps bound them, and a file cut mid-way would mislead.
+  const pastes = entries.filter((e) => e.kind === "content");
+  if (pastes.length === 0) return text;
+  const fence = (t: string): string => "`".repeat(Math.max(3, ...[...t.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+  const blocks = pastes.map((e) => `### ${e.path}\n${fence(e.text)}\n${e.text.replace(/\n$/, "")}\n${fence(e.text)}`);
+  return `${text}\n\n## Task file contents at the base\nAlready read for you: do not read these again unless you changed them.\n\n${blocks.join("\n\n")}`;
 }
 
 /** Records the pack against its session. A session has one pack; recording again replaces it. */

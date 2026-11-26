@@ -23,6 +23,13 @@ export const DEFAULT_SECRET_PATHS: readonly string[] = containmentPathPlan(shipp
 
 /** T223: default maximum live concurrent sessions for the MCP worker. */
 export const DEFAULT_MCP_MAX_SESSIONS = 4;
+/**
+ * P5 #35: how long the engine server stays up with no client and nothing running. Measured on Windows: a cold start
+ * takes 98 ms (median of 10, max 113; measured 2026-11-23 on Windows 10), and an idle server holds 58 MiB. A restart is cheap and an idle server is
+ * not, so the wait only covers closing and reopening the TUI. The number itself is a choice; see
+ * docs/reference/engine-server.md.
+ */
+export const DEFAULT_TUI_SERVER_IDLE_SECONDS = 60;
 /** T224: default timeout in seconds for unanswered questions in a delegated session. */
 export const DEFAULT_MCP_ASK_TIMEOUT = 600;
 /** T226: default size of the warm pool of session-child processes. */
@@ -335,6 +342,11 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
     image: "",
     global_image: "",
   },
+  tui: {
+    server_idle_seconds: DEFAULT_TUI_SERVER_IDLE_SECONDS,
+    keybinds: {},
+    colors: {},
+  },
   mcp: {
     max_sessions: DEFAULT_MCP_MAX_SESSIONS,
     ask_timeout: DEFAULT_MCP_ASK_TIMEOUT,
@@ -349,6 +361,7 @@ export const SHIPPED_DEFAULTS: ResolvedConfig = {
     cycle_max_rounds: 5,
     cycle_max_fixes: 3,
     cycle_stall_after: 2,
+    review_engine: "session",
   },
   // T210 (ADR-0042): path rules default to empty sets of read and write rules per layer.
   path_rules: {

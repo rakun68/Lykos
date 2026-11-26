@@ -113,8 +113,8 @@ _Avoid_: cache miss, prompt invalidation
 ### The agent and its interface
 
 **TUI**:
-The terminal interface: the full-screen surface and the append-only HUD behind one seam. It is the
-only interface the product ships; the desktop supervisor is planned and will be a second adapter,
+The terminal interface: `lykos-tui`, the Rust client that runs sessions on the engine server (P5). The
+TypeScript full-screen surface was removed in P5 #55. It is the only interface the product ships; the desktop supervisor is planned and will be a second adapter,
 not a replacement.
 _Avoid_: UI (unqualified), desktop app, frontend
 
@@ -144,6 +144,8 @@ _Avoid_: worker, delegate, worker run, sandbox run, delegated run
 **Worktree**:
 In a delegated session, the checkout Lykos makes outside the project for one writing call, on a
 `lykos/` branch named from the session id. It is removed when the call ends and the branch stays.
+In `lykos-tui`, a named one made from Manage workspaces, at `~/.lykos/worktrees/<project id>/<name>`
+on `lykos/<name>`, that a session moves to; removing it commits what was left onto its branch.
 _Avoid_: sandbox copy, scratch checkout, clone
 
 **Write in place**:
@@ -209,10 +211,58 @@ The SQLite database recording every session and every model call. It is written 
 never by an agent.
 _Avoid_: telemetry store, metrics database, analytics
 
+**Benchmark instance**:
+One task of a public benchmark: a repository at a base commit, an issue's problem statement, and
+hidden tests. The session sees the repository and the statement; the hidden tests run only after it
+ends, and decide whether the issue is resolved.
+_Avoid_: benchmark task (for the imported files), eval case, sample
+
+**Hidden tests**:
+A benchmark instance's tests, test patch and expected results, kept where no session can read them
+and run only by `lykos bench check` on the finished branch.
+_Avoid_: sealed tests (a sealed test is in the session's view and may not be edited), held-out tests
+
 **Session**:
 One continuous run of the agent. A resume continues the session it names rather than creating a new
 one.
 _Avoid_: conversation, run, thread
+
+**Rewind**:
+A person taking a live session back to before one of its earlier prompts, those from before a resume
+included: its code, its conversation, or both. The session stays the same session; nothing is deleted and nothing can be
+redone. Only a person rewinds, never the agent.
+_Avoid_: undo, revert, reset, rollback
+
+**Turn number**:
+A turn's place in its session, counted from 0 across every process the session ran in, so one number
+names one turn even after a resume. Sessions recorded before this rule counted each process from 0
+again, and keep their numbers.
+_Avoid_: turn index, step
+
+**Undone branch**:
+The turns a conversation rewind took the session back past. They stay in the transcript and their
+calls stay in the session's cost; the model is no longer sent them.
+_Avoid_: deleted turns, discarded history, abandoned branch
+
+**Active branch**:
+A session's conversation as the model has it now: its transcript without the undone branches.
+_Avoid_: current branch, live history
+
+**Fork**:
+A new session that continues a copy of another session's active branch, on the same task. The
+session it was copied from is left as it was. A fork is a new session; a resume is not.
+_Avoid_: clone, branch, copy, duplicate
+
+**Summarize from here**:
+A rewind that keeps the conversation up to an earlier prompt and replaces that prompt and every
+turn after it with one summary, written by the model, steered by an optional note from the person.
+The summarized turns stay in the transcript; the files are not touched.
+_Avoid_: partial compaction, collapse, squash
+
+**Export**:
+A session's conversation taken out of Lykos as Markdown: prompts, answers, and tool calls with their
+results. The archive keeps the session; an export is a copy for reading elsewhere.
+_Avoid_: dump, share, transcript (the transcript is the archive's own record)
 
 **Seal**:
 The record that freezes a test writer's failing tests, plus the test harness, against later change on
@@ -249,6 +299,11 @@ _Avoid_: known failures list, pre-existing failures, reference run
 The Markdown file a coordinator hands Lykos for one task, in Boxie's format: frontmatter naming its
 files, sealed tests, verification command, scope and issue, and a body that is the brief.
 _Avoid_: ticket file, job spec
+
+**Attachment**:
+A file sent with a `lykos run` brief because the prompt names it with `@path`: a text file as its
+contents, an image as image input to a model that takes images.
+_Avoid_: mention (the `@path` text itself), upload, file reference
 
 **Boot row**:
 A session's ledger row written at boot, before the session runs anything. Ingest finalises it. A row
@@ -487,3 +542,120 @@ _Avoid_: failover, key cycling, fallback (unqualified)
 **Cooldown**:
 A span during which a credential is skipped, set when it hits a rate or usage limit.
 _Avoid_: block, ban, backoff
+
+### The engine server
+
+**Engine server**:
+The one `lykos serve` process per user that runs every interactive session and serves them to the
+TUI and the desktop app over a local pipe or socket.
+_Avoid_: daemon, backend, host, server (unqualified)
+
+**Server session**:
+An interactive session running under the engine server, in a `lykos server-session` child of its
+own.
+_Avoid_: remote session, attached session
+
+**Home screen**:
+What `lykos-tui` shows before its first prompt: the logo and the prompt box, centred.
+_Avoid_: landing page, start screen
+
+**Session screen**:
+What `lykos-tui` shows once a session runs: its transcript in one box, the prompt box under it.
+_Avoid_: chat view, conversation pane
+
+**Session tab**:
+One session open in `lykos-tui`, named on the transcript box's top edge. Closing it leaves the session
+running; it is unread when a turn ends while another tab is shown.
+_Avoid_: window, pane, buffer
+
+**Archived session**:
+A session the TUI's session list deleted: its ledger row has `archived_utc`, it stays in
+`lykos session --all` and resumable, and a resume clears the archive. Nothing is deleted.
+_Avoid_: deleted session, trashed session
+
+**Aside**:
+A side question asked with `/btw`, answered from the session's context with no tools. It enters no
+transcript and no turn; its call counts in the session's usage, with ledger phase `aside`.
+_Avoid_: side chat, ephemeral prompt
+
+**Chip**:
+One character in the prompt that stands for a large paste (`[Pasted ~N lines]`) or an attached image
+(`[Image N]`), and is sent expanded.
+_Avoid_: token, pill, placeholder
+
+**Activity line**:
+One transcript line that stands for a run of tool calls and thoughts between answers, at low
+verbosity: `3 commands, 1 edit, 2 thoughts, 4 reads`. A click opens it.
+_Avoid_: tool group, summary row
+
+**Verbosity**:
+How much of a turn `lykos-tui`'s transcript shows: low (activity lines), medium (each call), high
+(each call, groups open).
+_Avoid_: detail level, log level
+
+**Mini mode**:
+`lykos-tui --mini`: the transcript printed into the terminal's own scrollback, a footer drawn under it.
+_Avoid_: inline mode, compact mode
+
+**Diff viewer**:
+`lykos-tui`'s `/diff`: the workspace's changes from `vcs.diff`, file by file, against one of four
+sources (All, Committed, Uncommitted, Last turn), docked on the right or full screen.
+_Avoid_: diff panel, review pane
+
+**Sidebar**:
+The 42 columns on the right of a `lykos-tui` session: title, context, todos, modified files,
+working directory. Shown by itself on a wide screen; `<leader>b` toggles it.
+_Avoid_: info panel, side pane
+
+**Background job**:
+A shell command the engine server runs apart from the turn, its output kept in a log: started as a
+background command, or a shell call moved off the turn with `Ctrl+B`.
+_Avoid_: task, background process
+
+**Composer**:
+The list that takes `lykos-tui`'s prompt box's place on `Down`: the session's background jobs,
+subagents, scripts and terminals, each with what it does on `Enter` and `Ctrl+D`.
+_Avoid_: job list, task panel
+
+**Terminal pane**:
+A shell `lykos-tui` runs on a pseudo-terminal and draws on the right half of the screen, or the
+whole screen when narrow. `<leader>t` toggles it.
+_Avoid_: embedded terminal, console
+
+**Watched session**:
+An MCP or `lykos run` session shown in `lykos-tui` while its owner keeps running it: the engine
+server reads its owner row and transcript, a prompt steers it and an interrupt stops it.
+_Avoid_: attached session, adopted session
+
+**Triad**:
+The footer's token counts for a session: fresh input, cache hit, cache write and output, followed by
+the context, the cache gauge, the cost and the top alert. `lykos-tui` shows the same
+numbers, read from the ledger by the engine server; the interface formats them and derives none.
+_Avoid_: token bar, stats line
+
+**Queued prompt**:
+A prompt held by `lykos-tui` until its session is idle, then sent; queued with `Ctrl+X Enter`.
+_Avoid_: pending message
+
+**Prompt stash**:
+Prompts set aside with `/stash` and brought back with `/stash pop` or `/stash list`, kept across
+runs.
+_Avoid_: drafts, saved prompts
+
+**Action**:
+Something `lykos-tui` does on a key, named by an id (`input.undo`), with default keys that
+`tui.keybinds` rebinds.
+_Avoid_: command (that is a slash command), shortcut
+
+**Leader**:
+The key (`Ctrl+X` by default) that a two-key binding starts with, written `<leader>q`.
+_Avoid_: prefix key, chord
+
+**Command palette**:
+The `Ctrl+P` list of every action, filtered as typed, that runs the one chosen.
+_Avoid_: command menu, quick open
+
+**Theme pair**:
+A dark and a light palette of one family (`rose-pine` and `rose-pine-dawn`) that `lykos-tui`'s mode
+switch moves between.
+_Avoid_: light theme, dark mode (that is one half of the pair)

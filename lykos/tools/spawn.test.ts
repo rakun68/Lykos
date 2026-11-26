@@ -11,7 +11,7 @@ import { resolveStandaloneTools } from "../tools.js";
 import { buildAgentTool, ensureParentSessionForSpawn, type SpawnContext } from "./spawn.js";
 import { AutoApproveGate } from "../gate/approval.js";
 import { PONYTAIL_RULESET_TEXT } from "../session/ponytail-head.js";
-import { createSpecialistGuardHandler } from "../tools/specialist-guard-extension.js";
+import { createSpecialistGuardHandler } from "./specialist-guard-extension.js";
 import type {
   createAgentSession,
   CreateAgentSessionOptions,

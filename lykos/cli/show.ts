@@ -44,6 +44,7 @@ import {
   transcriptDir,
   transcriptFilePath,
   verifyTranscriptHash,
+  type RewindEvent,
   type SessionMeta,
   type TranscriptEventInput,
   type TranscriptEventRecord,
@@ -52,7 +53,7 @@ import { clampVerificationOutput } from "../session/verify-outcome.js";
 import { checkpointsForSession, isGitRepo, shortHash, type CheckpointEntry } from "../loop/checkpoint.js";
 import { PRUNE_NOTICES } from "../loop/tool-result-prune.js";
 import { SHAKE_NOTICE } from "../loop/shake.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import { readStrength, writeStrength } from "./show-strength.js";
 
 export interface ShowOptions {
@@ -74,11 +75,14 @@ interface SessionRow {
   verification_cmd: string | null;
   verification_output: string | null;
   verification_exit_code: number | null;
+  /** T266: set when this session is a fork. */
+  forked_from: string | null;
+  forked_from_turn: number | null;
 }
 
 const SESSION_COLUMNS =
   "id, task_id, brief, started_utc, ended_utc, outcome, outcome_source, model, capture_mode, transcript_path, transcript_sha256, " +
-  "verification_cmd, verification_output, verification_exit_code";
+  "verification_cmd, verification_output, verification_exit_code, forked_from, forked_from_turn";
 
 /** T144: how much of the gate's stored output `lykos show` prints. The ledger keeps up to 4000 characters. */
 export const GATE_EXCERPT_LIMIT = 1200;
@@ -131,6 +135,9 @@ function writeHeader(row: SessionRow, verified: boolean, eventCount: number, tas
   stdoutWrite(` model      ${row.model ?? "?"}\n`);
   stdoutWrite(` started    ${row.started_utc}\n`);
   stdoutWrite(` ended      ${row.ended_utc ?? "(not ended)"}\n`);
+  if (row.forked_from !== null) {
+    stdoutWrite(` forked     from ${row.forked_from}${row.forked_from_turn !== null ? ` at turn ${row.forked_from_turn}` : ""}\n`);
+  }
   const taskStateSuffix = taskState === "disputed" ? " (task: disputed)" : "";
   stdoutWrite(` outcome    ${outcomeLabel(row.outcome, row.outcome_source, row.ended_utc)}${taskStateSuffix}\n`);
   stdoutWrite(` events     ${eventCount}\n`);
@@ -293,6 +300,86 @@ export function fileChangingTurns(
       const checkpoint = checkpoints.find((c) => c.turn === t.turn);
       return checkpoint !== undefined ? { ...t, checkpoint } : t;
     });
+}
+
+/** T263: one rewind of the live session, with the branch it undid. */
+export interface SessionRewind {
+  /** P5 #42: "redo" for a redo, which takes back the last `undos` undos. */
+  restore: RewindEvent["restore"] | "redo";
+  /** P5 #42: a rewind made by `/undo`. */
+  undo?: true;
+  /** P5 #42: a redo's count of the undos it took back. */
+  undos?: number;
+  to_turn?: number;
+  /** The undone branch: its first and last turn, and the prompts that started them. Absent when only code was restored. */
+  undone?: { turns: [number, number]; prompts: string[] };
+  /** T265: a summarize's turns, now one summary in context, the prompts that started them, and the person's note. */
+  summarized?: { turns: [number, number]; prompts: string[]; note?: string };
+}
+
+/**
+ * T263: the session's rewinds, read from its `rewind` events. A prompt belongs to
+ * the first turn that starts after it; the undone branch's prompts are the ones
+ * whose turn falls inside it.
+ */
+export function sessionRewinds(events: ReadonlyArray<TranscriptEventInput>): SessionRewind[] {
+  const promptTurns: Array<{ text: string; turn: number }> = [];
+  let pending: string | undefined;
+  const out: SessionRewind[] = [];
+  for (const e of events) {
+    if (e.kind === "user_message") pending = e.text;
+    else if (e.kind === "turn_start" && pending !== undefined) {
+      promptTurns.push({ text: pending, turn: e.turn });
+      pending = undefined;
+    } else if (e.kind === "rewind") {
+      const range = e.undone_turns;
+      const summarized = e.summarized_turns;
+      const promptsIn = (r: [number, number]) => promptTurns.filter((p) => p.turn >= r[0] && p.turn <= r[1]).map((p) => p.text);
+      out.push({
+        restore: e.restore,
+        ...(e.undo === true ? { undo: true as const } : {}),
+        ...(e.to_turn !== undefined ? { to_turn: e.to_turn } : {}),
+        ...(range !== undefined ? { undone: { turns: range, prompts: promptsIn(range) } } : {}),
+        ...(summarized !== undefined
+          ? { summarized: { turns: summarized, prompts: promptsIn(summarized), ...(e.note !== undefined ? { note: e.note } : {}) } }
+          : {}),
+      });
+    } else if (e.kind === "redo") {
+      out.push({ restore: "redo", undos: e.undos });
+    }
+  }
+  return out;
+}
+
+/** T263: each rewind, and the undone branch it left in the transcript. Nothing when there was none. */
+function writeRewinds(rewinds: readonly SessionRewind[]): void {
+  for (const r of rewinds) {
+    if (r.restore === "redo") {
+      stdoutWrite(` redo       took back ${r.undos === 1 ? "the undo" : `${r.undos} undos`} before it
+`);
+      continue;
+    }
+    const what =
+      r.restore === "both"
+        ? "code and conversation"
+        : r.restore === "code"
+          ? "code only"
+          : r.restore === "summarize"
+            ? "summarized"
+            : "conversation only";
+    const where = r.restore === "summarize" ? ` from turn ${r.to_turn}` : ` to before turn ${r.to_turn}`;
+    stdoutWrite(` ${r.undo === true ? "undo  " : "rewind"}     ${what}${r.to_turn !== undefined ? where : ""}\n`);
+    if (r.undone !== undefined) {
+      stdoutWrite(`            undone branch: turns ${r.undone.turns[0]}-${r.undone.turns[1]}, kept in the transcript and the cost\n`);
+      for (const p of r.undone.prompts) stdoutWrite(`              ${p.split("\n")[0]}\n`);
+    }
+    if (r.summarized !== undefined) {
+      const [first, last] = r.summarized.turns;
+      stdoutWrite(`            summarized: turns ${first}-${last}, one summary in context, kept in the transcript and the cost\n`);
+      if (r.summarized.note !== undefined) stdoutWrite(`            note: ${r.summarized.note}\n`);
+      for (const p of r.summarized.prompts) stdoutWrite(`              ${p.split("\n")[0]}\n`);
+    }
+  }
 }
 
 /**
@@ -593,6 +680,30 @@ function formatEventBlock(record: TranscriptEventRecord & TranscriptEventInput):
       lines.push(`${head}  ${record.action}${record.detail ? `  ${record.detail}` : ""}`);
       break;
     }
+    case "rewind": {
+      // T263: the turns above it stay where they are; this says which were undone.
+      lines.push(
+        `${head}  ${record.restore}${record.undo === true ? "  (undo)" : ""}${record.to_turn !== undefined ? `  to turn ${record.to_turn}` : ""}`,
+      );
+      lines.push(`    prompt: ${record.prompt}`);
+      if (record.undone_turns !== undefined) lines.push(`    undone: turns ${record.undone_turns[0]}-${record.undone_turns[1]}`);
+      // T265: the summarized turns stay above it too; the model is sent the summary in their place.
+      if (record.summarized_turns !== undefined) {
+        lines.push(`    summarized: turns ${record.summarized_turns[0]}-${record.summarized_turns[1]}`);
+      }
+      if (record.note !== undefined) lines.push(`    note: ${record.note}`);
+      if (record.summary !== undefined) lines.push(`    summary: ${record.summary.split("\n")[0]}`);
+      if (record.checkpoint !== undefined) lines.push(`    code from checkpoint ${shortHash(record.checkpoint)}`);
+      if (record.safety_checkpoint !== undefined) lines.push(`    the tree before it: checkpoint ${shortHash(record.safety_checkpoint)}`);
+      break;
+    }
+    case "redo": {
+      // P5 #42: the undos it took back stay above it.
+      lines.push(`${head}  took back ${record.undos} undo(s)${record.redone_turns !== undefined ? `  turns ${record.redone_turns[0]}-${record.redone_turns[1]}` : ""}`);
+      if (record.checkpoint !== undefined) lines.push(`    code from checkpoint ${shortHash(record.checkpoint)}`);
+      if (record.safety_checkpoint !== undefined) lines.push(`    the tree before it: checkpoint ${shortHash(record.safety_checkpoint)}`);
+      break;
+    }
     case "error": {
       lines.push(head);
       lines.push(`    ${record.message}`);
@@ -666,6 +777,7 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
     const checkpoints = sessionCheckpoints(meta, row.id, ledgerPath);
     const credentials = sessionCredentials(ledger, row.id);
     const turns = fileChangingTurns(events, checkpoints.entries);
+    const rewinds = sessionRewinds(events);
     const sealEvents = sessionSealEvents(ledger, row.id);
 
     // T168 part B: the transcript just read, so the edit figures come from it and not from a second read.
@@ -685,6 +797,8 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
           outcome: row.outcome,
           outcome_source: row.outcome_source,
           capture_mode: row.capture_mode,
+          forked_from: row.forked_from,
+          forked_from_turn: row.forked_from_turn,
           verification_cmd: row.verification_cmd,
           verification_exit_code: row.verification_exit_code,
           verification_output: row.verification_output,
@@ -697,6 +811,7 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
         transcript: { path, sha256: row.transcript_sha256, verified, truncated },
         meta,
         file_changing_turns: turns,
+        rewinds,
         strength,
         events,
       };
@@ -720,6 +835,7 @@ export function runShow(ledgerPath: string, sessionId: string, opts?: ShowOption
     writeCommits(commits);
     writeCompactions(compactions);
     writeCheckpoints(turns, checkpoints.note);
+    writeRewinds(rewinds);
     writeStrength(strength);
     writeResumeContract(meta);
     writeSealEvents(sealEvents, meta);

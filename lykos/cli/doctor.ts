@@ -6,8 +6,7 @@
 // wire — is checked by a real run: its `calls` rows carry the split
 // (`lykos show`).
 
-import { createHash } from "node:crypto";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -54,13 +53,13 @@ import { workerPlusHostMeasurement } from "../tools.js";
 import { discoverPostEditCommand } from "../loop/post-edit.js";
 import { discoverGateCommand } from "../gate/verify-gate.js";
 import { listSkillFiles } from "../session/skills.js";
-import { collect } from "../tui/collect.js";
-import { derive } from "../tui/derive.js";
-import { stdoutWrite } from "../tui/io-mode.js";
-import { renderStderrLine } from "../tui/renderers/stderr.js";
-import { renderS0 } from "../tui/renderers/conversation.js";
-import { renderWatchFrame } from "../tui/renderers/watch.js";
-import { resolveTheme } from "../tui/theme/resolve.js";
+import { collect } from "../surface/collect.js";
+import { derive } from "../surface/derive.js";
+import { stdoutWrite } from "../io-mode.js";
+import { renderStderrLine } from "../surface/renderers/stderr.js";
+import { renderS0 } from "../surface/renderers/conversation.js";
+import { renderWatchFrame } from "../surface/renderers/watch.js";
+import { resolveTheme } from "../surface/theme/resolve.js";
 import { runCost } from "./cost.js";
 import {
   providerMatrix,
@@ -70,7 +69,6 @@ import {
 import { redactSecrets } from "../ledger/redact.js";
 import { pruneNotice, pruneRulesOn } from "../loop/tool-result-prune.js";
 import { describeRetryPolicy, readRetryPolicy } from "../loop/retry-observer.js";
-import { renderApp, type AppState, FrameWriter, type VtProbeResult } from "../tui/doctor-rendering.js";
 
 export type Status = "ok" | "fail" | "warn";
 
@@ -716,11 +714,11 @@ export function checkFlakyTests(ledgerPath: string): Check {
   }
 }
 
-/** T9.2: ".lykos/session/ must stay gitignored — it carries T9 transcripts (redacted, but still real conversation content)." */
+/** T9.2: ".lykos/sessions/ must stay gitignored — it carries T9 transcripts (redacted, but still real conversation content)." */
 function checkSessionsGitignored(cwd: string): Check {
   const path = join(cwd, ".gitignore");
   if (!existsSync(path)) {
-    return { status: "fail", label: `no .gitignore at ${path} — .lykos/session/ (transcripts) could be committed by accident` };
+    return { status: "fail", label: `no .gitignore at ${path} — .lykos/sessions/ (transcripts) could be committed by accident` };
   }
   const lines = new Set(readFileSync(path, "utf8").split("\n").map((l) => l.trim()));
   const missing = GITIGNORE_LINES.filter((l) => !lines.has(l));
@@ -814,29 +812,6 @@ function countUnhashedTranscripts(ledger: Ledger, ledgerPath: string): number {
     if (resolveTranscriptFile(join(dir, entry.name, "transcript.jsonl"))) count += 1;
   }
   return count;
-}
-
-/**
- * T41.2: report the VT probe's answer rather than a guess about it. The probe
- * itself runs in `cli.ts` (it is async, and doctor's checks are all
- * synchronous by design) and the result is passed in — so a doctor run on a
- * pipe honestly reports `no-tty` instead of the terminal capability of some
- * other terminal. `warn`, never `fail`: no VT support is a supported
- * configuration with a working surface behind it (T50.1's append-only
- * fallback), not a broken environment.
- */
-function checkVtSupport(vt: VtProbeResult | undefined): Check {
-  if (!vt) {
-    return { status: "warn", label: "VT support not probed this run (T41.2) — run `lykos doctor` in the terminal you intend to use" };
-  }
-  const reply = vt.reply ? `, reply ${vt.reply}` : "";
-  const elapsed = vt.elapsedMs !== undefined ? `, ${vt.elapsedMs}ms` : "";
-  return vt.supported
-    ? { status: "ok", label: `VT support: yes (${vt.method}${reply}${elapsed}) — the full-screen surface is available here` }
-    : {
-        status: "warn",
-        label: `VT support: no (${vt.method}${elapsed}) — ${vt.detail}; the append-only renderer is the surface here (T50.1)`,
-      };
 }
 
 function checkStatuslineWiring(cwd: string): Check {
@@ -934,56 +909,6 @@ function benchUiChecks(repoRoot: string): Check[] {
         : { status: "fail", label: `S0 conversation render: ${s0PerCall.toFixed(3)}ms/call exceeds the 2ms budget` },
     );
 
-    // T50.3: the full-screen surface's own frame-render budget (§8's new
-    // row) — renderApp() at 200x60 with 5000 lines of scrollback, p95 < 8ms.
-    // Extends this same harness rather than inventing a second one.
-    const bigViewport = Array.from({ length: 5000 }, (_, i) => `line ${i} of synthetic scrollback content for the frame budget`);
-    const appState: AppState = {
-      header: { product: "LYKOS", version: "0.0.1", model: "deepseek-v4-flash", cwd: dir, branch: null, sessionId: "bench", executionShape: "standalone" },
-      vm,
-      footerVisible: true,
-      viewportLines: bigViewport.slice(-56),
-      composerLines: ["> "],
-    };
-    const frameIterations = 200;
-    const frameTimes: number[] = [];
-    for (let i = 0; i < frameIterations; i++) {
-      const t0 = performance.now();
-      renderApp(appState, { width: 200, height: 60, theme });
-      frameTimes.push(performance.now() - t0);
-    }
-    frameTimes.sort((a, b) => a - b);
-    const framesP95 = frameTimes[Math.floor(frameIterations * 0.95)] ?? frameTimes[frameTimes.length - 1]!;
-    checks.push(
-      framesP95 < 8
-        ? {
-            status: "ok",
-            label: `full-screen frame render: p95 ${framesP95.toFixed(3)}ms/frame over ${frameIterations} renders at 200x60, 5000 lines of scrollback (budget < 8ms, T50.3)`,
-          }
-        : { status: "fail", label: `full-screen frame render: p95 ${framesP95.toFixed(3)}ms/frame exceeds the 8ms budget (T50.3)` },
-    );
-
-    // T50.3: frame writes are diffs — a one-line change must cost far less
-    // than a full redraw regardless of how much scrollback is behind it,
-    // which is what keeps the 30Hz scheduler (T41.4) reachable in practice.
-    const writer = new FrameWriter({ write: () => {} });
-    writer.write(renderApp(appState, { width: 200, height: 60, theme }));
-    const changedState: AppState = { ...appState, composerLines: ["> x"] };
-    const changedFrame = renderApp(changedState, { width: 200, height: 60, theme });
-    const diffResult = writer.write(changedFrame);
-    const fullRedrawBytes = FrameWriter.fullRedrawBytes(changedFrame);
-    checks.push(
-      !diffResult.full && diffResult.bytes < fullRedrawBytes
-        ? {
-            status: "ok",
-            label: `full-screen frame diff: ${diffResult.bytes}B for a one-line change vs ${fullRedrawBytes}B for a full redraw`,
-          }
-        : {
-            status: "fail",
-            label: `full-screen frame diff did not stay cheap: ${diffResult.bytes}B written (full redraw would be ${fullRedrawBytes}B, full=${diffResult.full})`,
-          },
-    );
-
     // S4: `lykos cost`, budget < 200ms (the --since 30d rollup is T5; this
     // times the reader's basic ledger scan, which is the floor that budget
     // sits on top of).
@@ -1048,12 +973,6 @@ function benchUiChecks(repoRoot: string): Check[] {
 
 export interface RunDoctorOptions {
   benchUi?: boolean;
-  /**
-   * T41.2's probe result, measured by the caller (`cli.ts`) because probing
-   * is async and every check here is synchronous. Absent when nothing
-   * probed, which is reported as "not probed" rather than as "unsupported".
-   */
-  vt?: VtProbeResult;
   /** T178's probe, measured by the caller for the same reason. Absent means not probed. */
   containment?: RuntimeReport[] | { error: string };
 }
@@ -1103,7 +1022,6 @@ export function runDoctor(cwd: string, opts: RunDoctorOptions = {}): number {
     checkTranscriptIntegrity(ledgerPath),
     checkBudget(resolved.budget.per_run_usd, resolved.budget.per_day_usd, resolved.budget.on_exceed),
     checkStatuslineWiring(cwd),
-    checkVtSupport(opts.vt),
     ...(opts.containment === undefined
       ? []
       : checkContainerRuntime(opts.containment, { platform: process.platform, level: resolved.containment.level })),

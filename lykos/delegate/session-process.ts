@@ -17,7 +17,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TrustSource } from "../gate/trust.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import {
   encodeFrame,
   FrameReader,

@@ -34,7 +34,7 @@ import {
   spawnInstall,
   type InstallRunner,
 } from "../extensions/host-install.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 /** The command every missing-extension notice names. */
 export const EXTENSIONS_INSTALL_COMMAND = "lykos extensions install";

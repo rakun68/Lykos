@@ -259,7 +259,7 @@ describe("P10.6 D4: recall over the parsed entries", () => {
   it("returns identifiers and provenance with every hit", async () => {
     const h = harness();
     try {
-      seed(h, "project", "gotchas", ["- [aaaaaaaa] stdout belongs to the transport in MCP mode {added=2026-09-01 src=s1 paths=lykos/tui/io-mode.ts}"]);
+      seed(h, "project", "gotchas", ["- [aaaaaaaa] stdout belongs to the transport in MCP mode {added=2026-09-01 src=s1 paths=lykos/io-mode.ts}"]);
       const res = await call(h.recall, { query: "stdout" });
       const details = res.details as Record<string, unknown>;
       assert.equal(details.matched, 1);
@@ -267,7 +267,7 @@ describe("P10.6 D4: recall over the parsed entries", () => {
       // memory_edit takes an identifier, so a hit that hides one is useless.
       assert.match(res.text, /added=2026-09-01/);
       assert.match(res.text, /src=s1/);
-      assert.match(res.text, /paths=lykos\/tui\/io-mode\.ts/);
+      assert.match(res.text, /paths=lykos\/io-mode\.ts/);
     } finally {
       h.cleanup();
     }

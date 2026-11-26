@@ -10,7 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, projectConfigPath } from "../config/load.js";
 import { defaultLedgerPath } from "../ledger/ledger.js";
 import { readTodayRollup } from "../ledger/live.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import type { BudgetConfig, OnExceed } from "../config/types.js";
 
 const BUDGET_KEYS = ["per_run_usd", "per_day_usd", "on_exceed", "max_concurrent_delegates"] as const;

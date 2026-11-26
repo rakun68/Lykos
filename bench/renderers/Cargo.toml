@@ -1,0 +1,16 @@
+# The renderer benchmark (ticket #33), a workspace of its own so its candidates never enter the shipped lock file.
+[workspace]
+members = ["fixture", "own", "ratatui", "opentui"]
+resolver = "2"
+
+[workspace.dependencies]
+crossterm = { version = "0.29", default-features = false, features = ["events", "windows", "bracketed-paste"] }
+fixture = { path = "fixture" }
+
+# The same release profile as the shipped workspace, so binary sizes compare.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

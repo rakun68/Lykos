@@ -43,10 +43,12 @@ import { detectFirstCommit, detectGitRemote, resolveProject } from "../session/i
 import { classifyCommandRisk } from "./command-safety.js";
 import { decideForMode, type GatedAction, type InteractionMode } from "./modes.js";
 import { localExecutor, type ProjectExecutor } from "../tools/executor.js";
+import type { AdoptedJob, JobRegistry } from "../tools/job-runner.js";
 import { decideCommandPaths } from "./bash-paths.js";
 import { collectPathRules, decidePath, type PathAccess, type PathContext, type PathRule } from "./path-rules.js";
 import { loadPermissions, rememberExtraDir } from "./permissions.js";
 import { isWorkspaceTrusted } from "./trust.js";
+import { isWithinRoot } from "./within-root.js";
 
 /**
  * What class of thing is being approved.
@@ -263,16 +265,7 @@ export async function resolvePathRulesAndContext(cwd: string): Promise<{ rules: 
   return { rules, ctx };
 }
 
-/** T30.2's hard boundary: never asked about, always enforced. */
-export function isWithinRoot(root: string, target: string): boolean {
-  const rootResolved = resolve(root);
-  const targetResolved = resolve(target);
-  if (targetResolved === rootResolved) return true;
-  const rel = relative(rootResolved, targetResolved);
-  // D17: a parent step is a whole `..` SEGMENT. A string-prefix test refused
-  // `<root>/..cache/x`, which is inside the root, with a reason that is false.
-  return rel !== "" && rel !== ".." && !/^\.\.[\\/]/.test(rel) && !isAbsolute(rel);
-}
+export { isWithinRoot };
 
 /** `--yes` (T34.2: "a flag, not a keystroke") — every gated action allowed with no prompt. */
 export class AutoApproveGate implements ApprovalGate {
@@ -996,6 +989,9 @@ function buildShellOperations(
       // model chose is always honoured, because it is allowed to know its
       // own build is slow.
       const timeout = resolveBashTimeout(options.timeout, fallback);
+      if (opts.jobs !== undefined) {
+        return await execBackgroundable(opts.jobs, command, timeout, options, (o) => local.exec(command, execCwd, o));
+      }
       let sawOutput = false;
       const onData = (data: Buffer): void => {
         if (data.length > 0) sawOutput = true;
@@ -1015,11 +1011,100 @@ function buildShellOperations(
   };
 }
 
+type ExecOptions = Parameters<BashOperations["exec"]>[2];
+type ExecResult = Awaited<ReturnType<BashOperations["exec"]>>;
+
+/**
+ * P5 #48: a shell call the user can move to the background while it runs (OpenCode's `session.background`, ctrl+b).
+ * The timeout is this function's own timer rather than Pi's, so a call moved to the background is no longer timed:
+ * it becomes a job (`hub` ps, logs, stop), its output goes to the job's log, and the turn gets a notice naming it.
+ * Before that, it behaves as the plain call: the turn's abort and the timeout kill its tree.
+ */
+async function execBackgroundable(
+  jobs: JobRegistry,
+  command: string,
+  timeout: number | undefined,
+  options: ExecOptions,
+  run: (options: ExecOptions) => Promise<ExecResult>,
+): Promise<ExecResult> {
+  const controller = new AbortController();
+  const turn = options.signal;
+  let moved: AdoptedJob | undefined;
+  let timedOut = false;
+  let sawOutput = false;
+  const onTurnAbort = (): void => {
+    if (moved === undefined) controller.abort();
+  };
+  if (turn?.aborted === true) controller.abort();
+  else turn?.addEventListener("abort", onTurnAbort, { once: true });
+  const timer =
+    timeout !== undefined
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeout * 1000)
+      : undefined;
+  const onData = (data: Buffer): void => {
+    if (moved !== undefined) {
+      moved.write(data);
+      return;
+    }
+    if (data.length > 0) sawOutput = true;
+    options.onData(data);
+  };
+  let release: (result: ExecResult) => void = () => undefined;
+  const early = new Promise<ExecResult>((r) => {
+    release = r;
+  });
+  const foreground = jobs.foregroundShell(command, () => {
+    if (moved !== undefined) return moved.record;
+    if (timer !== undefined) clearTimeout(timer);
+    moved = jobs.adopt({ command, kill: () => controller.abort() });
+    options.onData(Buffer.from(backgroundNotice(moved.record.id), "utf8"));
+    release({ exitCode: 0 });
+    return moved.record;
+  });
+  const { timeout: _piTimeout, ...rest } = options;
+  const settled = run({ ...rest, onData, signal: controller.signal }).then(
+    (result) => {
+      moved?.end(result.exitCode);
+      return result;
+    },
+    (err: unknown): ExecResult => {
+      if (moved !== undefined) {
+        moved.end(null);
+        return { exitCode: null };
+      }
+      if (!timedOut || timeout === undefined || turn?.aborted === true) throw err;
+      // T88.3: the timeout reads as a non-zero exit with what the command printed, as before.
+      onData(Buffer.from(timeoutNotice(command, timeout, sawOutput), "utf8"));
+      return { exitCode: TIMEOUT_EXIT_CODE };
+    },
+  );
+  const cleanup = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    turn?.removeEventListener("abort", onTurnAbort);
+    foreground.end();
+  };
+  settled.then(cleanup, cleanup);
+  return await Promise.race([settled, early]);
+}
+
+/** What the turn reads when the user moved its shell call to the background. */
+export function backgroundNotice(id: string): string {
+  return (
+    `\n[lykos] The user moved this command to the background as ${id}; it is still running. ` +
+    `Read its output with hub {op: "logs", id: "${id}"} and stop it with hub {op: "stop", id: "${id}"}.\n`
+  );
+}
+
 /** What the `bash` and `powershell` operations take beside the gate. */
 export interface ShellOperationsOpts {
   defaultTimeoutSeconds?: number | undefined;
   /** T172: where the command runs. Absent means this machine. */
   executor?: ProjectExecutor | undefined;
+  /** P5 #48: the session's jobs, so a running call can be moved to the background. */
+  jobs?: JobRegistry | undefined;
 }
 
 export function buildBashOperations(

@@ -22,7 +22,7 @@ import { loadConfig } from "../config/load.js";
 import { resolveExtensions } from "../config/extensions.js";
 import { REPO_MAP_EXTENSION } from "../extensions/defaults/index.js";
 import { formatShare, estimateTokensChars4 } from "../ledger/tool-schema.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import {
   applySpecialist,
   OFF_LIMITS_HEADING,

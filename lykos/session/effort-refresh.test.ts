@@ -23,7 +23,7 @@ import { describe, it } from "node:test";
 import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { runInteractiveLoop, type InteractiveSession, type LineSource } from "./interactive.js";
 import type { StandaloneSessionState } from "./session.js";
-import type { AgentUi } from "../tui/s0.js";
+import type { AgentUi } from "../surface/s0.js";
 
 function fakeUi(): AgentUi & { hudWrites: number } {
   return {

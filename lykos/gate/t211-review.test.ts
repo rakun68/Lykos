@@ -5,7 +5,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { buildWriteOperations, type ApprovalGate, type ApprovalRequest } from "./approval.js";
+import { TerminalApprovalGate, buildWriteOperations, type ApprovalGate, type ApprovalRequest } from "./approval.js";
+import { ModeGate } from "./mode-gate.js";
 import { collectPathRules, containmentPathPlan, decidePath, type PathContext } from "./path-rules.js";
 
 const ctxAt = (cwd: string, extra: string[] = []): PathContext => ({
@@ -128,16 +129,20 @@ describe("T211 review: a protected prompt offers no always or folder, by key or 
     detail: "/work/proj/.git/config",
     pathAsk: { rule: ".git/**", protected: true },
   };
-  it("1.3: the a and f keys are ignored and y allows for the session only", async () => {
-    const { RawApprovalGate } = await import("../tui/screen/approval-modal.js");
+  it("1.3: a and f neither remember nor allow, and y allows for the session only", async () => {
     const folders: string[] = [];
-    const gate = new RawApprovalGate({ projectId: "p", cwd: "/work/proj", onRender: () => {}, onRememberFolder: (f: string) => folders.push(f) });
-    const p = gate.request(req);
-    gate.feedBytes("a");
-    gate.feedBytes("f");
-    assert.equal(gate.isOpen, true);
-    gate.feedBytes("y");
-    assert.equal(await p, "allow");
+    const answers = ["a", "f", "y"];
+    const human = new TerminalApprovalGate(async () => answers.shift() ?? null, { write: () => true }, () => {}, {
+      projectId: "p",
+      cwd: "/work/proj",
+      onRememberFolder: (f: string) => folders.push(f),
+    });
+    // In every mode, Auto included: a protected path always asks.
+    const gate = new ModeGate(human);
+    gate.setMode("auto");
+    assert.equal(await gate.request(req), "deny");
+    assert.equal(await gate.request(req), "deny");
+    assert.equal(await gate.request(req), "allow");
     assert.deepEqual(folders, []);
   });
 });

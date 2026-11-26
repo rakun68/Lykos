@@ -20,10 +20,11 @@ import { SHIPPED_DEFAULTS } from "../config/defaults.js";
 import { runInteractiveLoop, type InteractiveHandle, type InteractiveSession, type LineSource } from "./interactive.js";
 import type { InteractionMode } from "../gate/modes.js";
 import type { StandaloneSessionState } from "./session.js";
-import type { AgentUi } from "../tui/s0.js";
+import type { AgentUi } from "../surface/s0.js";
 import { openCredentialDb } from "../credentials/db.js";
 import { listCredentials, readCredentialById } from "../credentials/pool.js";
-import { createCredentialCommands } from "../tui/credential-commands.js";
+import { createCredentialCommands } from "../surface/credential-commands.js";
+import { runProviderAdd, type ProviderAddQuestion } from "../config/provider-add.js";
 import { createOutputStyleSwitcher } from "../config/output-styles.js";
 
 /** Only the surface `runInteractiveLoop` itself calls (writeUser/writeSystem/writeHud/renderApproval/view/streamed) — attach()/snapshotJson() belong to the caller that constructs a real AgentUi, not to this loop. */
@@ -1112,6 +1113,54 @@ describe("P14.6 ticket 06: /login and /credential in the TUI", () => {
       assert.match(all, /logged in to openai as key#1 \(1 credential\(s\) in pool\)/);
       assert.match(all, /credentials for openai[\s\S]*\* key#1 {2}api_key {2}ready/, "the bare listing marks the serving row");
       assert.ok(!all.includes("sk-tui-DISTINCTIVE-SECRET"), "the key is never printed");
+    });
+  });
+
+  it("/provider add asks in dialogs, writes the provider, then asks its key as a secret", async () => {
+    await withTempWorkspace(async (dir) => {
+      const dbPath = join(dir, "credentials.db");
+      const configPath = join(dir, ".lykos", "config.yaml");
+      const session = new FakeSession();
+      const answers = ["local", "openai-completions", "http://localhost:11434/v1", "qwen3:8b", "project"];
+      const asked: string[] = [];
+      const lineSource = new SecretScriptedLineSource();
+      const ask = async (q: ProviderAddQuestion): Promise<string | null> => (asked.push(q.title), answers.shift() ?? null);
+      Object.assign(lineSource, { ask });
+      const printed: string[] = [];
+      const commands = createCredentialCommands({ session: { sessionId: session.sessionId, model: { provider: "openai" } }, config: SHIPPED_DEFAULTS, dbPath });
+      const run = runInteractiveLoop({
+        session,
+        lineSource,
+        state: freshState(),
+        ledgerPath: join(dir, ".lykos", "ledger.db"),
+        config: SHIPPED_DEFAULTS,
+        modelSpec: "openai/gpt-5",
+        writeReply: () => {},
+        ui: { ...fakeUi(), writeSystem: (text: string) => void printed.push(text) },
+        login: commands.login,
+        addProvider: (io) => runProviderAdd(io, { globalPath: join(dir, "global.yaml"), projectPath: configPath, taken: ["openai"] }),
+      });
+
+      await lineSource.onWaiting();
+      lineSource.push("/provider add");
+      await lineSource.onWaiting();
+      lineSource.push("$LOCAL_KEY");
+      await lineSource.onWaiting();
+      lineSource.push("/exit");
+      const result = await run;
+
+      assert.equal(result.runState, "done");
+      assert.equal(session.promptCalls.length, 0);
+      assert.deepEqual(asked, ["Provider name", "API", "Base URL", "Models", "Save to"]);
+      assert.match(readFileSync(configPath, "utf8"), /^providers:\n {2}local:\n {4}auth: api_key\n {4}api: openai-completions\n/);
+      assert.equal(lineSource.secretReads, 1);
+      const db = openCredentialDb(dbPath, { create: false })!;
+      try {
+        assert.equal(listCredentials(db, "local").length, 1);
+      } finally {
+        db.close();
+      }
+      assert.match(printed.join("\n"), /a new session can use local\/qwen3:8b/);
     });
   });
 

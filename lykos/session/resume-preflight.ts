@@ -25,11 +25,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalToolName } from "../tools/tool-surface.js";
 import type { Ledger } from "../ledger/ledger.js";
+import type { PendingUndos } from "./rewind.js";
 import { priceCall, type PriceCallResult } from "../ledger/prices.js";
 import { estimateTokensChars4 } from "../ledger/tool-schema.js";
 import { currentGitCommit } from "./identity.js";
 import { hostGit } from "../git/host-git.js";
 import { buildReplay, interruptedToolCalls, type ReplayBundle, type TranscriptRecord } from "./replay.js";
+import { activeBranch, nextTurn, pendingUndos, promptStarting } from "./active-branch.js";
 import {
   readSessionMeta,
   readTranscript,
@@ -90,6 +92,13 @@ export interface ResumePreflight {
   meta?: SessionMeta | null;
   /** T238: present when the earlier run did not end cleanly. Its text is the last part of `replay`. */
   recovery?: Omit<RecoveryEvent, "kind">;
+  /**
+   * T266: the records `replay` was built from — the transcript without the turns a rewind undid (T264: a
+   * resume's too, not only a fork's) — and the last turn on them. Absent when the transcript could not be read.
+   */
+  branch?: { records: TranscriptRecord[]; turn?: number; undos?: PendingUndos };
+  /** T264: the turn the continuing process starts at: one past the highest in the whole transcript. */
+  nextTurn?: number;
 }
 
 export interface PreflightInput {
@@ -108,6 +117,10 @@ export interface PreflightInput {
   allowMissingFiles?: boolean;
   /** Priced at this instant, because DeepSeek's peak window doubles the base rate. */
   now?: Date;
+  /** T266: the preflight is a fork's, which it says. Both replay, and price, only the active branch (T264). */
+  fork?: boolean;
+  /** A fork from before one prompt: the branch is cut before the prompt that started this turn. */
+  forkAt?: number;
 }
 
 interface SessionRow {
@@ -371,18 +384,34 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
   let cost: RebuildCost | undefined;
   // T238: the earlier run did not end cleanly, so say what the working tree looks like now. Nothing reruns.
   let recovery: Omit<RecoveryEvent, "kind"> | undefined;
-  const interrupted = interruptedToolCalls(records).map((c) => c.id);
+  // Review finding 4: only the active branch is resumed, so a call a rewind undid is not reported.
+  const kept = activeBranch(records);
+  if (input.forkAt !== undefined) {
+    const cut = promptStarting(kept, input.forkAt);
+    if (cut === undefined) {
+      checks.push({ id: "transcript_integrity", verdict: "refuse", message: `the transcript has no prompt that started turn ${input.forkAt} to fork from` });
+    } else kept.length = cut;
+  }
+  const interrupted = interruptedToolCalls(kept).map((c) => c.id);
   if (records.length > 0 && (row.ended_utc === null || interrupted.length > 0)) {
     recovery = recoveryState(workspace, interrupted);
+  }
+  let branch: ResumePreflight["branch"];
+  if (records.length > 0) {
+    let turn: number | undefined;
+    for (const r of kept) if (r.kind === "turn_start") turn = r.turn;
+    const undos = pendingUndos(records);
+    branch = { records: kept, ...(turn !== undefined ? { turn } : {}), ...(undos !== undefined ? { undos } : {}) };
   }
   if (records.length > 0) {
     const tail: TranscriptRecord[] =
       recovery !== undefined
         ? [{ kind: "recovery", ...recovery, ts_utc: now.toISOString(), turn_index: records.length }]
         : [];
-    replay = buildReplay(row.id, [...records, ...tail]);
+    replay = buildReplay(row.id, [...(branch?.records ?? records), ...tail]);
     const ref = splitModel(modelSpec);
     const tokens = estimateTokensChars4(replay.text);
+    const replaying = input.fork === true ? "forking replays" : "resuming replays";
     if (ref) {
       cost = priceReplay(ref.provider, ref.model, tokens, now);
       checks.push({
@@ -390,8 +419,8 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
         verdict: "confirm",
         message:
           cost.usd === null
-            ? `resuming replays ${fmtTokens(tokens)} tokens; ${ref.provider}/${ref.model} is not in the price table, so the cost is unpriced`
-            : `resuming replays ${fmtTokens(tokens)} tokens ≈ ${fmtUsd(cost.usd)}` +
+            ? `${replaying} ${fmtTokens(tokens)} tokens; ${ref.provider}/${ref.model} is not in the price table, so the cost is unpriced`
+            : `${replaying} ${fmtTokens(tokens)} tokens ≈ ${fmtUsd(cost.usd)}` +
               (cost.rateWindow ? ` (${cost.rateWindow} rate)` : "") +
               (cost.writeIsPremium ? " — priced at the cache-write rate, which this provider charges a premium for" : ""),
       });
@@ -399,7 +428,7 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
       checks.push({
         id: "rebuild_cost",
         verdict: "warn",
-        message: `resuming replays ${fmtTokens(tokens)} tokens; no provider/model recorded, so it cannot be priced`,
+        message: `${replaying} ${fmtTokens(tokens)} tokens; no provider/model recorded, so it cannot be priced`,
       });
     }
   }
@@ -489,6 +518,8 @@ export function preflightResume(input: PreflightInput): ResumePreflight {
     ...(cost !== undefined ? { cost } : {}),
     meta,
     ...(recovery !== undefined ? { recovery } : {}),
+    ...(branch !== undefined ? { branch } : {}),
+    ...(records.length > 0 ? { nextTurn: nextTurn(records) } : {}),
   };
 }
 

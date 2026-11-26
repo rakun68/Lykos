@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { useConfiguredShellPath } from "../process/host-bash.js";
 import { dirname, join } from "node:path";
 import { detectDefaultBase, loadConfig } from "../config/load.js";

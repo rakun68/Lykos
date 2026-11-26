@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { openLedgerSync } from "../ledger/use.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import {
   appendMemoryEntry,
   invalidateMemoryEntry,

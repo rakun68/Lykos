@@ -64,7 +64,7 @@ import {
   type OwnerKind,
   type SessionView,
 } from "./ownership.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { createProcessRunner, createWarmPool, type WarmPool } from "./session-process.js";
 import { rootSessionOf } from "./work-target.js";
 import {

@@ -25,7 +25,7 @@ import { scanWeakening } from "../../seal/weakening.js";
 import { sealCreate } from "../../seal/create.js";
 import { enforceForDeprecation, sealEnforced } from "../../seal/enforce.js";
 import { restoreSealed } from "../../seal/guard.js";
-import { stderrWrite } from "../../tui/io-mode.js";
+import { stderrWrite } from "../../io-mode.js";
 
 export const SEAL_EXTENSION = "lykos-seal";
 
@@ -563,8 +563,7 @@ export function register(api: LykosExtensionApi): void {
     return cachedSeals;
   }
 
-  // Pre-load active seals at start
-  getSeals();
+  // The seals are read when a hook first asks, not at load: two git calls (~160 ms on Windows) off every session's start.
 
   api.on("checkpoint_written", () => {
     needsRefresh = true;

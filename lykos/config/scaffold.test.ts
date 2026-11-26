@@ -59,7 +59,7 @@ describe("scaffoldLykosDir", () => {
     // .lykos/ledger.db was already present — the appended block adds only
     // what was missing, so it must not appear a second time.
     assert.equal(gitignore.split(/\r?\n/).filter((l) => l === ".lykos/ledger.db").length, 1);
-    assert.ok(result.created.some((c) => c.includes(".gitignore") && c.includes("6 Lykos")));
+    assert.ok(result.created.some((c) => c.includes(".gitignore") && c.includes("7 Lykos")));
     // #47: nothing generates `.pi/agents/` any more, so there is nothing there to ignore.
     assert.ok(!gitignore.includes(".pi/agents/"));
 

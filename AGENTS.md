@@ -11,7 +11,7 @@ Maintainers keep the plan, decisions and findings outside the repository. If
 
 A coding agent built on the Pi runtime, in TypeScript on Node, with a SQLite ledger. It runs
 **standalone**, as an **MCP worker** under an orchestrator, and, later, **under human supervision**
-through a desktop application. The interface today is the terminal: the TUI in `lykos/tui/`.
+through a desktop application. The interface today is the terminal: `lykos-tui`, a Rust client in `crates/`.
 
 **What it is not.** Not a fork of Pi: translate at the boundary.
 
@@ -26,7 +26,7 @@ lightweightness, memory and collaboration.
 
 | | |
 | --- | --- |
-| [lykos/](lykos/) | **Source tree**: `tools/`, `session/`, `gate/`, `loop/`, `ledger/`, `tui/` (pixels only), `cli/` adapters |
+| [lykos/](lykos/) | **Source tree**: `tools/`, `session/`, `gate/`, `loop/`, `ledger/`, `surface/` (the line session's output), `server/`, `cli/` adapters |
 | [docs/reference/](docs/reference/) | Reference specifications: CLI and config, MCP, sessions, specialists, telemetry, UI |
 | [docs/adr/](docs/adr/) | Decisions. Authoritative when a doc disagrees with one |
 | [GLOSSARY.md](GLOSSARY.md) | The glossary. Use its words |
@@ -53,7 +53,8 @@ backfilled.**
 **5. Prices come from primary provider documentation only.** Never from memory.
 
 **6. Measurement never gates a change.** A change lands on its demonstration. Nothing is deleted on
-a date or a threshold.
+a date or a threshold. **The one exception is the TUI and the desktop app** (rule 10): a change that
+makes either slower or heavier fails unless the maintainer accepts the trade.
 
 **7. Translate at the boundary; never patch Pi.** Where an extension expects a Pi path, generate that
 content from Lykos's own.
@@ -62,6 +63,11 @@ content from Lykos's own.
 mode**: one place decides the IO mode, every writer asks it.
 
 **9. Nothing enters the frozen head unless it is fixed for the whole session.**
+
+**10. The TUI and the desktop app are the fastest and lightest there are.** Speed and footprint come
+before features and looks; every change is measured, never estimated, and nothing slower or heavier
+ships without the maintainer's yes ([ADR-0063](docs/adr/0063-the-tui-and-desktop-app-are-new-rust-clients-built-to-be-the-fastest.md),
+[ADR-0064](docs/adr/0064-the-p5-tui-copies-opencode-on-a-local-engine-server-and-speed-gates-it.md)).
 
 ---
 

@@ -29,6 +29,8 @@ describe("Ledger", () => {
       [
         // baselines joined on T249: the verification command's run on a base commit, keyed by base, command, lockfile and platform.
         "baselines",
+        // bench_results joined on T258: a benchmark instance's hidden tests run on a ref, and the outcome.
+        "bench_results",
         "calls",
         // claims joined on T234: what a delegated session claimed with `claim`, and the harness's verdict on each check.
         "claims",

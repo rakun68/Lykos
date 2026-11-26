@@ -46,6 +46,7 @@
 // session with exact, scripted timing, with no network call and no real
 // terminal.
 
+import type { JobRegistry } from "../tools/job-runner.js";
 import { sessionRoleModel } from "../config/roles.js";
 import { startContainment, type Containment } from "../containment/containment.js";
 import { collectPathRules } from "../gate/path-rules.js";
@@ -53,7 +54,7 @@ import { isWorkspaceTrusted } from "../gate/trust.js";
 import { resolveContainmentRequest } from "../containment/request.js";
 import type { ContainerRuntimeDriver } from "../containment/runtime.js";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import {
   DEFAULT_INTERACTION_MODE,
   INTERACTION_MODES,
@@ -65,9 +66,9 @@ import {
 } from "../gate/modes.js";
 import { loadPermissions, rememberAllow, rememberMode, type PermissionsOptions } from "../gate/permissions.js";
 import { runPermissionsCommand } from "../gate/permissions-command.js";
-import { setSkillCommands, skillPrompt } from "../tui/commands.js";
+import { setSkillCommands, skillPrompt } from "../surface/commands.js";
 import { nestSessions, type SessionListRow } from "./listing.js";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import type { ResolvedConfig } from "../config/types.js";
 import { loadConfig } from "../config/load.js";
@@ -79,6 +80,8 @@ export const PLAN_CONTINUE_AUTO = "yes — continue in Auto";
 export const PLAN_CONTINUE_MANUAL = "yes — continue in Manual, approving each step";
 export const PLAN_STAY = "no — keep planning";
 import { transcriptDir, type RecoveryEvent } from "./transcript.js";
+import type { TranscriptRecord } from "./replay.js";
+import { sessionMarkdown } from "./export-markdown.js";
 import { builtinProviderDecls, cacheModelsPath, generateProviderConfig, specialistModelSpec, resolveBootModel } from "../config/providers.js";
 import { assertHostProviderUsable, assertSpecialistProviderUsable } from "../config/specialist-credentials.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
@@ -94,6 +97,7 @@ import { deriveSessionName } from "./preview.js";
 import { gitStatus, resolveProject } from "./identity.js";
 import { deleteSessionConversation } from "./mutations.js";
 import { ingestDelegateSnapshot, parseProviderModel, writeBootRow, type DelegateSnapshot, type IngestOpts } from "../ledger/ingest.js";
+import type { SessionOptions } from "./session-options.js";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createLykosModelRuntime, forwardRotationsToSink, RotationRelay, type Provider } from "./model-runtime.js";
 import {
@@ -122,24 +126,29 @@ import {
 } from "../tools.js";
 import { PostureGate, TerminalApprovalGate, type ApprovalGate, type ReadOnlyPosture } from "../gate/approval.js";
 import { ApprovalMetrics } from "../gate/approval-metrics.js";
-import { setStderrSink, stdoutWrite, stderrWrite } from "../tui/io-mode.js";
+import { setStderrSink, stdoutWrite, stderrWrite } from "../io-mode.js";
 import { extensionFailureNotice } from "../extensions/api.js";
 import { hookFailureNotice } from "../loop/hooks.js";
 import type { LiveTranscriptRecorder, TranscriptRecorder } from "./live-capture.js";
-import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type SystemPart } from "../tui/s0.js";
-import { runInteractiveSurface } from "../tui/interactive-surface.js";
-import { effortToken } from "../tui/effort.js";
-import { fmtUsd } from "../tui/format.js";
-import { openUrl } from "../tui/open-url.js";
-import { parseOutcomeAnswer, renderOutcomePrompt, renderOutcomeResult } from "../tui/outcome.js";
+import { promptIndex, REWIND_RESTORES, rewindPointLabel, SUMMARIZE_NOTE_PROMPT, type EarlierPrompt, type LiveRewind, type PendingUndos, type RewindableSession, type RewindChoice, type RewindPoint } from "./rewind.js";
+import { EFFORT_LEVELS, parseInteractiveInput, S0_HELP, type AgentUi, type AgentUiOptions, type SystemPart } from "../surface/s0.js";
+import type { AsideAnswer } from "./aside.js";
+import { runInteractiveSurface } from "../surface/interactive-surface.js";
+import { effortToken } from "../surface/effort.js";
+import { effortLabel, effortLevel, type ThinkingLevelMap } from "../config/model-efforts.js";
+import { fmtUsd } from "../surface/format.js";
+import { openUrl } from "../surface/open-url.js";
+import { parseOutcomeAnswer, renderOutcomePrompt, renderOutcomeResult } from "../surface/outcome.js";
 import { parseCompactArgs } from "../loop/compaction-chain.js";
 import type { CompactionRecord } from "../loop/self-compact.js";
 import { buildContinuationPrompt, decideContinuation, type ContinuationPlan } from "../loop/continuation.js";
 import { listCheckpoints } from "../loop/checkpoint.js";
 import { sessionChangedPaths } from "../loop/diff-summary.js";
+import { contextBreakdown, type ContextBreakdown, type ContextTool } from "./context-breakdown.js";
+import type { CustomProvider, ProviderAddIO, ProviderAddQuestion } from "../config/provider-add.js";
 
 /** The subset of `AgentSession` this loop actually calls — the real class satisfies this structurally. */
-export interface InteractiveSession {
+export interface InteractiveSession extends RewindableSession {
   readonly sessionId: string;
   readonly systemPrompt: string;
   /** Synchronous truth, not a promise chain's accumulated flag — the loop's inner steering race checks this directly so a coincidental tie (idle and a new line arriving on the same microtask) can never leave a completed turn misread as still running. */
@@ -164,12 +173,18 @@ export interface InteractiveSession {
     options?: { excludeFromContext?: boolean },
   ): Promise<{ output: string; exitCode: number | undefined }>;
   getLastAssistantText?(): string | undefined;
+  /** The model in use; its `thinkingLevelMap` names Pi's levels as the person sees them (`config/model-efforts.ts`). */
+  readonly model?: { provider: string; id: string; thinkingLevelMap?: ThinkingLevelMap } | undefined;
   /** T-2026-09-02 item 6: Pi's reasoning-effort control. Absent on the fake session `interactive.test.ts` drives, which is why every caller is optional-chained. */
   readonly thinkingLevel?: string;
   setThinkingLevel?(level: string, options?: { persist?: boolean }): void;
   getAvailableThinkingLevels?(): string[];
   supportsThinking?(): boolean;
   getContextUsage?(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+  /** Every configured tool with its schema: what `/context` sizes the tools from. */
+  getAllTools?(): ContextTool[];
+  /** The conversation so far: what `/context` sizes the messages from before Pi has a total. */
+  readonly messages?: readonly unknown[];
 }
 
 export interface LineSource {
@@ -181,8 +196,18 @@ export interface LineSource {
    * in cooked mode), where `/login` says so before it asks.
    */
   nextSecret?(): Promise<string | null>;
+  /**
+   * A question in a dialog of its own, with choices when `options` has any. Absent on a source with no dialogs
+   * (readline), where the loop prints the question and reads the next line.
+   */
+  ask?(q: ProviderAddQuestion): Promise<string | null>;
   /** Wakes any pending `next()` with null — used by the idle-Ctrl-C handler. */
   close(): void;
+  /**
+   * T263: put text in the input box, to edit and send — a rewound prompt. Absent on a
+   * source with no input box (readline), where the loop prints the text instead.
+   */
+  prefill?(text: string): void;
 }
 
 /**
@@ -275,6 +300,8 @@ export class DoublePressExit {
 /** Handed to `opts.onReady` before the loop starts consuming input — the CLI wires real SIGINT to it; tests call it directly at a scripted moment. */
 export interface InteractiveHandle {
   interrupt: () => void;
+  /** P5 #48: the session's background jobs and running shell calls, for a client's composer. */
+  jobs?: JobRegistry;
 }
 
 export interface InteractiveLoopResult {
@@ -296,6 +323,15 @@ export interface InteractiveLoopResult {
    * the row earlier.
    */
   resumeSessionId?: string;
+  /** T266: `/fork` was typed. The loop ends this session; the caller continues in a copy of it, a new session. */
+  forkRequested?: boolean;
+  /** A fork from before one prompt (`/__fork`): the copy is cut before turn `turn`, and `inputText` is in its input box. */
+  forkAt?: ForkAt;
+  /**
+   * T264: a rewind went back past this process's own prompts. The loop ends this session as `/exit` does; the
+   * caller rebuilds it from its transcript, which the rewind event has cut, with `inputText` in the input box.
+   */
+  rewindRebuild?: { inputText: string };
   /** T130: explicit browser action, not the refused `/new` command. */
   newRequested?: boolean;
   /** T129: close the current session after flushing its transcript. */
@@ -406,9 +442,9 @@ export interface RunInteractiveLoopOpts {
    * `/copy`, and anything else that wants text on the system clipboard
    * (round thirteen, item 3). Omitted means no clipboard is reachable, and
    * `/copy` falls back to printing the text — which is all it ever did
-   * before this round.
+   * before this round. T267: false means nothing reached the clipboard.
    */
-  onCopyText?: (text: string, label: string) => void;
+  onCopyText?: (text: string, label: string) => boolean | void;
   /**
    * 2026-09-07 (UI feedback item 2): a name the user just chose, so the
    * surface that draws the session can show it immediately instead of
@@ -434,7 +470,7 @@ export interface RunInteractiveLoopOpts {
    *
    * A callback rather than the host itself, for the reason every other entry
    * here is one: the loop is unit-tested against a scripted session and must
-   * not need an extension host to exist. `tui/commands.ts` decides what
+   * not need an extension host to exist. `surface/commands.ts` decides what
    * `/foo` IS; this decides what running it does, which is the half that
    * belongs to whoever owns the session.
    */
@@ -446,8 +482,19 @@ export interface RunInteractiveLoopOpts {
    * channel to print on.
    */
   login?: (provider: string, apiKey: boolean, io: TuiLoginIO) => Promise<void>;
+  /** `/provider add`: asks for a custom provider and writes it (`config/provider-add.ts`). */
+  addProvider?: (io: ProviderAddIO) => Promise<{ provider: CustomProvider; path: string } | null>;
   /** P14.6 ticket 06: `/credential [label|auto]`. Returns the lines to print. */
   credential?: (arg: string) => string;
+  /** T263: this session's rewind (`booted.rewind`). Absent, `/rewind` says it is not available. */
+  rewind?: LiveRewind;
+  /** T264: put in the input box before the first line is read (`ResumePlan.inputText`). */
+  inputText?: string;
+  /**
+   * T263: the surface's own picker — the full-screen overlay. Absent, the loop
+   * asks on its line source: a numbered prompt, then a numbered restore.
+   */
+  pickRewind?: (points: readonly RewindPoint[]) => Promise<RewindChoice | undefined>;
 }
 
 /** What the loop gives `/login`: a prompt-and-read, and a line printer. */
@@ -471,6 +518,8 @@ export interface SessionContextFacts {
   systemPromptChars: number;
   contextFiles: Array<{ name: string; bytes: number }>;
   skills: string[];
+  /** The skill list's share of the system prompt, estimated (`skillsHeadCost`). */
+  skillTokens?: number;
   toolNames: string[];
 }
 
@@ -489,6 +538,9 @@ export async function runInteractiveLoop(opts: RunInteractiveLoopOpts): Promise<
   let resumeRequested = false;
   /** T114: set when the session browser chose the row, so the caller does not ask again. */
   let resumeSessionId: string | undefined;
+  let forkRequested = false;
+  let forkAt: ForkAt | undefined;
+  let rewindRebuild: { inputText: string } | undefined;
   let newRequested = false;
   let closeRequested = false;
   /**
@@ -559,10 +611,16 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     pendingRead = undefined;
   }
 
+  /** T263: a prompt back in the input box; the append-only surface, which has none, prints it. */
+  function putBack(text: string): void {
+    if (lineSource.prefill) lineSource.prefill(text);
+    else chrome(`your prompt, to send again or change:\n${text}`);
+  }
+
   function sessionInfo(): string {
     const g = state.usage;
     // Same costUsd source deriveHud() sums for the footer's running total
-    // (tui/s0.ts's runFromSessionState) — /session is not a second cost path.
+    // (surface/s0.ts's runFromSessionState) — /session is not a second cost path.
     const costUsd = g.calls.reduce((s, c) => s + (c.costUsd ?? 0), 0);
     return `session ${session.sessionId}\nmodel  ${modelSpec}\nturns  ${state.turns}  interventions ${state.humanInterventions}\ntokens ↑ ${g.input}  ⚡ ${g.cacheRead}  ✎ ${g.cacheWrite}  ↓ ${g.output}\ncost   ${fmtUsd(costUsd)}`;
   }
@@ -596,18 +654,20 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     if (!session.setThinkingLevel || session.supportsThinking?.() === false) {
       return { text: "lykos: this model has no reasoning-effort control" };
     }
-    const available = session.getAvailableThinkingLevels?.() ?? [...EFFORT_LEVELS];
+    // Pi's levels, named as the person sees them: `auto` and `none` on a model whose efforts are Lykos's.
+    const shown = (l: string): string => effortLabel(session.model, l);
+    const available = (session.getAvailableThinkingLevels?.() ?? [...EFFORT_LEVELS]).map(shown);
     if (level.length === 0) {
-      return effortReport("current effort is ", session.thinkingLevel ?? null, available);
+      return effortReport("current effort is ", session.thinkingLevel !== undefined ? shown(session.thinkingLevel) : null, available);
     }
     if (!available.includes(level)) {
       return effortReport(`lykos: unknown effort "${level}"`, null, available);
     }
-    session.setThinkingLevel(level);
+    session.setThinkingLevel(effortLevel(session.model, level));
     // Read back rather than echo: Pi clamps to what the model actually
     // supports, and reporting the requested level when it was clamped is
     // the kind of small lie the footer would then repeat all session.
-    const now = session.thinkingLevel ?? level;
+    const now = session.thinkingLevel !== undefined ? shown(session.thinkingLevel) : level;
     return {
       text: `effort is set to ${now}`,
       parts: [
@@ -667,6 +727,23 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
    * cannot size (Pi builds them and never exposes the serialised form), and
    * that line says so instead of guessing a number.
    */
+  /** `/context`'s parts for a surface that draws them (the TUI's Context window); the report says the same in text. */
+  function contextData(): ContextBreakdown | undefined {
+    const facts = opts.contextInfo?.();
+    if (!facts) return undefined;
+    const active = new Set(session.getActiveToolNames());
+    return contextBreakdown({
+      model: opts.currentModel?.() ?? state.currentModel ?? null,
+      systemPrompt: session.systemPrompt,
+      tools: (session.getAllTools?.() ?? []).filter((t) => active.has(t.name)),
+      contextFiles: facts.contextFiles,
+      skillTokens: facts.skillTokens ?? 0,
+      skillCount: facts.skills.length,
+      messages: session.messages ?? [],
+      usage: session.getContextUsage?.(),
+    });
+  }
+
   function contextReport(): string {
     const est = (bytes: number) => `~${Math.ceil(bytes / 4)}`;
     const usage = session.getContextUsage?.();
@@ -707,17 +784,46 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     return sendToModel ? `$ ${command}\n${result.output}` : undefined;
   }
 
+  /** T263: the picker on the line source, for a surface with no overlay. Empty or unknown input cancels. */
+  async function pickOnLines(points: readonly RewindPoint[]): Promise<RewindChoice | undefined> {
+    const ask = async (): Promise<number | undefined> => {
+      const line = await nextLine();
+      consumeLine();
+      const n = Number((line ?? "").trim());
+      return Number.isInteger(n) && n >= 1 ? n - 1 : undefined;
+    };
+    chrome(
+      ["rewind to before which prompt? (Enter cancels)", ...points.map((p, i) => `  ${i + 1}  ${rewindPointLabel(p)}`)].join("\n"),
+    );
+    const index = await ask();
+    if (index === undefined || index >= points.length) return undefined;
+    chrome(["restore what? (Enter cancels)", ...REWIND_RESTORES.map((r, i) => `  ${i + 1}  ${r.label}`)].join("\n"));
+    const which = await ask();
+    const restore = which !== undefined ? REWIND_RESTORES[which]?.restore : undefined;
+    if (restore !== "summarize") return restore === undefined ? undefined : { index, restore };
+    // T265: the note is optional, so an empty line here is no note rather than a cancel.
+    chrome(`${SUMMARIZE_NOTE_PROMPT}; Enter for none`);
+    const note = (await nextLine())?.trim();
+    consumeLine();
+    return { index, restore, ...(note ? { note } : {}) };
+  }
+
   async function handleOwned(
     parsed: Exclude<ReturnType<typeof parseInteractiveInput>, { kind: "prompt" } | { kind: "empty" } | { kind: "continue" }>,
   ): Promise<"exit" | "ok"> {
+    // P5 #58: a command's answer goes where the surface shows answers; the line surface keeps it in the transcript.
+    const say = (text: string, parts?: readonly SystemPart[]): void => {
+      if (ui?.writeReport) ui.writeReport(parsed.kind, text);
+      else chrome(text, parts);
+    };
     switch (parsed.kind) {
       case "exit":
         return "exit";
       case "help":
-        chrome(S0_HELP);
+        say(S0_HELP);
         return "ok";
       case "session":
-        chrome(sessionInfo());
+        say(sessionInfo());
         return "ok";
       case "resume":
         // Ends this session cleanly and hands the picker back to the
@@ -733,16 +839,44 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         resumeRequested = true;
         if (parsed.sessionId !== undefined) {
           resumeSessionId = parsed.sessionId;
-          chrome(`leaving this session and reopening ${parsed.sessionId.slice(0, 8)} — it continues as itself`);
+          say(`leaving this session and reopening ${parsed.sessionId.slice(0, 8)} — it continues as itself`);
         } else {
-          chrome("leaving this session and opening the session browser");
+          say("leaving this session and opening the session browser");
         }
         return "exit";
+      case "fork":
+        // T266: the same shape as `/resume` — this session is finalised on the
+        // way out, so the copy is of a session whose transcript and numbers are
+        // complete, and the caller starts the fork as a new row.
+        if (!session.isIdle) {
+          say("lykos: /fork cannot run while a turn is in flight");
+          return "ok";
+        }
+        forkRequested = true;
+        say("leaving this session and continuing in a fork of it — this one is kept as it is");
+        return "exit";
+      case "fork-at": {
+        if (!session.isIdle) {
+          say("lykos: /fork cannot run while a turn is in flight");
+          return "ok";
+        }
+        const points = opts.rewind?.points() ?? [];
+        const index = promptIndex(points, parsed.text, parsed.nth);
+        const point = index === undefined ? undefined : points[index];
+        if (point?.turn === undefined) {
+          say("lykos: that prompt is not in this session's conversation; nothing was changed");
+          return "ok";
+        }
+        forkRequested = true;
+        forkAt = { turn: point.turn, inputText: point.text };
+        say("leaving this session and continuing in a fork of it from before that prompt — this one is kept as it is");
+        return "exit";
+      }
       case "rename": {
         const wanted = parsed.name.trim();
         if (wanted.length === 0) {
           const current = humanName ?? derivedName;
-          chrome(
+          say(
             current === undefined
               ? "this session has no name yet — it gets one from the first thing you say, or type /rename <name>"
               : `this session is called "${current}" (${humanName !== undefined ? "you named it" : "derived from what you said first"})`,
@@ -751,21 +885,21 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         }
         humanName = wanted;
         opts.onRename?.(wanted);
-        chrome(`this session is now called "${wanted}"`);
+        say(`this session is now called "${wanted}"`);
         return "ok";
       }
       case "new-session":
         newRequested = true;
-        chrome("ending this session and starting a new session");
+        say("ending this session and starting a new session");
         return "exit";
       case "close-session":
         closeRequested = true;
-        chrome("closing this session");
+        say("closing this session");
         return "exit";
       case "copy": {
         const text = session.getLastAssistantText?.() ?? state.lastText;
         if (!text) {
-          chrome("lykos: no assistant message to copy");
+          say("lykos: no assistant message to copy");
           return "ok";
         }
         // Round thirteen, item 3: `/copy` now actually copies. It used to
@@ -776,30 +910,134 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // append-only surface, and any caller that passes none), printing
         // it remains the only thing that can be done and still is.
         if (opts.onCopyText) opts.onCopyText(text, "last answer");
-        else chrome(text);
+        else say(text);
+        return "ok";
+      }
+      case "export": {
+        // T267: from the transcript on disk, the same reader `lykos export` uses.
+        let markdown: string;
+        try {
+          markdown = sessionMarkdown(ledgerPath, session.sessionId);
+        } catch (err) {
+          say(`lykos: cannot export this session: ${(err as Error).message}`);
+          return "ok";
+        }
+        if (parsed.file.length > 0) {
+          const path = resolve(process.cwd(), parsed.file);
+          try {
+            writeFileSync(path, markdown, "utf8");
+          } catch (err) {
+            say(`lykos: cannot write ${path}: ${(err as Error).message}`);
+            return "ok";
+          }
+          say(`exported this session to ${path}`);
+          return "ok";
+        }
+        // Printing a whole session into the transcript would help nobody, so with no clipboard the file form is named instead.
+        if (!opts.onCopyText) {
+          say("lykos: no clipboard on this surface — /export <file> writes the session to a file");
+          return "ok";
+        }
+        if (opts.onCopyText(markdown, "session as Markdown") === false) {
+          say("lykos: /export <file> writes the session to a file instead");
+        }
+        return "ok";
+      }
+      case "rewind": {
+        // T263: the person's, never the agent's — there is no tool for it.
+        if (!opts.rewind) {
+          say("lykos: /rewind is not available on this session");
+          return "ok";
+        }
+        if (!session.isIdle) {
+          say("lykos: /rewind cannot run while a turn is in flight");
+          return "ok";
+        }
+        const points = opts.rewind.points();
+        if (points.length === 0) {
+          say("lykos: nothing to rewind yet — no prompt has been sent in this session");
+          return "ok";
+        }
+        const choice = await (opts.pickRewind ?? pickOnLines)(points);
+        if (choice === undefined) {
+          say("rewind cancelled; nothing was changed");
+          return "ok";
+        }
+        const report = await opts.rewind.rewind(session, choice.index, choice.restore, opts.recorder, choice.note);
+        say(report.lines.join("\n"));
+        // T264: the conversation is the transcript's now; the session that continues it puts the prompt back.
+        if (report.rebuild === true && report.inputText !== undefined) {
+          rewindRebuild = { inputText: report.inputText };
+          return "exit";
+        }
+        if (report.inputText !== undefined) putBack(report.inputText);
+        return "ok";
+      }
+      case "rewind-to": {
+        if (!opts.rewind) {
+          say("lykos: revert is not available on this session");
+          return "ok";
+        }
+        if (!session.isIdle) {
+          say("lykos: revert cannot run while a turn is in flight");
+          return "ok";
+        }
+        const index = promptIndex(opts.rewind.points(), parsed.text, parsed.nth);
+        if (index === undefined) {
+          say("lykos: that prompt is not in this session's conversation; nothing was changed");
+          return "ok";
+        }
+        const report = await opts.rewind.rewind(session, index, "both", opts.recorder);
+        say(report.lines.join("\n"));
+        if (report.rebuild === true && report.inputText !== undefined) {
+          rewindRebuild = { inputText: report.inputText };
+          return "exit";
+        }
+        if (report.inputText !== undefined) putBack(report.inputText);
+        return "ok";
+      }
+      case "undo":
+      case "redo": {
+        // P5 #42: the person's, as /rewind is.
+        if (!opts.rewind) {
+          say(`lykos: /${parsed.kind} is not available on this session`);
+          return "ok";
+        }
+        if (!session.isIdle) {
+          say(`lykos: /${parsed.kind} cannot run while a turn is in flight`);
+          return "ok";
+        }
+        const report =
+          parsed.kind === "undo" ? await opts.rewind.undo(session, opts.recorder) : await opts.rewind.redo(session, opts.recorder);
+        say(report.lines.join("\n"));
+        if (report.rebuild === true) {
+          rewindRebuild = { inputText: report.inputText ?? "" };
+          return "exit";
+        }
+        if (report.inputText !== undefined) putBack(report.inputText);
         return "ok";
       }
       case "verbose": {
         if (ui) ui.view.toolsCollapsed = !ui.view.toolsCollapsed;
         const collapsed = ui?.view.toolsCollapsed ?? true;
         opts.onExpandedChange?.(!collapsed);
-        chrome(collapsed ? "tool results collapsed" : "tool results expanded");
+        say(collapsed ? "tool results collapsed" : "tool results expanded");
         return "ok";
       }
       case "thinking":
         if (ui) ui.view.thinkingCollapsed = !ui.view.thinkingCollapsed;
-        chrome(ui?.view.thinkingCollapsed ? "thinking hidden" : "thinking shown");
+        say(ui?.view.thinkingCollapsed ? "thinking hidden" : "thinking shown");
         return "ok";
       case "compact": {
         if (!session.compact) {
-          chrome("lykos: compact is not available on this session");
+          say("lykos: compact is not available on this session");
           return "ok";
         }
         // T191: `/compact shake <text>` is refused here, before anything runs; the extension refuses it too
         // (a surface that is not this one), but its notice reaches nobody in this session.
         const asked = parseCompactArgs(parsed.hint);
         if ("error" in asked) {
-          chrome(asked.error);
+          say(asked.error);
           return "ok";
         }
         const seen = opts.compactionRecords?.().length ?? 0;
@@ -816,19 +1054,19 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
             last.tokens_before !== null && last.tokens_after !== null
               ? `, about ${last.tokens_before} to ${last.tokens_after} tokens (an estimate)`
               : "";
-          chrome(
+          say(
             last.result === "ok"
               ? `compacted by ${last.method ?? asked.method}${figures}`
               : `lykos: /compact ${asked.method} did not compact (${last.result}${last.error !== undefined ? `: ${last.error}` : ""})`,
           );
         } else if (failure !== undefined) {
-          chrome(`lykos: compact: ${failure.message}`);
+          say(`lykos: compact: ${failure.message}`);
         }
         return "ok";
       }
       case "effort": {
         const report = setEffort(parsed.level);
-        chrome(report.text, report.parts);
+        say(report.text, report.parts);
         // 2026-09-02 round thirteen, item 4: "after I type the command
         // effort <level> and it switches effort, the bar should change
         // colour instantly... furthermore, no matter what effort i change,
@@ -844,90 +1082,91 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // immediately and every surface showing it kept the old value
         // until something unrelated happened to repaint.
         if (ui) ui.writeHud(state, session.sessionId);
-        opts.onEffortChange?.(session.thinkingLevel ?? null);
+        opts.onEffortChange?.(session.thinkingLevel !== undefined ? effortLabel(session.model, session.thinkingLevel) : null);
         return "ok";
       }
       case "usage":
-        chrome(usageReport());
+        say(usageReport());
         return "ok";
       case "context":
-        chrome(contextReport());
+        if (ui?.writeReport) ui.writeReport("context", contextReport(), contextData());
+        else say(contextReport());
         return "ok";
       case "specialist-list":
         if (!opts.listSpecialists) {
-          chrome("lykos: specialist listing is not available on this session");
+          say("lykos: specialist listing is not available on this session");
           return "ok";
         }
-        chrome(opts.listSpecialists());
+        say(opts.listSpecialists());
         return "ok";
       case "specialist-switch": {
         if (!opts.switchSpecialist) {
-          chrome("lykos: specialist switching is not available on this session");
+          say("lykos: specialist switching is not available on this session");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: specialist cannot change while a turn is in flight");
+          say("lykos: specialist cannot change while a turn is in flight");
           return "ok";
         }
         const outcome = await opts.switchSpecialist(parsed.name);
-        chrome(outcome.ok ? outcome.report : `lykos: specialist switch refused — ${outcome.message}`);
+        say(outcome.ok ? outcome.report : `lykos: specialist switch refused — ${outcome.message}`);
         return "ok";
       }
       case "output-style-list":
         if (!opts.listOutputStyles) {
-          chrome("lykos: output style listing is not available on this session");
+          say("lykos: output style listing is not available on this session");
           return "ok";
         }
-        chrome(opts.listOutputStyles());
+        say(opts.listOutputStyles());
         return "ok";
       case "output-style-switch": {
         if (!opts.switchOutputStyle) {
-          chrome("lykos: output style switching is not available on this session");
+          say("lykos: output style switching is not available on this session");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: output style cannot change while a turn is in flight");
+          say("lykos: output style cannot change while a turn is in flight");
           return "ok";
         }
         const outcome = await opts.switchOutputStyle(parsed.name);
-        chrome(outcome.ok ? outcome.report : `lykos: output style switch refused — ${outcome.message}`);
+        say(outcome.ok ? outcome.report : `lykos: output style switch refused — ${outcome.message}`);
         return "ok";
       }
       case "refuse-model":
         if (!opts.setModel) {
-          chrome("lykos: model switching is not available on this session");
+          say("lykos: model switching is not available on this session");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: model cannot change while a turn is in flight");
+          say("lykos: model cannot change while a turn is in flight");
           return "ok";
         }
         if (parsed.kind !== "refuse-model") return "ok";
         if (parsed.spec) {
           try {
             modelSpec = await opts.setModel(parsed.spec, parsed.persist === true);
-            chrome(`model is now ${modelSpec}`);
+            say(`model is now ${modelSpec}`);
           } catch (err) {
-            chrome(`lykos: model switch refused — ${err instanceof Error ? err.message : String(err)}`);
+            say(`lykos: model switch refused — ${err instanceof Error ? err.message : String(err)}`);
           }
         } else {
-          chrome(`current model is ${opts.currentModel?.() ?? modelSpec}; use /model <provider/model> to switch`);
+          say(`current model is ${opts.currentModel?.() ?? modelSpec}; use /model <provider/model> to switch`);
         }
         return "ok";
       case "mode": {
         if (parsed.mode.length === 0) {
           const current = opts.currentMode?.() ?? DEFAULT_INTERACTION_MODE;
-          chrome(`interaction mode is ${MODE_INFO[current].label} — ${MODE_INFO[current].description}`);
-          chrome(`  switch with /mode <${INTERACTION_MODES.join("|")}>`);
+          say(`interaction mode is ${MODE_INFO[current].label} — ${MODE_INFO[current].description}`);
+          say(`  switch with /mode <${INTERACTION_MODES.join("|")}>`);
           return "ok";
         }
         const parsedMode = parseInteractionMode(parsed.mode);
         if (!parsedMode.ok) {
-          chrome(`lykos: ${parsedMode.error}`);
+          say(`lykos: ${parsedMode.error}`);
           return "ok";
         }
         if (!opts.setMode) {
-          chrome("lykos: this session shape cannot change interaction mode");
+          say("lykos: this session shape cannot change interaction mode");
           return "ok";
         }
         opts.setMode(parsedMode.mode);
@@ -943,7 +1182,7 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
           ...(liveMode !== undefined ? { liveMode } : {}),
           contained,
         });
-        chrome(res.report);
+        say(res.report);
         if (res.ok) {
           if (res.mode !== undefined) {
             opts.setMode?.(res.mode);
@@ -954,19 +1193,20 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       }
       case "login": {
         if (!opts.login) {
-          chrome("lykos: /login is not available on this session");
+          say("lykos: /login is not available on this session");
           return "ok";
         }
         if (parsed.provider.length === 0) {
-          chrome("usage: /login <provider> [--api-key]");
+          say("usage: /login <provider> [--api-key]");
           return "ok";
         }
         if (!session.isIdle) {
-          chrome("lykos: /login cannot run while a turn is in flight");
+          say("lykos: /login cannot run while a turn is in flight");
           return "ok";
         }
         await opts.login(parsed.provider, parsed.apiKey, {
-          write: (line) => chrome(line),
+          // A surface with popups shows the login's lines (a sign-in URL among them) in one.
+          write: (line) => (ui?.writeReport ? ui.writeReport("login", line) : chrome(line)),
           // Top level only (refused mid-turn above), so no read is pending
           // and these answers cannot be taken for prompts.
           read: async (secret) => {
@@ -979,12 +1219,53 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         });
         return "ok";
       }
-      case "credential":
-        if (!opts.credential) {
-          chrome("lykos: /credential is not available on this session");
+      case "provider": {
+        if (parsed.action !== "add") {
+          say("usage: /provider add");
           return "ok";
         }
-        chrome(opts.credential(parsed.arg));
+        if (!opts.addProvider) {
+          say("lykos: /provider is not available on this session");
+          return "ok";
+        }
+        if (!session.isIdle) {
+          say("lykos: /provider cannot run while a turn is in flight");
+          return "ok";
+        }
+        const report = (line: string): void => (ui?.writeReport ? ui.writeReport("provider", line) : chrome(line));
+        // Top level only (refused mid-turn above), so no read is pending and these answers cannot be taken for prompts.
+        const ask =
+          lineSource.ask?.bind(lineSource) ??
+          (async (q: ProviderAddQuestion): Promise<string | null> => {
+            chrome(`${q.title}: ${q.detail}${q.options ? ` (${q.options.map((o) => o.value).join(" | ")})` : ""}`);
+            const line = await nextLine();
+            consumeLine();
+            return line;
+          });
+        const added = await opts.addProvider({ ask, say: report });
+        if (added === null) return "ok";
+        const { provider, path } = added;
+        report(`${provider.id} (${provider.models.join(", ")}) is in ${path}; a new session can use ${provider.id}/${provider.models[0]}.`);
+        if (opts.login) {
+          await opts.login(provider.id, true, {
+            write: report,
+            read: async (secret) => {
+              if (secret && lineSource.nextSecret) return lineSource.nextSecret();
+              const line = await nextLine();
+              consumeLine();
+              return line;
+            },
+            masks: lineSource.nextSecret !== undefined,
+          });
+        }
+        return "ok";
+      }
+      case "credential":
+        if (!opts.credential) {
+          say("lykos: /credential is not available on this session");
+          return "ok";
+        }
+        say(opts.credential(parsed.arg));
         return "ok";
       case "extension-command": {
         // The host catches whatever the extension throws and returns a
@@ -993,10 +1274,10 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
         // visible, which is what a person typing a slash command would read
         // as the command being broken.
         if (!opts.runExtensionCommand) {
-          chrome(`lykos: /${parsed.command} is an extension command and this session shape has no extension host`);
+          say(`lykos: /${parsed.command} is an extension command and this session shape has no extension host`);
           return "ok";
         }
-        chrome(await opts.runExtensionCommand(parsed.command, parsed.args));
+        say(await opts.runExtensionCommand(parsed.command, parsed.args));
         return "ok";
       }
       case "skill":
@@ -1021,11 +1302,13 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       chrome(`lykos: blocked — ${verdict.reason}`);
       return false;
     }
-    ui?.writeUser(text);
+    ui?.writeUser(text, rawText);
     // T53: recorded after the budget guard, because a blocked turn is not a
     // turn — nothing was sent, and a transcript that claimed otherwise would
     // replay a prompt the model never saw.
-    opts.recorder?.userMessage(text);
+    opts.recorder?.userMessage(text, rawText);
+    // T263: the prompt as typed, so a rewind can put it back in the input box.
+    opts.rewind?.promptSent(session, rawText);
     turnRunning = true;
     try {
       await session.prompt(text);
@@ -1037,6 +1320,9 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
       return false;
     }
   }
+
+  // T264: a session rebuilt by a rewind past a resume starts with the prompt it went back to.
+  if (opts.inputText !== undefined && opts.inputText !== "") putBack(opts.inputText);
 
   while (true) {
     const line = initialPrompt ?? (await nextLine());
@@ -1188,6 +1474,9 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
     ...(sawError !== undefined ? { sawError } : {}),
     ...(resumeRequested ? { resumeRequested: true } : {}),
     ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+    ...(forkRequested ? { forkRequested: true } : {}),
+    ...(forkAt !== undefined ? { forkAt } : {}),
+    ...(rewindRebuild !== undefined ? { rewindRebuild } : {}),
     ...(humanName !== undefined
       ? { sessionName: humanName, nameIsHuman: true }
       : derivedName !== undefined
@@ -1207,6 +1496,47 @@ lykos: press Ctrl-C again within ${Math.round(CTRL_C_EXIT_WINDOW_MS / 1000)}s to
  * so the number the person confirmed is the number that gets sent and the
  * number the transcript records.
  */
+/** What one process of a resumed session reports to `lykos resume` (`cli/resume.ts`). */
+/** A fork cut before one prompt: the turn that prompt started, and the prompt, for the fork's input box. */
+export interface ForkAt {
+  turn: number;
+  inputText: string;
+}
+
+export interface LaunchResult {
+  status: "ok" | "error";
+  sessionId?: string;
+  message?: string;
+  forkRequested?: boolean;
+  forkAt?: ForkAt;
+  /** T264: a rewind went back past this process's prompts: rebuild the session from its transcript. */
+  rewindRebuild?: { inputText: string };
+}
+
+export interface LaunchInput {
+  workspace: string;
+  ledgerPath: string;
+  model: string | undefined;
+  resume: ResumePlan;
+}
+
+/**
+ * `lykos resume`'s `runResume`, as the engine server's session child calls it (P5 #42). The CLI hands it in, so
+ * `server/` does not import `cli/` (dependency rule 1).
+ */
+export type ResumeRunner = (
+  cwd: string,
+  ledgerPath: string,
+  idOrPrefix: string,
+  opts: {
+    fork?: boolean;
+    inputText?: string;
+    confirm?: (preflight: string) => Promise<boolean>;
+    onRefusal?: (reason: string) => void;
+    launch?: (input: LaunchInput) => Promise<LaunchResult>;
+  },
+) => Promise<number>;
+
 export interface ResumePlan {
   /** The session being continued. Written to `resumed_from`; the original is never touched. */
   fromSessionId: string;
@@ -1233,6 +1563,26 @@ export interface ResumePlan {
    * tool call with no result). Written after the marker; its text is already in `replayText`.
    */
   recovery?: Omit<RecoveryEvent, "kind">;
+  /**
+   * T266: set when this is a fork — a NEW session, with its own id and row, that continues a copy of
+   * `fromSessionId`, which is left exactly as it was. `records` is the parent's active branch, copied into
+   * the fork's transcript ahead of the marker so the fork's archive holds the conversation it continues
+   * (and a resume or a fork of the fork replays it); `turn` is the parent's last turn on that branch.
+   * `sessionId` is the fork's own, minted with the plan: a session continuing a plan boots with
+   * `fork?.sessionId ?? fromSessionId`.
+   */
+  fork?: { sessionId: string; turn?: number; records: readonly TranscriptRecord[] };
+  /**
+   * T264: the turn this process starts at, one past the highest in the transcript it continues, so a turn
+   * number names one turn across the session's processes. Absent, it starts at 0, as before T264.
+   */
+  firstTurn?: number;
+  /** T264: the prompts on the active branch before this process, which the rewind picker offers too. */
+  earlierPrompts?: readonly EarlierPrompt[];
+  /** P5 #42: the undos the transcript ends with, which `/redo` can take back. */
+  undos?: PendingUndos;
+  /** T264: what goes back in the input box when the session starts: a rewind past a resume's prompt. */
+  inputText?: string;
 }
 
 export interface RunInteractiveStandaloneSessionInput {
@@ -1240,6 +1590,11 @@ export interface RunInteractiveStandaloneSessionInput {
   model?: string;
   /** T209 / ADR-0041: explicit starting permission mode passed on startup (e.g. via --mode). */
   mode?: InteractionMode;
+  /**
+   * P5 #55: apply the interaction modes (`/mode`, Plan's exit, remembered approvals) in front of the approval
+   * gate. The engine server's session child sets it; a line session and a test that injects its own gate do not.
+   */
+  interactionModes?: boolean;
   /** T209: options passed to the permissions store (e.g. custom permissionsPath for tests). */
   permissionsOpts?: PermissionsOptions | undefined;
   tools?: string[];
@@ -1251,6 +1606,12 @@ export interface RunInteractiveStandaloneSessionInput {
   lineSource?: LineSource;
   /** Default: `TerminalApprovalGate` sharing `lineSource`. */
   approvalGate?: ApprovalGate;
+  /** P5 #35: the engine server's session asks over its own channel, not on `lineSource`. Default: `TerminalAsk` on `lineSource`. */
+  askHuman?: AskHuman;
+  /** P5 #35: the engine server's session turns what the surface shows into protocol events. Default: `createAgentUi`. */
+  /** P5 #38: `aside` answers a side question from this session's context, its call counted in the session's usage. */
+  /** P5 #41: `options` is what the client's pickers list for this session, read when called. */
+  createUi?: (opts: AgentUiOptions, session: InteractiveSession, aside: (question: string) => Promise<AsideAnswer>, options: () => SessionOptions) => AgentUi;
   /**
    * T162: native providers registered on this run's model runtime — tests
    * only, as for `runStandaloneTask`. The scripted-model session's faux
@@ -1288,8 +1649,6 @@ export interface RunInteractiveStandaloneSessionInput {
    * with `LYKOS_ASK_OUTCOME=1`.
    */
   askOutcome?: boolean;
-  /** T50.1: force the append-only surface even when `decideRenderMode()` would otherwise choose full-screen. */
-  noFullscreen?: boolean;
   /** T57: when set, this session continues another one. */
   resume?: ResumePlan;
   /**
@@ -1327,6 +1686,12 @@ export type RunInteractiveStandaloneSessionResult =
       resumeRequested?: boolean;
       /** T114: ...unless the browser already chose one, in which case the caller skips straight to it. */
       resumeSessionId?: string;
+      /** T266: the session ended because `/fork` was typed. The caller forks it. */
+      forkRequested?: boolean;
+      /** `/__fork`: the fork is cut before a prompt. */
+      forkAt?: ForkAt;
+      /** T264: a rewind went back past this process's prompts. The caller resumes the session, `inputText` in its input box. */
+      rewindRebuild?: { inputText: string };
       newRequested?: boolean;
       closeRequested?: boolean;
       /** T109: the context threshold requested a disk-rebuilt successor. */
@@ -1420,12 +1785,14 @@ export async function bootInteractiveSession(
     ...(posture.requestPlanExit !== undefined && extras.currentMode !== undefined
       ? { requestPlanExit: posture.requestPlanExit, currentMode: extras.currentMode }
       : {}),
-    ...(input.resume?.fromSessionId !== undefined
+    ...(input.resume !== undefined
       ? {
+          // T266: a fork carries the parent's task list and handoff too; both are only read.
           resumeTaskListFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
           // T152: an unfinished self-compact handoff finishes in the resumed session.
           resumeHandoffFrom: transcriptDir(ledgerPath, input.resume.fromSessionId),
-          sessionIdOverride: input.resume.fromSessionId,
+          sessionIdOverride: input.resume.fork?.sessionId ?? input.resume.fromSessionId,
+          ...(input.resume.firstTurn !== undefined ? { firstTurn: input.resume.firstTurn } : {}),
         }
       : shared.containment !== undefined && shared.containment.record.used !== "off" && shared.containedSessionId !== undefined
         ? { sessionIdOverride: shared.containedSessionId }
@@ -1553,7 +1920,7 @@ export async function runInteractiveStandaloneSession(
 
   // T173: the same decision `runStandaloneTask` makes, before anything boots.
   let containment: Containment;
-  const containedSessionId = input.resume?.fromSessionId ?? randomUUID();
+  const containedSessionId = input.resume !== undefined ? (input.resume.fork?.sessionId ?? input.resume.fromSessionId) : randomUUID();
   try {
     containment = await startContainment({
       config: config.containment,
@@ -1606,24 +1973,17 @@ export async function injectReplay(
   session: InteractiveSession,
   recorder: LiveTranscriptRecorder | undefined,
   plan: ResumePlan,
+  rewind?: LiveRewind,
 ): Promise<void> {
-  recorder?.resumeMarker({
-    from: plan.fromSessionId,
-    events: plan.replayEvents,
-    user_turns: plan.replayUserTurns,
-    estimate_tokens: plan.estimateTokens,
-    estimate_usd: plan.estimateUsd,
-    price_version: plan.priceVersion,
-    ...(plan.flags !== undefined ? { inherited_flags: plan.flags } : {}),
-  });
-  if (plan.recovery !== undefined) recorder?.recovery(plan.recovery);
+  recorder?.continues(plan);
+  // T264: the prompts before this process, so the rewind picker reaches them too.
+  rewind?.continues(plan);
   await session.sendCustomMessage?.(
     { customType: "lykos_resume", content: plan.replayText, display: false },
     { triggerTurn: false },
   );
 }
 
-/** T37's surface, unchanged in behaviour from before T50.1's branch existed — the fallback every mode not `fullscreen` gets, and the only mode a caller that injects its own `lineSource`/`approvalGate` (a test, an acceptance script) ever gets. */
 /**
  * T33's "one ledger, one ingest path" for real: both render-mode branches
  * end here, so ingest and the T52.1 outcome question can never diverge
@@ -1678,6 +2038,10 @@ function interactiveIngestOpts(opts: InteractiveIngestInput): IngestOpts {
     // original — `sessionAlreadyExists` in `ingest.ts` sees it and
     // updates rather than inserting — so an edge from a session to itself
     // is neither needed nor meaningful.
+    // T266: a fork's row is new, and says which session and turn it was copied from.
+    ...(opts.resume?.fork !== undefined
+      ? { forkedFrom: { sessionId: opts.resume.fromSessionId, ...(opts.resume.fork.turn !== undefined ? { turn: opts.resume.fork.turn } : {}) } }
+      : {}),
     ...(opts.recorder !== undefined ? { liveTranscript: opts.recorder } : {}),
   };
 }
@@ -1980,6 +2344,9 @@ export async function finishInteractiveSession(opts: {
     snapshot,
     ...(loopResult.resumeRequested ? { resumeRequested: true } : {}),
     ...(loopResult.resumeSessionId !== undefined ? { resumeSessionId: loopResult.resumeSessionId } : {}),
+    ...(loopResult.forkRequested ? { forkRequested: true } : {}),
+    ...(loopResult.forkAt !== undefined ? { forkAt: loopResult.forkAt } : {}),
+    ...(loopResult.rewindRebuild !== undefined ? { rewindRebuild: loopResult.rewindRebuild } : {}),
     ...(loopResult.newRequested ? { newRequested: true } : {}),
     ...(loopResult.closeRequested ? { closeRequested: true } : {}),
   };
@@ -1990,7 +2357,7 @@ export async function finishInteractiveSession(opts: {
  * scripted `LineSource` and a temp ledger with no session and no terminal.
  *
  * The division of labour is `07-ui-and-hud.md` §1.1, unchanged by Phase 3.5:
- * `tui/outcome.ts` renders the question and parses the answer and touches no
+ * `surface/outcome.ts` renders the question and parses the answer and touches no
  * ledger; `cli/verify.ts` runs the command and performs the single write.
  * Nothing here can produce `outcome_source = 'agent_claim'` -- it is not an
  * option on screen, and the ledger writer rejects the value outright.

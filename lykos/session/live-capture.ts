@@ -45,9 +45,12 @@ import {
   type CaptureMode,
   type RecoveryEvent,
   type ResumeEvent,
+  type RedoEvent,
+  type RewindEvent,
   type SessionMeta,
   type TranscriptEventInput,
 } from "./transcript.js";
+import type { ResumePlan } from "./interactive.js";
 import { isFileChangingCall, resolveActualToolArgs } from "../tools/tool-call.js";
 import { readLiveSnapshot, recordLiveTurns } from "../ledger/live.js";
 import { SELF_COMPACT_NOTE_TYPE } from "../loop/self-compact.js";
@@ -66,10 +69,15 @@ export interface EventSource {
  * to run.
  */
 export interface TranscriptRecorder {
-  userMessage(text: string): void;
+  /** T264: `typed`, the prompt as typed, when `text` (as sent) differs from it. */
+  userMessage(text: string, typed?: string): void;
   steer(text: string, mode?: "steer" | "follow_up"): void;
   answer(question: string, answer: string): void;
   intervention(action: string, detail?: string): void;
+  /** T263: optional, so a test's recorder need not write rewinds. */
+  rewind?(event: Omit<RewindEvent, "kind">): void;
+  /** P5 #42: optional for the same reason. */
+  redo?(event: Omit<RedoEvent, "kind">): void;
 }
 
 interface AgentEventish {
@@ -116,8 +124,13 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
   private cutOffKey: object | undefined;
   /** T146: each running call's arguments, so its result can say whether it changed a file. */
   private toolCallArgs = new Map<string, unknown>();
-  /** T146: the next `turn_start`'s number — the same session-wide count the harness writes on checkpoints. */
+  /** T146: the next `turn_start`'s number — the same session-wide count the harness writes on checkpoints. T264: a resumed process continues it (`continues`). */
   private nextTurn = 0;
+  /**
+   * T264: the checkpoint turn `turn` started from (`LiveRewind.checkpointOf`). Pi tells the extensions of a
+   * turn start before its subscribers, so the harness has taken it by the time this asks.
+   */
+  checkpointOf?: (turn: number) => string | undefined;
   /** T238: turns ended, written to `live.json` at each turn end. A resumed session continues its count. */
   private turnsEnded: number;
 
@@ -153,8 +166,8 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
     this.writer.append(event);
   }
 
-  userMessage(text: string): void {
-    this.append({ kind: "user_message", text });
+  userMessage(text: string, typed?: string): void {
+    this.append({ kind: "user_message", text, ...(typed !== undefined && typed !== text ? { typed } : {}) });
   }
 
   steer(text: string, mode: "steer" | "follow_up" = "steer"): void {
@@ -172,6 +185,41 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
   /** T57: written before anything else on a resumed session, so the file explains itself from its first line. */
   resumeMarker(event: Omit<ResumeEvent, "kind">): void {
     this.append({ kind: "resume", ...event });
+  }
+
+  /**
+   * T57/T266: what a session continuing `plan` writes before anything of its own. A fork first copies its
+   * parent's active branch, each record at the time it was first written, so its transcript reads like a
+   * resumed one: the conversation it continues, the marker, then this process. The parent's `usage` and
+   * `outcome` lines are not copied: they are facts about the parent's calls and row, which stay the parent's.
+   */
+  continues(plan: ResumePlan): void {
+    if (plan.firstTurn !== undefined) this.nextTurn = plan.firstTurn;
+    for (const { ts_utc, turn_index: _turnIndex, ...event } of plan.fork?.records ?? []) {
+      if (event.kind === "usage" || event.kind === "outcome") continue;
+      this.writer.append(event as TranscriptEventInput, new Date(ts_utc));
+    }
+    this.resumeMarker({
+      from: plan.fromSessionId,
+      ...(plan.fork !== undefined ? { fork: plan.fork.turn !== undefined ? { turn: plan.fork.turn } : {} } : {}),
+      events: plan.replayEvents,
+      user_turns: plan.replayUserTurns,
+      estimate_tokens: plan.estimateTokens,
+      estimate_usd: plan.estimateUsd,
+      price_version: plan.priceVersion,
+      ...(plan.flags !== undefined ? { inherited_flags: plan.flags } : {}),
+    });
+    if (plan.recovery !== undefined) this.recovery(plan.recovery);
+  }
+
+  /** T263: a rewind of this live session, at the moment it happened. */
+  rewind(event: Omit<RewindEvent, "kind">): void {
+    this.append({ kind: "rewind", ...event });
+  }
+
+  /** P5 #42: a redo of this live session's undos. */
+  redo(event: Omit<RedoEvent, "kind">): void {
+    this.append({ kind: "redo", ...event });
   }
 
   /** T238: the working tree a resume found, after the marker and before the replay. */
@@ -205,9 +253,12 @@ export class LiveTranscriptRecorder implements TranscriptRecorder {
     return source.subscribe((raw) => {
       const ev = raw as AgentEventish;
       switch (ev.type) {
-        case "turn_start":
-          this.append({ kind: "turn_start", turn: this.nextTurn++ });
+        case "turn_start": {
+          const turn = this.nextTurn++;
+          const checkpoint = this.checkpointOf?.(turn);
+          this.append({ kind: "turn_start", turn, ...(checkpoint !== undefined ? { checkpoint } : {}) });
           break;
+        }
         case "turn_end":
           this.turnsEnded += 1;
           recordLiveTurns(this.ledgerPath, this.sessionId, this.turnsEnded);

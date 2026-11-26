@@ -181,7 +181,7 @@ import {
   type RepoMap,
   type RepoMapPolicy,
 } from "../context/repo-map.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { LiveTranscriptRecorder } from "./live-capture.js";
 import { readSessionMeta, transcriptDir, type SessionResumeContract } from "./transcript.js";
 import { currentGitCommit, gitStatus, isGitDirty } from "./identity.js";
@@ -189,6 +189,7 @@ import { currentPriceTable } from "../ledger/prices.js";
 import { AUTO_SEARCH_PROVIDER, resolveAutoSearchKeys, resolveSearchApiKey, type SearchBackendKeys } from "../tools/web-search.js";
 import { assembleOutputStyleHead, resolveOutputStyle } from "../config/output-styles.js";
 import { homedir } from "node:os";
+import { LiveRewind } from "./rewind.js";
 
 /**
  * T86: the model's context window, if the registry knows it. Never guesses:
@@ -350,6 +351,8 @@ export function buildAppendSystemPromptOverride(
 
 export interface BootedStandaloneSession {
   session: AgentSession;
+  /** T263: `/rewind` and Esc Esc in the live session: its prompts, and the checkpoint each started from. */
+  rewind: LiveRewind;
   headContract: HeadContract;
   /** T84: live clamp counters, mutated by the harness extension all session. */
   harnessObservation: HarnessObservation;
@@ -594,6 +597,8 @@ export interface BootConfig {
   isPlanning?: () => boolean;
   resumeTaskListFrom?: string;
   sessionIdOverride?: string;
+  /** T264: the turn a resumed session's process starts at (`ResumePlan.firstTurn`); absent, 0. */
+  firstTurn?: number;
   /**
    * T152: a resumed session's predecessor directory. An unfinished
    * self-compact handoff recorded there (`self-compact.jsonl`) is re-appended
@@ -775,6 +780,8 @@ interface AssembleOpts {
   /** T173: see `BootConfig.containment`. */
   containment?: ContainmentRecord;
   sessionIdOverride?: string;
+  /** T264: the turn a resumed session's process starts at (`ResumePlan.firstTurn`); absent, 0. */
+  firstTurn?: number;
   /** T152: see `BootInput.resumeHandoffFrom`. */
   resumeHandoffFrom?: string;
   spawn?: Omit<SpawnContext, "parentSessionId"> & { parentSessionId?: string };
@@ -1042,9 +1049,13 @@ async function assembleSession(opts: AssembleOpts): Promise<BootedStandaloneSess
   const sessionHolder: { id?: () => string } = {};
   extensionHost.setSessionId(() => sessionHolder.id?.() ?? "");
   extensionHost.setSpecialist(() => opts.specialistName);
+  // T263: the live session's rewind, told by the harness which checkpoint each turn started from.
+  const rewind = new LiveRewind(checkpointEnabled ? cwd : undefined);
   const harnessExtension = createHarnessExtension({
     maxBytes: toolResultMaxBytesFromEnv(),
     observation: harnessObservation,
+    onTurnStart: (turn, checkpoint) => rewind.turnStarted(turn, checkpoint),
+    ...(opts.firstTurn !== undefined ? { firstTurn: opts.firstTurn } : {}),
     compactionThreshold: opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
     events,
     extensionHost,
@@ -1399,6 +1410,7 @@ ${note}
 
   return {
     session,
+    rewind,
     headContract,
     harnessObservation,
     denials,
@@ -1731,6 +1743,7 @@ export async function boot(input: BootConfig, deps?: BootDeps): Promise<BootedSt
     ...(input.isPlanning !== undefined ? { isPlanning: input.isPlanning } : {}),
     ...(input.resumeTaskListFrom !== undefined ? { resumeTaskListFrom: input.resumeTaskListFrom } : {}),
     ...(input.sessionIdOverride !== undefined ? { sessionIdOverride: input.sessionIdOverride } : {}),
+    ...(input.firstTurn !== undefined ? { firstTurn: input.firstTurn } : {}),
     ...(input.resumeHandoffFrom !== undefined ? { resumeHandoffFrom: input.resumeHandoffFrom } : {}),
     ...(input.taskVerifier !== undefined ? { taskVerifier: input.taskVerifier } : {}),
     ...(input.executor !== undefined ? { executor: input.executor } : {}),
@@ -1879,6 +1892,9 @@ export function startLiveCapture(opts: {
   const recorder = LiveTranscriptRecorder.create(opts.ledgerPath, opts.session.sessionId);
   if (!recorder) return { recorder: undefined, detach: () => {} };
   recorder.watchCutOff(opts.session);
+  // T264: each turn_start carries its checkpoint, so a later process can rewind the code to it. A stub has no rewind.
+  const rewind: LiveRewind | undefined = opts.booted.rewind;
+  if (rewind !== undefined) recorder.checkpointOf = (turn) => rewind.checkpointOf(turn);
   const priorMeta = readSessionMeta(opts.ledgerPath, opts.session.sessionId);
   recorder.writeMeta({
     taskId: opts.taskId ?? null,

@@ -55,8 +55,10 @@
 // assumes.
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
-import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+import { dirname, join, resolve, sep } from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import type { loadSkillsFromDir as LoadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import type { SkillsConfig } from "../config/types.js";
 
 export type { SkillsConfig };
@@ -81,12 +83,31 @@ export function lykosSkillsDir(cwd: string): string {
  * first-wins, exactly as Pi's `loadSkills` does, so this roster is byte-faithful
  * to what `boot()` offers the model.
  */
+let piLoader: typeof LoadSkillsFromDir | undefined;
+
+/**
+ * Pi's loader, loaded on first use. Config validation reaches this module (a specialist's skills roster is checked
+ * against these names), and a static import of Pi's root costs every `lykos` command about 2 s at startup, `serve`
+ * among them; its skills module alone costs 0.4 s and only a roster needs it. Pi exports only its root, and loading
+ * the root through `require` fails under tsx, so the module is required by its file, next to the root's: a Pi
+ * that moves it fails here, by name, the first time a roster is checked (`lykos/cli/prompt.test.ts` covers it).
+ */
+function piLoadSkillsFromDir(): typeof LoadSkillsFromDir {
+  if (piLoader === undefined) {
+    const root = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+    const mod = createRequire(import.meta.url)(join(dirname(root), "core", "skills.js")) as { loadSkillsFromDir?: typeof LoadSkillsFromDir };
+    if (typeof mod.loadSkillsFromDir !== "function") throw new Error(`Pi's skills loader is not at ${join(dirname(root), "core", "skills.js")}`);
+    piLoader = mod.loadSkillsFromDir;
+  }
+  return piLoader;
+}
+
 export function discoverSkills(cwd: string): SkillLike[] {
   const dir = lykosSkillsDir(cwd);
   if (!existsSync(dir)) return [];
   const seen = new Set<string>();
   const out: SkillLike[] = [];
-  for (const s of loadSkillsFromDir({ dir, source: "project" }).skills) {
+  for (const s of piLoadSkillsFromDir()({ dir, source: "project" }).skills) {
     if (seen.has(s.name)) continue;
     seen.add(s.name);
     out.push({ name: s.name, description: s.description, filePath: s.filePath, disableModelInvocation: s.disableModelInvocation });
@@ -352,4 +373,34 @@ export function listSkillFiles(cwd: string): string[] {
   } catch {
     return [];
   }
+}
+
+/** A skill as a list shows it: what `/skill:name` runs, and what it is for. */
+export interface ListedSkill {
+  name: string;
+  description: string;
+}
+
+/**
+ * Every skill a session started in `cwd` would offer, without starting one: Pi's own loader, given what `boot()`
+ * gives it (the pi-host agent directory, `.lykos/skills`, the cap), so it finds what a session finds in
+ * `~/.lykos/pi-host/skills`, `.pi/skills`, `.agents/skills` and `~/.agents/skills`. A specialist's roster narrows it
+ * further in a session. Pi is loaded here, not at startup.
+ */
+export async function listSkills(cwd: string, config?: SkillsConfig): Promise<ListedSkill[]> {
+  const policy = resolveSkillsPolicy(cwd, config);
+  if (!policy.enabled) return [];
+  const { DefaultResourceLoader, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  const { piHostDir } = await import("../config/pi-host.js");
+  const agentDir = piHostDir();
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager: SettingsManager.create(cwd, agentDir),
+    noExtensions: true,
+    ...(policy.paths.length > 0 ? { additionalSkillPaths: policy.paths } : {}),
+  });
+  await loader.reload();
+  const kept = capSkills(loader.getSkills().skills, policy.max).kept;
+  return kept.map((s) => ({ name: `/skill:${s.name}`, description: s.description })).sort((a, b) => a.name.localeCompare(b.name));
 }

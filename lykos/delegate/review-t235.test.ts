@@ -677,4 +677,18 @@ describe("T235 ACCEPTANCE: a review through the real session child and a scripte
     const stored = withLedgerSync(defaultLedgerPath(ws), (ledger) => findingsOf(ledger, r.reviewer!.session_id!));
     assert.equal(stored.length, 3);
   });
+
+  it("Boxie 0a78983: a reviewer cut at its step cap keeps the findings it recorded", { timeout: 240_000 }, async () => {
+    const ws = repo();
+    const id = await implement(ws, SUBTRACT, "opencode/deepseek-v4.1-flash-free");
+    const model = await scriptedProvider([
+      reply(call("finding", { text: "add now subtracts", severity: "high", basis: "src/math.mjs:1", check: REPRO })),
+      reply(call("finding", { text: "a test is needed for negative numbers", severity: "medium", basis: "src/math.mjs:1" })),
+      reply(say("never reached: the cap cut the session")),
+    ]);
+    const r = await review(ws, id, childRunner(ws, model.provider, []), { maxSteps: 2 });
+    assert.equal(model.unusedSteps(), 1, "the cap cut the reviewer before its last turn");
+    assert.equal(r.outcome, "ok", JSON.stringify(r));
+    assert.deepEqual(r.findings?.map((f) => [f.severity, f.disposition]), [["high", "blocks"], ["medium", "triage"]], JSON.stringify(r.findings));
+  });
 });

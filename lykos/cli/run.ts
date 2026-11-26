@@ -8,12 +8,12 @@ import { defaultLedgerPath, openLedger } from "../ledger/use.js";
 import { formatSessionSummary, loadSessionSummary } from "../ledger/summary.js";
 import type { InteractionMode } from "../gate/modes.js";
 import { DEFAULT_DELEGATED_MODE } from "../delegate/session-protocol.js";
-import { stderrWrite, stdoutWrite } from "../tui/io-mode.js";
+import { stderrWrite, stdoutWrite } from "../io-mode.js";
 import { ensureWorkspaceTrust, WorkspaceTrustError, type TrustDecision } from "../gate/trust.js";
 import { DEFAULT_SPECIALIST } from "../config/specialists.js";
 import { loadConfig } from "../config/load.js";
 import type { ResolvedConfig } from "../config/types.js";
-import type { RunStandaloneTaskInput } from "../session/session.js";
+import type { ImageAttachment, RunStandaloneTaskInput } from "../session/session.js";
 import { readFileSync } from "node:fs";
 import { runDelegated } from "../delegate/mcp-server.js";
 import { parseTaskFile, resolveTestCommand, testCommandBrief, type TaskFile } from "../delegate/task-file.js";
@@ -81,6 +81,8 @@ export interface RunCliOptions {
   base?: string;
   /** T259: `--rulings-from <id>[,<id>]`, sessions whose spec-check rulings bind this one. */
   rulingsFrom?: string[];
+  /** T268: the images the brief's `@path` mentions attached, sent with it as image parts. */
+  images?: ImageAttachment[];
 }
 
 /** The env half of `--ask-outcome`. Any value but `0`/`false`/empty counts as on. */
@@ -120,6 +122,7 @@ export function sessionInput(
     ...(trustSource !== undefined ? { trustSource } : {}),
     specialist: opts.specialist ?? DEFAULT_SPECIALIST,
     ...(opts.outputStyle !== undefined ? { outputStyle: opts.outputStyle } : {}),
+    ...(opts.images !== undefined && opts.images.length > 0 ? { images: opts.images } : {}),
   };
 }
 
@@ -234,6 +237,7 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
           ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
           ...(opts.autoApprove === true ? { autoApprove: true } : {}),
           ...(opts.subagents === true ? { subagents: true } : {}),
+          ...(opts.images !== undefined && opts.images.length > 0 ? { images: opts.images } : {}),
         },
       },
       { trustSource: trust.source, signal: abort.signal, onProgress: (message) => stderrWrite(`lykos run: ${message}\n`) },
@@ -252,6 +256,27 @@ export async function runRun(cwd: string, prompt: string | undefined, opts: RunC
  * abort-then-end behaviour real rather than just tested.
  */
 async function runInteractive(cwd: string, opts: RunCliOptions, trustSource: "stored" | "flag" | "prompt"): Promise<number> {
+  // P5 #55: in a terminal, the conversation is lykos-tui's. It carries the model, and the mode as the project's
+  // remembered one (an explicit --mode is remembered either way, T209). An option it does not carry yet, and a
+  // session without a terminal, run the line session below.
+  const tuiCarries =
+    opts.tools === undefined &&
+    opts.subagents === undefined &&
+    opts.taskId === undefined &&
+    opts.projectId === undefined &&
+    opts.specialist === undefined &&
+    opts.outputStyle === undefined &&
+    opts.autoApprove !== true &&
+    opts.askOutcome !== true;
+  if (process.stdin.isTTY && process.stdout.isTTY && tuiCarries) {
+    if (opts.mode !== undefined) {
+      const { rememberMode } = await import("../gate/permissions.js");
+      const { resolveProject } = await import("../session/identity.js");
+      rememberMode(resolveProject(cwd).id, opts.mode);
+    }
+    const { runTui } = await import("./tui.js");
+    return runTui(cwd, { trust: trustSource, args: opts.model !== undefined ? ["--model", opts.model] : [] });
+  }
   const { runInteractiveStandaloneSession } = await import("../session/interactive.js");
   const result = await runInteractiveStandaloneSession({
     workspace: cwd,
@@ -307,6 +332,18 @@ async function runInteractive(cwd: string, opts: RunCliOptions, trustSource: "st
         }));
       if (!picked) return 0;
       return await runResume(cwd, ledgerPath, picked, { lineSource });
+    } finally {
+      lineSource.close();
+    }
+  }
+  // T266: `/fork` ended the session above; it is finalised, so the copy is of a complete session.
+  if (result.forkRequested) {
+    const { runResume } = await import("./resume.js");
+    const { createReadlineLineSource } = await import("../session/interactive.js");
+    const lineSource = createReadlineLineSource();
+    try {
+      const at = result.forkAt !== undefined ? { forkAt: result.forkAt.turn, inputText: result.forkAt.inputText } : {};
+      return await runResume(cwd, ledgerPath, result.sessionId, { lineSource, fork: true, ...at });
     } finally {
       lineSource.close();
     }

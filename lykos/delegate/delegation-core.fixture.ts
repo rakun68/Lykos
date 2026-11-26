@@ -6,7 +6,7 @@
 import { appendFileSync, existsSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { runDelegated } from "./mcp-server.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import type { SessionRunner } from "./session-protocol.js";
 
 const [workspace, releaseFile, requestId] = process.argv.slice(2);

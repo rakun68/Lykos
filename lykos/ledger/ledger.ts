@@ -83,6 +83,12 @@ export interface SessionFlags {
   memoryInject?: boolean;
 }
 
+/** T266: the session a fork was copied from, and the parent's last turn the copy carries. */
+export interface ForkedFrom {
+  sessionId: string;
+  turn?: number;
+}
+
 export interface StartSessionInput {
   id?: string;
   /** T238: written at boot, before the session runs anything; ingest finalises it. */
@@ -144,6 +150,8 @@ export interface StartSessionInput {
   resumedFrom?: string;
   /** T109: boundaries crossed by this task; NULL on pre-T109 rows. */
   continuationsUsed?: number;
+  /** T266: this session is a fork of `sessionId`, copied at its turn `turn` (absent when it had none). */
+  forkedFrom?: ForkedFrom;
   /** The PROJECT's working-tree commit at session start (not harnessCommit). */
   gitCommit?: string;
   gitDirty?: boolean;
@@ -750,6 +758,7 @@ function applySchemaOnce(db: Database.Database): void {
   migrateSpecChecks(db);
   migrateFindings(db);
   migrateCycles(db);
+  migrateBenchResults(db);
   // T119: this view's grouping changed from session-only to session+model.
   // CREATE VIEW IF NOT EXISTS cannot replace the old definition on a ledger
   // that predates model switching, so refresh this derived view after all
@@ -1179,6 +1188,33 @@ function migrateBaselines(db: Database.Database): void {
   `);
 }
 
+/**
+ * T258: `bench_results`, one row per `lykos bench check`: a benchmark instance's hidden tests run on a ref. Append-only;
+ * `status` is `resolved`, `unresolved` or `error`, and the counts are null when the tests never ran.
+ */
+function migrateBenchResults(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bench_results (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts           TEXT NOT NULL,
+      dataset      TEXT NOT NULL,
+      revision     TEXT NOT NULL,
+      instance_id  TEXT NOT NULL,
+      ref          TEXT NOT NULL,
+      head         TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      f2p_passed   INTEGER,
+      f2p_total    INTEGER,
+      p2p_passed   INTEGER,
+      p2p_total    INTEGER,
+      error        TEXT,
+      duration_ms  INTEGER NOT NULL,
+      log_path     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bench_results_instance ON bench_results(instance_id);
+  `);
+}
+
 /** T257: create `process_records` on a ledger that predates it. */
 function migrateProcessRecords(db: Database.Database): void {
   db.exec(`
@@ -1287,6 +1323,9 @@ function migrateSessionsTable(db: Database.Database): void {
     // T109: no DEFAULT and no backfill. NULL means the session predates
     // continuation measurement; 1, 2, ... identify successor boundaries.
     ["continuations_used", "INTEGER"],
+    // T266: no DEFAULT and no backfill. NULL means not a fork.
+    ["forked_from", "TEXT REFERENCES sessions(id)"],
+    ["forked_from_turn", "INTEGER"],
     ["git_commit", "TEXT"],
     ["git_dirty", "INTEGER DEFAULT 0"],
     ["agent_role", "TEXT"],
@@ -1298,6 +1337,8 @@ function migrateSessionsTable(db: Database.Database): void {
     ["trust_source", "TEXT"],
     ["closed_utc", "TEXT"],
     ["deleted_utc", "TEXT"],
+    // P5 #42: no DEFAULT and no backfill. Set when a person archives the session from lykos-tui's session list.
+    ["archived_utc", "TEXT"],
     ["browser_fanout_ms", "INTEGER"],
     ["browser_projects_scanned", "INTEGER"],
     ["browser_rows_returned", "INTEGER"],
@@ -1742,7 +1783,7 @@ export class Ledger {
            map_explore_covered, map_explore_uncovered,
            compaction_threshold, context_files,
            extensions, extension_set, extension_schema_tokens, extension_schema_share,
-           project_id, parent_session_id, resumed_from, continuations_used, git_commit, git_dirty,
+           project_id, parent_session_id, resumed_from, continuations_used, forked_from, forked_from_turn, git_commit, git_dirty,
            agent_role, model, model_switches, model_path, specialist_switches, specialist_path, trust_source, model_source, specialist, resumable, not_resumable_reason,
            closed_utc, deleted_utc, browser_fanout_ms, browser_projects_scanned, browser_rows_returned,
            execution_shape, runtime, capture_mode, archive_state,
@@ -1760,7 +1801,7 @@ export class Ledger {
            @map_explore_covered, @map_explore_uncovered,
            @compaction_threshold, @context_files,
            @extensions, @extension_set, @extension_schema_tokens, @extension_schema_share,
-           @project_id, @parent_session_id, @resumed_from, @continuations_used, @git_commit, @git_dirty,
+           @project_id, @parent_session_id, @resumed_from, @continuations_used, @forked_from, @forked_from_turn, @git_commit, @git_dirty,
            @agent_role, @model, @model_switches, @model_path, @specialist_switches, @specialist_path, @trust_source, @model_source, @specialist, @resumable, @not_resumable_reason,
            @closed_utc, @deleted_utc, @browser_fanout_ms, @browser_projects_scanned, @browser_rows_returned,
            @execution_shape, @runtime, @capture_mode, 'live',
@@ -1823,6 +1864,8 @@ export class Ledger {
         parent_session_id: input.parentSessionId ?? null,
         resumed_from: input.resumedFrom ?? null,
         continuations_used: input.continuationsUsed ?? null,
+        forked_from: input.forkedFrom?.sessionId ?? null,
+        forked_from_turn: input.forkedFrom?.turn ?? null,
         git_commit: input.gitCommit ?? null,
         git_dirty: input.gitDirty ? 1 : 0,
         agent_role: input.agentRole ?? null,
@@ -2385,6 +2428,7 @@ export class Ledger {
    *    refusal to overwrite it is not bypassed here.
    *  * `archive_state` returns to `recent`, because the transcript is about
    *    to be appended to again.
+   *  * P5 #42: `archived_utc` is cleared: a session someone resumed is back in lykos-tui's list.
    */
   reopenSession(id: string): void {
     const row = this.db
@@ -2397,6 +2441,7 @@ export class Ledger {
         `UPDATE sessions
             SET ended_utc = NULL,
                 closed_utc = NULL,
+                archived_utc = NULL,
                 archive_state = CASE WHEN archive_state = 'archived' THEN archive_state ELSE 'recent' END,
                 outcome = CASE WHEN @keep_outcome = 1 THEN outcome ELSE NULL END,
                 outcome_source = CASE WHEN @keep_outcome = 1 THEN outcome_source ELSE NULL END
@@ -2423,6 +2468,24 @@ export class Ledger {
     const result = this.db
       .prepare(`UPDATE sessions SET brief = @brief WHERE id = @id`)
       .run({ id, brief: optionalRedact(trimmed) ?? trimmed });
+    return result.changes > 0;
+  }
+
+  /**
+   * P5 #42: lykos-tui's "delete" (OpenCode `session.delete`). Nothing is deleted: the session is closed as
+   * `closeSession` closes it and leaves the TUI's session list; its row, transcript and calls stay, `lykos session`
+   * lists it, and `lykos resume` reopens it. Returns false for an unknown id.
+   */
+  archiveSession(id: string, atUtc = new Date().toISOString()): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE sessions
+            SET archived_utc = COALESCE(archived_utc, @at),
+                closed_utc = COALESCE(closed_utc, @at),
+                ended_utc  = COALESCE(ended_utc, @at)
+          WHERE id = @id`,
+      )
+      .run({ id, at: atUtc });
     return result.changes > 0;
   }
 

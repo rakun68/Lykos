@@ -39,7 +39,7 @@
 // (AGENTS.md rules 3 and 6), and no new tool schema (rule 3's per-turn tax).
 
 /** The v1 definition, kept so `explore_metric_version = 1` means something specific. Not used to count new rows. */
-import { isFileChangingCall, resolveActualToolArgs, resolveActualToolName } from "../tools/tool-call.js";
+import { isFileChangingCall, resolveActualToolArgs, resolveActualToolName } from "../tools/tool-call-name.js";
 
 export const EXPLORATION_TOOL_NAMES_V1 = ["read", "grep", "find", "ls"] as const;
 

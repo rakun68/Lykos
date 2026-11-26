@@ -92,7 +92,7 @@ interface FauxModule {
   fauxProvider(options?: {
     provider?: string;
     api?: string;
-    models?: Array<{ id: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean }>;
+    models?: Array<{ id: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; input?: ("text" | "image")[] }>;
   }): FauxHandle;
   fauxText(text: string): FauxContent;
   fauxToolCall(name: string, args: Record<string, unknown>, options?: { id?: string }): FauxContent;
@@ -312,6 +312,8 @@ export interface ScriptedSessionOptions {
   env?: Record<string, string | undefined>;
   /** The faux model's context window. Default 128000, Pi's faux default. */
   contextWindow?: number;
+  /** T268: what the faux model declares it takes. Default Pi's faux default, text and images. */
+  modelInput?: ("text" | "image")[];
 }
 
 export interface ScriptedSession {
@@ -413,12 +415,12 @@ export async function runScriptedSession(opts: ScriptedSessionOptions): Promise<
 }
 
 /** A scripted model, registered as Pi's faux provider, answering `script` in order. */
-async function scriptedModel(script: ScriptStep[], contextWindow: number | undefined) {
+async function scriptedModel(script: ScriptStep[], contextWindow: number | undefined, input?: ("text" | "image")[]) {
   const faux = await loadFaux();
   const handle = faux.fauxProvider({
     provider: "faux",
     api: "faux",
-    models: [{ id: "scripted-1", contextWindow: contextWindow ?? 128_000, maxTokens: 16_384 }],
+    models: [{ id: "scripted-1", contextWindow: contextWindow ?? 128_000, maxTokens: 16_384, ...(input !== undefined ? { input } : {}) }],
   });
   const sent: ModelContext[] = [];
   // A step that throws (a failed assertion on what the model was sent) would
@@ -455,7 +457,7 @@ async function runIn(
   opts: ScriptedSessionOptions,
   resumeOf: string | undefined,
 ): Promise<ScriptedSession> {
-  const { handle, sent, errors } = await scriptedModel(opts.script, opts.contextWindow);
+  const { handle, sent, errors } = await scriptedModel(opts.script, opts.contextWindow, opts.modelInput);
   const input = (resume?: RunStandaloneTaskInput["resume"]): RunStandaloneTaskInput => ({
     ...(opts.extra ?? {}),
     workspace,

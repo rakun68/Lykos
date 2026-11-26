@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { SHIPPED_DEFAULTS } from "../config/defaults.js";
-import { resetIoMode, setIoMode } from "../tui/io-mode.js";
-import { loadPalette } from "../tui/theme/load.js";
+import { resetIoMode, setIoMode } from "../io-mode.js";
+import { loadPalette } from "../surface/theme/load.js";
 import { runThemeEject, runThemePreview } from "./theme.js";
 
 function capture(fn: () => number): { code: number; out: string } {

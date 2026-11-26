@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 
 export type RuleId =
   | "no-domain-imports-cli"
-  | "tui-through-agent-ui-seam"
+  | "no-tui-directory"
   | "only-ledger-opens-database"
   | "only-boundary-names-pi-paths"
   | "no-core-directory"
@@ -29,8 +29,9 @@ export const DEPENDENCY_RULES: readonly RuleSpec[] = [
     status: "green",
   },
   {
-    id: "tui-through-agent-ui-seam",
-    name: "tui/ is entered only through the AgentUi seam",
+    // P5 #55: the old TUI is gone and lykos-tui (crates/tui) is the interface. Nothing brings lykos/tui/ back.
+    id: "no-tui-directory",
+    name: "Nothing named tui/ exists, and nothing imports it",
     status: "green",
   },
   {
@@ -153,17 +154,13 @@ function stripLineComment(line: string): string {
   return idx === -1 ? line : line.slice(0, idx);
 }
 
-function isTuiScreenInternal(importPath: string): boolean {
-  return importPath.replace(/\\/g, "/").startsWith("tui/screen/");
+function isTuiPath(path: string): boolean {
+  return path.replace(/\\/g, "/").startsWith("tui/");
 }
 
 function isCliImport(importPath: string): boolean {
   const normalized = importPath.replace(/\\/g, "/");
   return normalized === "cli.ts" || normalized.startsWith("cli/");
-}
-
-function importerInsideTui(file: string): boolean {
-  return file.replace(/\\/g, "/").startsWith("tui/");
 }
 
 function isLedgerModule(file: string): boolean {
@@ -198,15 +195,19 @@ export function scanFile(relativePath: string, source: string): Violation[] {
       });
     }
 
-    if (isTuiScreenInternal(importPath) && !importerInsideTui(file)) {
+    if (isTuiPath(importPath)) {
       violations.push({
         file,
         import: edge.specifier,
         line: edge.line,
-        rule: "tui-through-agent-ui-seam",
-        detail: `${file} imports tui/screen internal ${edge.specifier}`,
+        rule: "no-tui-directory",
+        detail: `${file} imports ${edge.specifier}, under tui/`,
       });
     }
+  }
+
+  if (isTuiPath(file)) {
+    violations.push({ file, line: 1, rule: "no-tui-directory", detail: `${file} lives under tui/` });
   }
 
   if (file.startsWith("core/")) {

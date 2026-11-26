@@ -22,7 +22,7 @@ behind an approval gate, records every model call, and reports what it verified.
 
 It runs three ways:
 
-- **Standalone**, as a full-screen terminal UI or a one-shot task runner.
+- **Standalone**, as a terminal UI (`lykos-tui`) or a one-shot task runner.
 - **As an MCP worker** under an orchestrating agent, which calls Lykos specialists as its own tools.
 - **Under human supervision** through a desktop app. Not built yet.
 
@@ -68,6 +68,9 @@ npm install
 npm run build
 npm link
 ```
+
+`npm install` also fetches the prebuilt terminal UI, `lykos-tui`, for Windows or Linux x64; no Rust
+toolchain is needed. On another platform, `cargo build --release -p lykos-tui` builds it.
 
 `npm link` puts the `lykos` command on your `PATH`. Check the install:
 

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { setStderrSink } from "../tui/io-mode.js";
+import { setStderrSink } from "../io-mode.js";
 import { call, lastToolResult, mounted, reply, runScriptedSession, say, scriptedPiHost } from "./scripted-session.js";
 
 function installPackage(name: string, files: Record<string, string>): void {

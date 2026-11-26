@@ -8,7 +8,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { leftoverSubject } from "../git/worktree.js";
 import { addedLines, changeFlags, isSensitivePath, outOfScopePaths, parseNameStatus } from "./result-flags.js";
 import { parseFrame, parseRequest, PROTOCOL_VERSION } from "./session-protocol.js";
-import { watchStepCap, type StepCappable } from "./step-cap.js";
+import { WRAP_TURNS, watchStepCap, type StepCappable } from "./step-cap.js";
 
 describe("T250: SENSITIVE is decided on real file names (F4)", () => {
   const sensitive = [
@@ -164,5 +164,22 @@ describe("T250: the step cap", () => {
     s.emit(turnEnd);
     assert.equal(s.aborted, 1);
     assert.equal(capped, 1);
+  });
+
+  it("Boxie WRAP_MIN: tells the session once, WRAP_TURNS turns before the cap, and never for a cap too small", () => {
+    const cap = 2 * WRAP_TURNS + 1;
+    const s = fakeSession();
+    const wraps: Array<{ turn: number; left: number }> = [];
+    const counter = { turns: 0 };
+    watchStepCap(s, cap, () => undefined, counter, (left) => wraps.push({ turn: counter.turns, left }));
+    for (let i = 0; i < cap + 2; i += 1) s.emit(turnEnd);
+    assert.deepEqual(wraps, [{ turn: cap - WRAP_TURNS, left: WRAP_TURNS }]);
+    assert.equal(s.aborted, 1);
+
+    const small = fakeSession();
+    let smallWraps = 0;
+    watchStepCap(small, 2 * WRAP_TURNS, () => undefined, { turns: 0 }, () => (smallWraps += 1));
+    for (let i = 0; i < 2 * WRAP_TURNS; i += 1) small.emit(turnEnd);
+    assert.equal(smallWraps, 0);
   });
 });

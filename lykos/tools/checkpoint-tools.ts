@@ -72,7 +72,7 @@ export const CHECKPOINT_LABEL_MAX_CHARS = 120;
  * There is ONE member and it reads. What is ABSENT is the load-bearing part:
  * no `create`, so no tool can write a checkpoint (T104); no `restore`, so no
  * tool can move the working tree (D1). Both exist in `loop/checkpoint.ts` and
- * both are reachable from `cli/rewind.ts` and `tui/interactive-surface.ts`,
+ * both are reachable from `cli/rewind.ts` and `surface/interactive-surface.ts`,
  * where a human is the one typing.
  */
 export interface CheckpointView {

@@ -3,17 +3,17 @@
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { derive } from "../tui/derive.js";
-import { stdoutWrite } from "../tui/io-mode.js";
-import { renderTriadLine } from "../tui/renderers/line.js";
-import { renderWatchFrame } from "../tui/renderers/watch.js";
-import { ensureBuiltinSegments } from "../tui/segments/builtin.js";
-import { renderFormat } from "../tui/segments/registry.js";
-import { listShippedThemeNames, listUserThemeNames, loadPalette } from "../tui/theme/load.js";
-import { detectColorCapability, detectGlyphSet, resolveTheme, style, type ColorFlag } from "../tui/theme/resolve.js";
-import { GLYPHS, type SemanticToken } from "../tui/theme/types.js";
+import { derive } from "../surface/derive.js";
+import { stdoutWrite } from "../io-mode.js";
+import { renderTriadLine } from "../surface/renderers/line.js";
+import { renderWatchFrame } from "../surface/renderers/watch.js";
+import { ensureBuiltinSegments } from "../surface/segments/builtin.js";
+import { renderFormat } from "../surface/segments/registry.js";
+import { listShippedThemeNames, listUserThemeNames, loadPalette } from "../surface/theme/load.js";
+import { detectColorCapability, detectGlyphSet, resolveTheme, style, type ColorFlag } from "../surface/theme/resolve.js";
+import { GLYPHS, type SemanticToken } from "../surface/theme/types.js";
 import type { ResolvedConfig } from "../config/types.js";
-import type { Snapshot, ViewModel } from "../tui/types.js";
+import type { Snapshot, ViewModel } from "../surface/types.js";
 
 export interface RunThemeOptions {
   cwd: string;
@@ -133,7 +133,7 @@ export function runThemePreview(opts: RunThemeOptions, name: string): number {
  * `lykos theme eject [base] [name]` — 2026-09-02 UI feedback: "there
  * should be a theme file to edit this." The mechanism (`.lykos/themes/
  * <name>.yaml`, `extends` a shipped palette, override just the tokens you
- * want) already existed (`tui/theme/load.ts`) but nothing surfaced it —
+ * want) already existed (`surface/theme/load.ts`) but nothing surfaced it —
  * a user had to already know the exact YAML schema to write one by hand.
  * This writes a real, ready-to-edit file: every token commented out at
  * its current value (inherited from `base`), so editing means uncommenting

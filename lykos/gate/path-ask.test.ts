@@ -9,14 +9,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { confineToWorkspace } from "../tools/workspace-confine.js";
-import { RawApprovalGate } from "../tui/screen/approval-modal.js";
 import {
   ApprovalDeniedError,
   AutoApproveGate,
   ReadOnlyGate,
+  TerminalApprovalGate,
   buildWriteOperations,
   type ApprovalGate,
 } from "./approval.js";
+import { ModeGate } from "./mode-gate.js";
 
 let home: string;
 let root: string;
@@ -55,70 +56,57 @@ function confineToWorkspaceForTest(name: string, cwd: string, gate: ApprovalGate
   return (params) => (t.execute as (...a: unknown[]) => Promise<unknown>)("id", params, undefined, undefined, undefined);
 }
 
-async function promptOpen(gate: RawApprovalGate): Promise<void> {
-  for (let i = 0; i < 500 && !gate.isOpen; i++) await new Promise((r) => setTimeout(r, 10));
-  assert.equal(gate.isOpen, true, "the prompt never opened");
+/** The gate lykos-tui's session runs: the mode in front of a prompt a human answers, here from `answers`. */
+function auto(answers: string[]): { gate: ModeGate; asked: () => number } {
+  let asked = 0;
+  const human = new TerminalApprovalGate(async () => answers.shift() ?? null, { write: () => true }, () => {
+    asked++;
+  });
+  const gate = new ModeGate(human);
+  gate.setMode("auto");
+  return { gate, asked: () => asked };
 }
 
 describe("T210: a path ask reaches a human in Auto", () => {
   it("Auto + a write outside the directory asks, and 'n' writes nothing", async () => {
-    const gate = new RawApprovalGate({ onRender: () => {} });
-    gate.setMode("auto");
+    const { gate, asked } = auto(["n"]);
     const target = join(outside, "a.txt");
-    const write = buildWriteOperations(root, gate).writeFile(target, "x");
-    await promptOpen(gate);
-    gate.feedBytes("n");
-    await assert.rejects(write, ApprovalDeniedError);
+    await assert.rejects(buildWriteOperations(root, gate).writeFile(target, "x"), ApprovalDeniedError);
+    assert.equal(asked(), 1);
     assert.equal(existsSync(target), false);
   });
 
   it("Auto + a write outside the directory runs when the human says yes", async () => {
-    const gate = new RawApprovalGate({ onRender: () => {} });
-    gate.setMode("auto");
+    const { gate, asked } = auto(["y"]);
     const target = join(outside, "a.txt");
-    const write = buildWriteOperations(root, gate).writeFile(target, "x");
-    await promptOpen(gate);
-    gate.feedBytes("y");
-    await write;
+    await buildWriteOperations(root, gate).writeFile(target, "x");
+    assert.equal(asked(), 1);
     assert.equal(readFileSync(target, "utf8"), "x");
   });
 
   it("Auto + a read outside the directory asks", async () => {
-    const gate = new RawApprovalGate({ onRender: () => {} });
-    gate.setMode("auto");
+    const { gate, asked } = auto(["n"]);
     const ran: string[] = [];
     const tool = confineToWorkspaceForTest("read", root, gate, ran);
-    const call = tool({ path: join(outside, "a.txt") });
-    await promptOpen(gate);
-    gate.feedBytes("n");
-    await assert.rejects(call, ApprovalDeniedError);
+    await assert.rejects(tool({ path: join(outside, "a.txt") }), ApprovalDeniedError);
+    assert.equal(asked(), 1);
     assert.equal(ran.length, 0);
   });
 
   it("a path ask is not remembered as a command approval ('always' is not offered)", async () => {
-    const gate = new RawApprovalGate({ onRender: () => {} });
-    gate.setMode("auto");
-    const first = buildWriteOperations(root, gate).writeFile(join(outside, "a.txt"), "1");
-    await promptOpen(gate);
-    gate.feedBytes("a");
-    await first.catch(() => {});
-    const second = buildWriteOperations(root, gate).writeFile(join(outside, "b.txt"), "2");
-    await promptOpen(gate);
-    gate.feedBytes("n");
-    await assert.rejects(second, ApprovalDeniedError);
+    const { gate, asked } = auto(["a", "n"]);
+    await buildWriteOperations(root, gate).writeFile(join(outside, "a.txt"), "1");
+    await assert.rejects(buildWriteOperations(root, gate).writeFile(join(outside, "b.txt"), "2"), ApprovalDeniedError);
+    assert.equal(asked(), 2, "the second write was asked again");
   });
 
   it("an extra directory under Auto runs without asking", async () => {
-    const gate = new RawApprovalGate({ onRender: () => {} });
-    gate.setMode("auto");
+    const { gate, asked } = auto(["f"]);
     // The human allows the folder once...
-    const first = buildWriteOperations(root, gate).writeFile(join(outside, "a.txt"), "1");
-    await promptOpen(gate);
-    gate.feedBytes("f");
-    await first;
+    await buildWriteOperations(root, gate).writeFile(join(outside, "a.txt"), "1");
     // ...and the next write there is Auto's to approve, with no prompt.
     await buildWriteOperations(root, gate).writeFile(join(outside, "b.txt"), "2");
-    assert.equal(gate.isOpen, false);
+    assert.equal(asked(), 1);
     assert.equal(readFileSync(join(outside, "b.txt"), "utf8"), "2");
   });
 

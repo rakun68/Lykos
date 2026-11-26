@@ -58,6 +58,8 @@ export function shippedPathRules(): PathRule[] {
     "~/.docker/config.json",
     "~/.config/gh/**",
     "~/.lykos/credentials.db*",
+    // T258: a benchmark instance's hidden tests and gold patch; a session never reads them.
+    "~/.lykos/bench/**",
   ];
   const rules: PathRule[] = [];
   for (const pattern of secretPatterns) {

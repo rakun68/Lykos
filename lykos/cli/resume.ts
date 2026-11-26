@@ -42,10 +42,17 @@
 //    collect.
 //
 // What it explicitly does not do: resume a LIVE session (that is G13's
-// problem and is not in this phase), fork mid-conversation (`/fork`, `/tree`
-// are not in `02-plan.md` §6 and adding them here would be scope taken from
-// Phase 5), or touch the original in any way.
+// problem and is not in this phase), or touch the original in any way.
+//
+// T266: `--fork` (and `/fork`, which ends its session and lands here) runs the
+// same preflight on the session it names, then starts a NEW session that
+// continues a copy of it: its own id and row, `forked_from` the parent and its
+// last turn, the parent's task. The copy is the active branch — the turns a
+// rewind undid stay behind — and goes into the fork's own transcript ahead of
+// the marker. The parent's row is not reopened and its transcript is not
+// written to.
 
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { AGENT_TOOL_NAME, canonicalToolName } from "../tools/tool-surface.js";
 
@@ -53,9 +60,10 @@ import { openLedgerSync, type Ledger } from "../ledger/use.js";
 import { sessionModelPath } from "../delegate/session-base.js";
 
 import { preflightResume, formatPreflight, type ResumePreflight } from "../session/resume-preflight.js";
-import type { ResumePlan } from "../session/interactive.js";
+import type { LaunchInput, LaunchResult, ResumePlan } from "../session/interactive.js";
+import { earlierPrompts } from "../session/rewind.js";
 import type { LineSource } from "../session/interactive.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 export interface ResumeOptions {
   /** Skip the confirmation for cost and a moved working tree. Never skips a refusal. */
@@ -69,28 +77,39 @@ export interface ResumeOptions {
   model?: string;
   /** Report the preflight and start nothing. */
   dryRun?: boolean;
+  /** T266: `--fork` — continue in a copy of the session, a new one, and leave the session as it is. */
+  fork?: boolean;
+  /** With `fork`: the copy is cut before the prompt that started this turn (a client's fork from a message). */
+  forkAt?: number;
   /** Injected by tests; production reads the real terminal. */
   lineSource?: LineSource;
+  /** P5 #42: asks for the agreement a `confirm` preflight needs, given the preflight; the engine server asks its client. */
+  confirm?: (preflight: string) => Promise<boolean>;
+  /** Given the preflight once it is read, before anything is asked: the engine server shows the conversation from it. */
+  onPreflight?: (preflight: ResumePreflight) => void;
   /** Called with the reason, once, whenever resume refuses or is declined, in addition to saying it on stderr. A caller with no one reading stderr (an MCP continuation) reports it itself. */
   onRefusal?: (reason: string) => void;
+  /** T264: what goes in the input box when the session starts: the prompt a rewind past a resume went back to. */
+  inputText?: string;
   /** Injected by tests so no real agent is booted. */
-  launch?: (input: LaunchInput) => Promise<{ status: "ok" | "error"; sessionId?: string; message?: string }>;
+  launch?: (input: LaunchInput) => Promise<LaunchResult>;
   now?: Date;
 }
 
-export interface LaunchInput {
-  workspace: string;
-  ledgerPath: string;
-  model: string | undefined;
-  resume: ResumePlan;
-}
+export type { LaunchInput, LaunchResult };
 
 /**
  * Resolves a session id or unique prefix, the same way `lykos show` does.
  * Kept here rather than shared because the failure messages differ: `show`
- * lists recent sessions to pick from, and so should this.
+ * lists recent sessions to pick from, and so should this. T267: `lykos
+ * export` resolves through this too, naming itself in the refusal.
  */
-function resolveSessionId(ledger: Ledger, idOrPrefix: string, refuse: (message: string) => void): string | null {
+export function resolveSessionId(
+  ledger: Ledger,
+  idOrPrefix: string,
+  refuse: (message: string) => void,
+  command = "resume",
+): string | null {
   const exact = ledger.db.prepare(`SELECT id FROM sessions WHERE id = ?`).get(idOrPrefix) as
     | { id: string }
     | undefined;
@@ -100,10 +119,10 @@ function resolveSessionId(ledger: Ledger, idOrPrefix: string, refuse: (message: 
     .all(`${idOrPrefix}%`) as Array<{ id: string }>;
   if (matches.length === 1) return matches[0]!.id;
   if (matches.length > 1) {
-    refuse(`lykos resume: ambiguous session prefix — ${matches.length} sessions match "${idOrPrefix}"\n`);
+    refuse(`lykos ${command}: ambiguous session prefix — ${matches.length} sessions match "${idOrPrefix}"\n`);
     return null;
   }
-  refuse(`lykos resume: no session matches "${idOrPrefix}"\n`);
+  refuse(`lykos ${command}: no session matches "${idOrPrefix}"\n`);
   return null;
 }
 
@@ -172,7 +191,23 @@ export function planFromPreflight(
     priceVersion: pre.cost?.priceVersion ?? null,
     flags: { promptDiet: flags.promptDiet, outputDiet: flags.outputDiet, overridden: flags.overridden },
     ...(pre.recovery !== undefined ? { recovery: pre.recovery } : {}),
+    ...(pre.nextTurn !== undefined ? { firstTurn: pre.nextTurn } : {}),
+    ...(pre.branch !== undefined ? { earlierPrompts: earlierPrompts(pre.branch.records) } : {}),
+    ...(pre.branch?.undos !== undefined ? { undos: pre.branch.undos } : {}),
   };
+}
+
+/**
+ * P5 #42: `sessions.model` is a bare id, and an interactive session records no model path, so a model of a provider
+ * other than the default resolved against the default and the resume failed to boot. The session's own calls name the
+ * provider that served it.
+ */
+function qualifiedModel(ledger: Ledger, sessionId: string, model: string | null): string | null {
+  if (model === null || model.includes("/")) return model;
+  const row = ledger.db
+    .prepare(`SELECT provider FROM calls WHERE session_id = ? AND model = ? AND provider IS NOT NULL AND provider != '' ORDER BY ts_utc LIMIT 1`)
+    .get(sessionId, model) as { provider: string } | undefined;
+  return row !== undefined ? `${row.provider}/${model}` : model;
 }
 
 async function confirm(lineSource: LineSource | undefined, question: string): Promise<boolean> {
@@ -233,9 +268,12 @@ export async function runResume(
       workspace: cwd,
       ...(opts?.force ? { allowMissingFiles: true } : {}),
       ...(opts?.now !== undefined ? { now: opts.now } : {}),
+      ...(opts?.fork === true ? { fork: true } : {}),
+      ...(opts?.fork === true && opts.forkAt !== undefined ? { forkAt: opts.forkAt } : {}),
     });
 
-    stdoutWrite(`lykos resume  ${sessionId}\n`);
+    opts?.onPreflight?.(pre);
+    stdoutWrite(`lykos resume${opts?.fork === true ? " --fork" : ""}  ${sessionId}\n`);
     stdoutWrite(`${formatPreflight(pre)}\n`);
 
     if (pre.overall === "refuse") {
@@ -250,7 +288,7 @@ export async function runResume(
     // Never resume a paid context without showing the price first. The
     // preflight has already printed it; this is the agreement.
     if (pre.overall === "confirm" && opts?.yes !== true) {
-      const ok = await confirm(opts?.lineSource, "lykos resume: proceed?");
+      const ok = opts?.confirm ? await opts.confirm(formatPreflight(pre)) : await confirm(opts?.lineSource, "lykos resume: proceed?");
       if (!ok) {
         refuse("lykos resume: cancelled. Nothing was spent.\n");
         return 1;
@@ -274,10 +312,19 @@ export async function runResume(
       // parent's `Agent` tool is never restored.
       isChild: identity.execution_shape === "subagent" || identity.parent_session_id !== null,
     });
+    if (opts?.inputText !== undefined) plan.inputText = opts.inputText;
+    if (opts?.fork === true) {
+      // T266: the parent's task is kept, so the task's cost sums both sessions.
+      plan.fork = {
+        sessionId: randomUUID(),
+        ...(pre.branch?.turn !== undefined ? { turn: pre.branch.turn } : {}),
+        records: pre.branch?.records ?? [],
+      };
+    }
     // A substitute model is always the caller's explicit choice — the
     // preflight refuses rather than picking one.
     // The full path (`provider/model`) when one was recorded: the row's bare id can resolve to another provider.
-    model = opts?.model ?? sessionModelPath(ledger, sessionId) ?? identity.model ?? undefined;
+    model = opts?.model ?? sessionModelPath(ledger, sessionId) ?? qualifiedModel(ledger, sessionId, identity.model) ?? undefined;
 
     // 2026-09-07 (UI feedback item 1): reopen the row this resume is about
     // to continue. `endSession()` refuses to end a session that has already
@@ -287,14 +334,15 @@ export async function runResume(
     // This is the last thing done before booting and the first thing that
     // could be undone by a failed boot, which is the right order: every
     // check above can still refuse, and none of them has written anything.
-    ledger.reopenSession(sessionId);
+    // T266: a fork never reopens its parent: the parent stays as it ended.
+    if (opts?.fork !== true) ledger.reopenSession(sessionId);
   } finally {
     ledger.close();
   }
 
   const launch =
     opts?.launch ??
-    (async (input: LaunchInput) => {
+    (async (input: LaunchInput): Promise<LaunchResult> => {
       const { runInteractiveStandaloneSession } = await import("../session/interactive.js");
       const result = await runInteractiveStandaloneSession({
         workspace: input.workspace,
@@ -311,8 +359,14 @@ export async function runResume(
         resume: input.resume,
       });
       return result.status === "ok"
-        ? { status: "ok" as const, sessionId: result.sessionId }
-        : { status: "error" as const, message: result.message };
+        ? {
+            status: "ok",
+            sessionId: result.sessionId,
+            ...(result.forkRequested ? { forkRequested: true } : {}),
+            ...(result.forkAt !== undefined ? { forkAt: result.forkAt } : {}),
+            ...(result.rewindRebuild !== undefined ? { rewindRebuild: result.rewindRebuild } : {}),
+          }
+        : { status: "error", message: result.message };
     });
 
   const result = await launch({ workspace: cwd, ledgerPath, model, resume: plan });
@@ -339,6 +393,16 @@ export async function runResume(
     } finally {
       after.close();
     }
+  }
+  // T266: `/fork` typed in the session this started: fork it, as `lykos run` does.
+  if (result.forkRequested === true && result.sessionId !== undefined) {
+    const { forkAt: _cut, inputText: _text, ...rest } = opts ?? {};
+    const at = result.forkAt !== undefined ? { forkAt: result.forkAt.turn, inputText: result.forkAt.inputText } : {};
+    return runResume(cwd, ledgerPath, result.sessionId, { ...rest, fork: true, ...at });
+  }
+  // T264: a rewind past the resume wrote its event and ended the session; it continues as itself, from there.
+  if (result.rewindRebuild !== undefined && result.sessionId !== undefined) {
+    return runResume(cwd, ledgerPath, result.sessionId, { ...opts, fork: false, inputText: result.rewindRebuild.inputText });
   }
   return 0;
 }

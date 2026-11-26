@@ -1,0 +1,68 @@
+{
+  "lykos-tui@win32-x64": {
+    "metrics": {
+      "startupMs": {
+        "limit": 61.20049999999901,
+        "tolerance": 14.849200000004203,
+        "samples": [
+          61.20049999999901,
+          47.195599999999104,
+          46.35129999999481
+        ]
+      },
+      "keystrokeMs": {
+        "limit": 15.546000000002095,
+        "tolerance": 0.02940000001399312,
+        "samples": [
+          15.546000000002095,
+          15.52669999999489,
+          15.516599999988102
+        ]
+      },
+      "frameMs": {
+        "limit": 0.187,
+        "tolerance": 0.010000000000000009,
+        "samples": [
+          0.184,
+          0.187,
+          0.177
+        ]
+      },
+      "idleCpuMsPerSec": {
+        "limit": 0,
+        "tolerance": 5.208333333333333,
+        "samples": [
+          0,
+          0,
+          0
+        ]
+      },
+      "peakMemoryBytes": {
+        "limit": 4730880,
+        "tolerance": 4096,
+        "samples": [
+          4730880,
+          4726784,
+          4730880
+        ]
+      },
+      "binaryBytes": {
+        "limit": 794624,
+        "tolerance": 0,
+        "samples": [
+          794624,
+          794624,
+          794624
+        ]
+      }
+    },
+    "history": [
+      {
+        "at": "2026-11-23T00:15:06.567Z",
+        "event": "init",
+        "by": "first measurement (#37)",
+        "reason": "3 samples of 5 runs"
+      }
+    ]
+  }
+}

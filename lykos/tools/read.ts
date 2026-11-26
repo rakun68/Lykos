@@ -69,10 +69,24 @@ import { hashFileNow, type FileReadRecord } from "./read-record.js";
 
 export const READ_TOOL_NAME = "read";
 
+/**
+ * A read that asks for fewer lines than this gets this many (Boxie's `READ_MIN_LINES`, d063a30). Gemini asked for 100
+ * lines or fewer in 10,880 of 12,584 reads in Boxie's runs, mostly 25 to 60, and then read on: each further read is a
+ * model turn with the whole context. Boxie's replay bounds the saving at 10.9% of steps. The offset is kept.
+ */
+export const READ_MIN_LINES = 150;
+
+/** `params` with a `limit` under `min` raised to it; anything else unchanged. */
+export function widenRead<T extends { limit?: unknown }>(params: T, min: number = READ_MIN_LINES): T {
+  return typeof params.limit === "number" && params.limit < min ? { ...params, limit: min } : params;
+}
+
 export interface ReadToolOpts {
   cwd: string;
   /** This session's read record. Absent, reads are not recorded. */
   reads?: FileReadRecord;
+  /** The fewest lines a read with a `limit` returns. Default READ_MIN_LINES; 0 keeps the model's own limit. */
+  minLines?: number;
 }
 
 /** Appended to Pi's description. Exported for the catalog row and its parity test. */
@@ -151,11 +165,12 @@ export function buildReadTool(opts: ReadToolOpts): ToolDefinition {
     ...base,
     description: `${base.description}${READ_NUMBERING_NOTE}`,
     promptGuidelines: [...(base.promptGuidelines ?? []), READ_NUMBERING_GUIDELINE],
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
+    async execute(toolCallId, asked, signal, onUpdate, ctx) {
+      const params = widenRead(asked as { limit?: unknown }, opts.minLines ?? READ_MIN_LINES);
       const given = (params as { path?: unknown }).path;
       const absolute = opts.reads !== undefined && typeof given === "string" ? resolveEditPath(given, opts.cwd) : undefined;
       const hashBefore = absolute !== undefined ? await hashFileNow(absolute) : undefined;
-      const result = (await inner(toolCallId, params, signal, onUpdate, ctx)) as ResultLike;
+      const result = (await inner(toolCallId, params as typeof asked, signal, onUpdate, ctx)) as ResultLike;
       if (result.isError === true) return result;
       if (absolute !== undefined && hashBefore !== undefined) opts.reads?.noteRead(absolute, hashBefore);
       const content = result.content ?? [];

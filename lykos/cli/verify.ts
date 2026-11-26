@@ -3,7 +3,7 @@
 // Outcome recording lives in `session/verify-outcome.ts`.
 
 import { defaultLedgerPath } from "../ledger/ledger.js";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 import {
   runVerify,
   type VerifyAnswer,

@@ -52,7 +52,7 @@ import { openLedgerSync, type Ledger } from "../ledger/use.js";
 import { readLiveSnapshot, removeLiveSnapshot, sessionsDir } from "../ledger/live.js";
 import { readTranscriptBytes, transcriptFilePath, transcriptGzFilePath } from "../session/transcript.js";
 import { createHash } from "node:crypto";
-import { stdoutWrite } from "../tui/io-mode.js";
+import { stdoutWrite } from "../io-mode.js";
 
 /** `08` §3's retention hint. A hint, not a deadline: nothing expires, it only gets smaller. */
 export const DEFAULT_RETENTION_DAYS = 30;

@@ -15,7 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { resetIoMode } from "../tui/io-mode.js";
+import { resetIoMode } from "../io-mode.js";
 import { runSpecialistExportPi, runSpecialistList, runSpecialistShow } from "./specialist.js";
 import { applySpecialist } from "../session/specialist-apply.js";
 import { PONYTAIL_HEADING } from "../session/ponytail-head.js";

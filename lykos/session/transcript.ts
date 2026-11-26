@@ -89,7 +89,10 @@ export interface AssistantMessageEvent {
 /** T53: a prompt the human typed at the top level. Stream capture only — the snapshot path never saw one. */
 export interface UserMessageEvent {
   kind: "user_message";
+  /** As the model was sent it: with any notice Lykos put before it. */
   text: string;
+  /** T264: as the person typed it, when a notice was put before it; what a rewind puts back in the input box. */
+  typed?: string;
 }
 
 /**
@@ -116,6 +119,11 @@ export interface SteerEvent {
 export interface ResumeEvent {
   kind: "resume";
   from: string;
+  /**
+   * T266: set when this session is a fork of `from` — a new session — rather than `from` continuing. The
+   * records above the marker are a copy of `from`'s active branch; `turn` is its last turn on it.
+   */
+  fork?: { turn?: number };
   events: number;
   user_turns: number;
   estimate_tokens: number;
@@ -158,13 +166,18 @@ export interface ToolResultEvent {
 
 /**
  * P4 T146: the start of a model turn, counted across the whole session from
- * 0. The same count the harness writes on that turn's checkpoint
+ * 0 — T264: across its processes too, a resumed one continuing the count. The same count the harness writes on that turn's checkpoint
  * (`Lykos-Turn:`), which is what ties a turn that changed files to the
  * checkpoint taken before it. Stream capture only.
  */
 export interface TurnStartEvent {
   kind: "turn_start";
   turn: number;
+  /**
+   * T264: the checkpoint holding the tree this turn started from — the one written then, or the ref's tip when
+   * nothing had changed — so a later process can rewind the code to it. Absent before T264, or with no checkpoints.
+   */
+  checkpoint?: string;
 }
 
 /**
@@ -249,6 +262,52 @@ export interface RecoveryEvent {
   interrupted?: string[];
 }
 
+/**
+ * T263: the person rewound the live session to before one of its prompts. With the
+ * conversation rewound, the turns `undone_turns` names (first and last, inclusive)
+ * are an undone branch: they stay in this file and in the ledger, and the model
+ * is no longer sent them. Nothing is deleted and there is no redo.
+ */
+export interface RewindEvent {
+  kind: "rewind";
+  /** What was put back. T265: `summarize` is the conversation, with the turns from the prompt on as one summary. */
+  restore: "both" | "conversation" | "code" | "summarize";
+  /** The prompt rewound to, as typed. */
+  prompt: string;
+  /** The session-wide turn that prompt started: the turn rewound to. Absent when it started none. */
+  to_turn?: number;
+  /** The undone branch, first and last turn. Absent when the conversation was not rewound, or was summarized. */
+  undone_turns?: [number, number];
+  /** T265: the turns a summarize replaced in context with `summary`, first and last. They stay above this event. */
+  summarized_turns?: [number, number];
+  /** T265: the person's note to the summarizer. Absent when none was typed. */
+  note?: string;
+  /** T265: the summary the model is sent in place of `summarized_turns`. */
+  summary?: string;
+  /** The checkpoint the tree was restored from. Absent when the code was not rewound. */
+  checkpoint?: string;
+  /** The checkpoint holding the tree as it was just before the restore. Absent when the code was not rewound. */
+  safety_checkpoint?: string;
+  /** P5 #42: an undo (`/undo`, OpenCode `session.undo`): to before the last prompt, which `/redo` can take back. */
+  undo?: true;
+}
+
+/**
+ * P5 #42: a redo (`/redo`, OpenCode `session.redo`): the last `undos` undos taken back, so the conversation and the
+ * files are where they were before the first of them. Written only while no prompt has been sent since those undos.
+ */
+export interface RedoEvent {
+  kind: "redo";
+  /** How many undos it takes back, newest first; the active branch returns to before the earliest. */
+  undos: number;
+  /** The checkpoint the tree was restored from: the first undo's safety checkpoint. Absent when no undo moved the code. */
+  checkpoint?: string;
+  /** The checkpoint holding the tree just before the redo. Absent when the code was not restored. */
+  safety_checkpoint?: string;
+  /** The first and last turn back on the conversation. Absent when unknown. */
+  redone_turns?: [number, number];
+}
+
 export interface ErrorEvent {
   kind: "error";
   message: string;
@@ -279,6 +338,8 @@ export type TranscriptEventInput =
   | PruneEvent
   | ShakeEvent
   | RecoveryEvent
+  | RewindEvent
+  | RedoEvent
   | ErrorEvent
   | OutcomeEvent;
 

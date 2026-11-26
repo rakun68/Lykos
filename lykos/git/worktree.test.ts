@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { acquireWorktree, branchOf, WorktreeError } from "./worktree.js";
+import { acquireWorktree, branchOf, createNamedWorktree, listNamedWorktrees, removeNamedWorktree, WorktreeError } from "./worktree.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -272,5 +272,50 @@ describe("what the worktree keeps and refuses to destroy (T184 review)", () => {
     assert.equal(released.saved?.sha, git(workspace, "rev-parse", "lykos/s1"));
     assert.equal(released.saved?.filesChanged, 2);
     assert.match(released.saved?.subject ?? "", /left uncommitted/);
+  });
+});
+
+describe("worktrees a person names, for lykos-tui (P5 #42)", () => {
+  it("is created on lykos/<name>, listed after the main checkout, and removed with its uncommitted work committed onto the branch", () => {
+    const workspace = repo();
+    const root = tmp();
+    const made = createNamedWorktree({ workspace, projectId: "proj", name: "feature", root });
+    assert.equal(made.path, join(root, "proj", "feature"));
+    assert.equal(made.branch, "lykos/feature");
+    const listed = listNamedWorktrees(workspace);
+    assert.equal(listed[0]!.main, true);
+    assert.ok(listed.some((w) => w.branch === "lykos/feature" && !w.main), JSON.stringify(listed));
+
+    writeFileSync(join(made.path, "a.txt"), "changed\n");
+    const removed = removeNamedWorktree({ workspace, projectId: "proj", path: made.path, root });
+    assert.equal(removed.removed, true, removed.note);
+    assert.equal(removed.savedUncommitted, true);
+    assert.equal(existsSync(made.path), false);
+    assert.equal(git(workspace, "show", "lykos/feature:a.txt"), "changed", "the work is reachable on the branch");
+    assert.equal(listNamedWorktrees(workspace).length, 1);
+  });
+
+  it("refuses a name that cannot be a branch, and never removes the main checkout", () => {
+    const workspace = repo();
+    assert.throws(() => createNamedWorktree({ workspace, projectId: "proj", name: "../x", root: tmp() }), WorktreeError);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: workspace, root: tmp() }), /own checkout/);
+  });
+
+  it("refuses a detached worktree, one the person made, and one whose session is running", () => {
+    const workspace = repo();
+    const root = tmp();
+    const detached = join(root, "proj", "det");
+    git(workspace, "worktree", "add", "--detach", detached);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: detached, root }), /not made by Lykos/);
+    const theirs = join(tmp(), "theirs");
+    git(workspace, "worktree", "add", "-b", "theirs", theirs);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: theirs, root }), /not made by Lykos/);
+    assert.equal(existsSync(detached) && existsSync(theirs), true);
+    const made = createNamedWorktree({ workspace, projectId: "proj", name: "busy", root });
+    writeFileSync(join(root, "proj", "busy.lock"), `${process.pid}
+`);
+    assert.throws(() => removeNamedWorktree({ workspace, projectId: "proj", path: made.path, root }), /a session runs/);
+    rmSync(join(root, "proj", "busy.lock"));
+    assert.equal(removeNamedWorktree({ workspace, projectId: "proj", path: made.path, root }).removed, true);
   });
 });

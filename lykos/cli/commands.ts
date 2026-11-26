@@ -1,8 +1,9 @@
 import { firstPositional, positionals, RUN_BOOLEAN_FLAGS, RUN_VALUED_FLAGS, unknownRunFlag } from "./args.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 import { parseInteractionMode, type InteractionMode } from "../gate/modes.js";
-import { claimProtocolStream, stdoutWrite } from "../tui/io-mode.js";
-import type { ColorFlag } from "../tui/theme/resolve.js";
+import { claimProtocolStream, stdoutWrite } from "../io-mode.js";
+import type { ColorFlag } from "../surface/theme/resolve.js";
+import type { ImageAttachment } from "../session/session.js";
 
 export interface CommandContext {
   cwd: string;
@@ -101,13 +102,11 @@ export const COMMANDS: readonly Command[] = [
     ],
     run: async (rest, { cwd }) => {
       const { runDoctor } = await import("./doctor.js");
-      const { vtSupport } = await import("../tui/doctor-rendering.js");
-      const vt = await vtSupport();
       const { loadConfig } = await import("../config/load.js");
       const { defaultImageTag } = await import("../containment/containment.js");
       const { probeConfiguredRuntimes } = await import("./doctor.js");
       const containment = await probeConfiguredRuntimes(loadConfig({ cwd }).resolved.containment, defaultImageTag());
-      return runDoctor(cwd, { benchUi: rest.includes("--bench-ui"), vt, containment });
+      return runDoctor(cwd, { benchUi: rest.includes("--bench-ui"), containment });
     },
   },
   {
@@ -237,15 +236,21 @@ export const COMMANDS: readonly Command[] = [
     name: "export",
     help: [
       "  export    export agents for other harnesses: `lykos export claude [--global]`",
+      "            or a session as Markdown: `lykos export <session> [file]` (stdout with no file)",
     ],
     run: async (rest, { cwd }) => {
-      const { runExportClaude } = await import("./export-claude.js");
-      const [sub] = positionals(rest, []);
+      const [sub, file] = positionals(rest, []);
       if (sub === "claude") {
+        const { runExportClaude } = await import("./export-claude.js");
         return runExportClaude(cwd, { global: rest.includes("--global") });
       }
-      process.stderr.write(`lykos export: unknown subcommand "${sub}". Use "claude".\n`);
-      return 1;
+      if (sub === undefined) {
+        process.stderr.write("lykos export: expected `claude` or a session id, e.g. `lykos export 1a2b3c4d [file]`\n");
+        return 1;
+      }
+      // T267: anything else names a session.
+      const { runExportSession } = await import("./export-session.js");
+      return runExportSession(cwd, await resolveLedgerPath(cwd), sub, file);
     },
   },
   {
@@ -363,11 +368,24 @@ export const COMMANDS: readonly Command[] = [
     name: "resume",
     help: [
       "  resume    continue an earlier conversation: `lykos resume <session>`",
-      "            [--yes] [--force] [--dry-run] [--model m] [--(no-)prompt-diet] [--(no-)output-diet]",
+      "            [--fork] [--yes] [--force] [--dry-run] [--model m] [--(no-)prompt-diet] [--(no-)output-diet]",
       "            shows what the replay costs before spending it; the original is never rewritten",
+      "            --fork continues in a copy of it, a new session, and leaves it as it is",
       "            with no id it opens the session picker (`--all` for every project)",
+      "            in a terminal it opens lykos-tui on the session, or on its session list with no id",
     ],
     run: async (rest, { cwd }) => {
+      // P5 #55: in a terminal, lykos-tui resumes it; its server asks the preflight's question. --dry-run prints it here.
+      if (process.stdin.isTTY && process.stdout.isTTY && !rest.includes("--dry-run")) {
+        const tuiModel = flagValue(rest, "model");
+        const id = rest.find((a, i) => !a.startsWith("--") && rest[i - 1] !== "--model");
+        if (rest.includes("--fork")) {
+          stderrWrite("lykos resume: --fork in a terminal: open the session, then Fork session (ctrl+p)\n");
+          return 1;
+        }
+        const { runTui } = await import("./tui.js");
+        return runTui(cwd, { args: [...(id !== undefined ? ["--session", id] : []), ...(tuiModel !== undefined ? ["--model", tuiModel] : [])] });
+      }
       const { runResume } = await import("./resume.js");
       const { createReadlineLineSource } = await import("../session/interactive.js");
       const model = flagValue(rest, "model");
@@ -382,7 +400,6 @@ export const COMMANDS: readonly Command[] = [
         const picked = await pickSession({
           sources,
           read: () => lineSource.next(),
-          ...(rest.includes("--no-fullscreen") ? { noFullscreen: true } : {}),
         });
         if (!picked) {
           lineSource.close();
@@ -396,6 +413,7 @@ export const COMMANDS: readonly Command[] = [
           ...(rest.includes("--yes") ? { yes: true } : {}),
           ...(rest.includes("--force") ? { force: true } : {}),
           ...(rest.includes("--dry-run") ? { dryRun: true } : {}),
+          ...(rest.includes("--fork") ? { fork: true } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(rest.includes("--no-prompt-diet")
             ? { promptDiet: false }
@@ -684,7 +702,7 @@ export const COMMANDS: readonly Command[] = [
       "            (stdin, then each @file, then the argument; `--` makes the next argument the task verbatim).",
       "            On Windows give a multi-line task as @task.md: a .cmd launcher (npm run, npx, lykos.cmd)",
       "            cuts an argument at its first newline, and PowerShell 5.1 reads a file without a BOM as ANSI",
-      "            `lykos run --interactive` (or `lykos` with no args) starts the standalone terminal UI",
+      "            `lykos run --interactive` opens lykos-tui in a terminal, and reads lines from stdin without one",
       "            `lykos run task.md`: a task file (frontmatter files/sealed/test/scope/red/steps/issue, then the brief)",
       "            [--max-steps n] the step cap; [--request-id id] a retry with the same id finds its session; [--base ref]",
       "            [--rulings-from id[,id]] sessions whose spec-check rulings bind this one (a reviewer names the implementer it reviews)",
@@ -707,6 +725,7 @@ export const COMMANDS: readonly Command[] = [
       }
       let prompt: string | undefined;
       let taskFile: string | undefined;
+      let images: ImageAttachment[] = [];
       if (rest.includes("--interactive")) {
         prompt = firstPositional(rest, RUN_VALUED_FLAGS);
       } else {
@@ -733,6 +752,7 @@ export const COMMANDS: readonly Command[] = [
           return 1;
         }
         prompt = resolved.brief;
+        images = resolved.images;
       }
       const model = flagValue(rest, "model");
       const toolsRaw = flagValue(rest, "tools");
@@ -789,6 +809,7 @@ export const COMMANDS: readonly Command[] = [
       const base = flagValue(rest, "base");
       const rulingsFrom = flagValue(rest, "rulings-from");
       return runRun(cwd, prompt, {
+        ...(images.length > 0 ? { images } : {}),
         ...(rulingsFrom !== undefined ? { rulingsFrom: rulingsFrom.split(",").map((s) => s.trim()).filter((s) => s !== "") } : {}),
         ...(taskFile !== undefined ? { taskFile } : {}),
         ...(maxSteps !== undefined ? { maxSteps } : {}),
@@ -835,6 +856,17 @@ export const COMMANDS: readonly Command[] = [
     run: async (rest, { cwd }) => {
       const { runStop } = await import("./delegation.js");
       return runStop(cwd, rest);
+    },
+  },
+  {
+    name: "bench",
+    help: [
+      "  bench     `lykos bench import <instance> --out <dir>`: a SWE-bench-Live task as a repository at its base and a task file;",
+      "            `lykos bench check <instance> [--repo <dir>] [--ref <ref>]`: run its hidden tests on a finished branch, recorded in the ledger (JSON)",
+    ],
+    run: async (rest, { cwd }) => {
+      const { runBench } = await import("./bench.js");
+      return runBench(cwd, rest);
     },
   },
   {
@@ -978,6 +1010,28 @@ export const COMMANDS: readonly Command[] = [
     run: async () => {
       stdoutWrite(usageText());
       return 0;
+    },
+  },
+  {
+    name: "serve",
+    aliases: [],
+    help: [
+      "  serve     the engine server the new TUI connects to [--idle SECONDS]: a named pipe (Windows) or Unix",
+      "            socket (Linux) open only to this user; exits after tui.server_idle_seconds with no client and",
+      "            nothing running. A client starts it when none runs. See docs/reference/engine-server.md",
+    ],
+    run: async (args, ctx) => {
+      const { runServe } = await import("./serve.js");
+      return runServe(ctx.cwd, args);
+    },
+  },
+  {
+    name: "server-session",
+    aliases: [],
+    help: [],
+    run: async () => {
+      const { runServerSession } = await import("./serve.js");
+      return runServerSession();
     },
   },
   {

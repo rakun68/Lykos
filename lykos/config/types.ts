@@ -30,6 +30,11 @@ export interface ProviderModelDecl {
   api?: string;
   baseUrl?: string;
   reasoning?: boolean;
+  /**
+   * The effort levels the model offers (`config/model-efforts.ts`): auto, none, low, medium, high, xhigh, max. A
+   * model declared with neither this nor `reasoning` offers all of them.
+   */
+  efforts?: string[];
   contextWindow?: number;
   maxTokens?: number;
 }
@@ -363,6 +368,29 @@ export interface ReviewerConfig {
 }
 
 /** T223, T224, T226: MCP worker settings. */
+/** P5 #35 (ADR-0064 decision 2). */
+export interface TuiConfig {
+  /**
+   * How long the engine server stays up after its last client disconnects and no session runs, in seconds.
+   * `0` exits at once. A client that finds no server starts one, so this only trades a restart for memory.
+   */
+  server_idle_seconds?: number;
+  /**
+   * P5 #39: `lykos-tui`'s key bindings by action name (OpenCode `config/keybind.ts`): `leader` and each action take
+   * a key list (`"ctrl+x,<leader>q"` or an array) or `none` / `false` to unbind. Merged per action across layers,
+   * the last layer that names one wins; `lykos-tui` knows the names and refuses one it does not.
+   */
+  keybinds?: Record<string, TuiKeybindValue>;
+  /**
+   * #58 item 9: `lykos-tui`'s colours by role (`background`, `surface`, `overlay`, `muted`, `subtle`, `text`, `error`,
+   * `warning`, `success`, `accent`, `selection`, `keybind`), each `#rrggbb`, over whichever theme is current. Merged
+   * per role across layers, as `keybinds` is; `lykos-tui` knows the roles and names one it does not.
+   */
+  colors?: Record<string, string>;
+}
+
+export type TuiKeybindValue = string | false | string[];
+
 export interface McpConfig {
   /** Maximum live concurrent sessions (lykos_start and blocking tools). Default 4. */
   max_sessions?: number;
@@ -405,7 +433,15 @@ export interface DelegationConfig {
   cycle_max_rounds?: number;
   cycle_max_fixes?: number;
   cycle_stall_after?: number;
+  /**
+   * ADR-0062: what reviews a change in `lykos review` and `lykos cycle`. `session` is the `review-both` session;
+   * `ocr` is open-code-review on the same role's model. Default `session`.
+   */
+  review_engine?: ReviewEngine;
 }
+
+export const REVIEW_ENGINES = ["session", "ocr"] as const;
+export type ReviewEngine = (typeof REVIEW_ENGINES)[number];
 
 /**
  * T105: a deterministic policy as a command rather than as prompt text.
@@ -492,10 +528,9 @@ export interface UiConfig {
    * the waiting line under it starts saying it has gone on too long
    * (2026-09-02 round twelve, item 2). Default 300 (five minutes).
    *
-   * A REPORTING limit, not a kill switch — see `fullscreen-ui.ts`'s
-   * `startWaiting()` for why Lykos cannot terminate a tool it does not own
-   * and what it does at the limit instead. 0 shows elapsed time with no
-   * limit named at all.
+   * A REPORTING limit, not a kill switch. 0 shows elapsed time with no limit
+   * named at all. Read by nothing since P5 #55 removed the old TUI, whose
+   * waiting line used it; lykos-tui does not read it yet.
    */
   tool_wait_limit_seconds?: number;
 }
@@ -632,6 +667,8 @@ export interface ConfigFile {
   containment?: ContainmentConfig;
   /** T223: MCP worker settings. */
   mcp?: McpConfig;
+  /** P5 #35: the new TUI and its engine server. */
+  tui?: TuiConfig;
   /** P18: delegation settings. */
   delegation?: DelegationConfig;
   /** T210: path access rules determining allow | ask | deny per path (ADR-0042). */
@@ -748,6 +785,7 @@ export interface ResolvedConfig {
   containment: Required<ContainmentConfig>;
   /** T223. MCP worker settings. Always resolved. */
   mcp: Required<McpConfig>;
+  tui: Required<TuiConfig>;
   delegation: Required<DelegationConfig>;
   /** T210 (ADR-0042). Path rules kept per layer ({ global, project }) so source and trust survive. */
   path_rules: { global: RawPathRules; project: RawPathRules };

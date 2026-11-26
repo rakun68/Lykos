@@ -7,11 +7,11 @@
 // hides the bug that caused the drift.
 //
 // T18.1 lives here as a log line that *names the field*. T18.2 is H-1 in
-// `tui/derive.ts`, firing against the same cache hit ratio the HUD already
+// `surface/derive.ts`, firing against the same cache hit ratio the HUD already
 // displays, using PHASE2_CACHE_HIT_THRESHOLD.
 
 import type { HeadContract, ObserveResult } from "../session/head-contract.js";
-import { stderrWrite } from "../tui/io-mode.js";
+import { stderrWrite } from "../io-mode.js";
 
 /** Phase 2 exit criterion (`02-plan.md` §4): cache hit ratio above ~80% on multi-turn sessions. */
 export const PHASE2_CACHE_HIT_THRESHOLD = 0.8;

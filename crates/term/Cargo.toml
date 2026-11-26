@@ -1,0 +1,11 @@
+[package]
+name = "lykos-term"
+description = "Lykos's terminal renderer: a cell buffer diffed against the last frame, written once per frame."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+crossterm.workspace = true
+unicode-width.workspace = true

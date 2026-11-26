@@ -398,10 +398,11 @@ export interface LoadedTools {
  * `edit` and `write` — share one `FileReadRecord`, built here and so once per
  * session. `edit.require_read` is a property of that record.
  */
-function buildEditTools(deps: LoadToolsDeps): ToolDefinition[] {
+function buildEditTools(deps: LoadToolsDeps, jobs: JobRegistry): ToolDefinition[] {
   const reads = new FileReadRecord(deps.editRequireRead === true);
   const gated = buildGatedTools(deps.cwd, deps.gate, deps.denials, {
     reads,
+    jobs,
     ...(deps.executor !== undefined ? { executor: deps.executor } : {}),
   });
   const edit = buildEditTool({
@@ -430,7 +431,19 @@ function isMountedName(name: string): boolean {
 export function loadTools(names: readonly string[], deps: LoadToolsDeps): LoadedTools {
   const agentToolDef = deps.spawnContext ? buildAgentTool(deps.spawnContext) : undefined;
   const activeToolNames = names.filter((n) => !isMountedName(n));
-  const editTools = buildEditTools(deps);
+  // P10.5 (ticket 16, D2/D6/D10): the background shell's registry. Created here and returned, because
+  // `loadTools()` runs once per session and a per-session object is what makes "every job this session started dies
+  // with it" true by construction. Nothing spawns here: a session that never starts a job never creates
+  // `.lykos/jobs/`. P5 #48: created before the shell tools, which register their running calls with it so the user can
+  // move one to the background.
+  const stateRoot = deps.stateRoot ?? deps.cwd;
+  const jobs = new JobRegistry({
+    cwd: deps.cwd,
+    stateRoot,
+    ...(deps.executor !== undefined ? { executor: deps.executor } : {}),
+    ...(deps.onJobEnd !== undefined ? { onEnd: deps.onJobEnd } : {}),
+  });
+  const editTools = buildEditTools(deps, jobs);
 
   // P10.4 (ticket 13, D1/D2/D4): the search-and-navigation four, registered
   // unconditionally like the gated shadows above them. `grep` and `glob` are
@@ -477,19 +490,7 @@ export function loadTools(names: readonly string[], deps: LoadToolsDeps): Loaded
     ...(deps.denials !== undefined ? { denials: deps.denials } : {}),
   });
 
-  // P10.5 (ticket 16, D2/D6/D10): the background shell, mounted on the same
-  // terms as `lsp` above. The REGISTRY is created here and returned, because
-  // `loadTools()` runs once per session and a per-session object is what makes
-  // "every job this session started dies with it" true by construction.
-  // Nothing spawns here: a session that never calls `hub` never starts a
-  // process and never creates `.lykos/jobs/`.
-  const stateRoot = deps.stateRoot ?? deps.cwd;
-  const jobs = new JobRegistry({
-    cwd: deps.cwd,
-    stateRoot,
-    ...(deps.executor !== undefined ? { executor: deps.executor } : {}),
-    ...(deps.onJobEnd !== undefined ? { onEnd: deps.onJobEnd } : {}),
-  });
+  // P10.5 (ticket 16): the background shell, mounted on the same terms as `lsp` above, on the registry made above.
   // P10.5 (ticket 17, D2): the family's bus, or a family of one. Never a
   // module-level singleton — two unrelated sessions in one process (every MCP
   // worker, every test file) must not be able to read each other's mail, and

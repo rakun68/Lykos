@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { call, lastToolResult, reply, runScriptedSession, say } from "./scripted-session.js";
+import { READ_MIN_LINES } from "../tools/read.js";
 
 /** Exits 0 when a.ts says `salute`, 1 otherwise. The post-edit check and the gate both run it. */
 const CHECK_JS = `
@@ -153,16 +154,15 @@ describe("T168: read numbers, edit replaces, and everything that watches an edit
   });
 
   it("a read at an offset is numbered from that offset, and the more-lines notice stays unnumbered", async () => {
-    const lines = Array.from({ length: 30 }, (_, i) => `row ${i + 1}`).join("\n");
+    const lines = Array.from({ length: 30 + READ_MIN_LINES }, (_, i) => `row ${i + 1}`).join("\n");
     const run = await runScriptedSession({
       files: { "big.txt": `${lines}\n` },
       script: [
+        // A limit under READ_MIN_LINES is widened to it: the window starts at line 10 and holds READ_MIN_LINES lines.
         reply(call("read", { path: "big.txt", offset: 10, limit: 3 })),
         (context) => {
-          assert.equal(
-            lastToolResult(context).text,
-            "    10\trow 10\n    11\trow 11\n    12\trow 12\n\n[19 more lines in file. Use offset=13 to continue.]",
-          );
+          const window = Array.from({ length: READ_MIN_LINES }, (_, i) => `${String(10 + i).padStart(6)}\trow ${10 + i}`).join("\n");
+          assert.equal(lastToolResult(context).text, `${window}\n\n[22 more lines in file. Use offset=${10 + READ_MIN_LINES} to continue.]`);
           return reply(say("read it"));
         },
       ],

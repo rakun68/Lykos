@@ -227,6 +227,22 @@ interface JobEntry extends JobRecord {
   stream: WriteStream | undefined;
   /** Resolves when the shell process has exited, whatever ended it. */
   done: Promise<void>;
+  /** P5 #48: how an adopted job is killed, when this registry did not spawn its process. */
+  kill?: () => void;
+}
+
+/** P5 #48: a shell call that blocks its turn, which the user may move to the background. */
+export interface ForegroundShell {
+  id: string;
+  command: string;
+  startedAt: string;
+}
+
+/** P5 #48: what `adopt` hands the shell call it took over: where its output goes, and how it ends. */
+export interface AdoptedJob {
+  record: JobRecord;
+  write: (chunk: Buffer) => void;
+  end: (exitCode: number | null) => void;
 }
 
 export interface JobRegistryOpts {
@@ -293,6 +309,10 @@ export class JobRegistry {
   private readonly maxLogBytes: number;
   /** T232: set by `close`; no job starts after it. */
   private closed = false;
+  /** P5 #48: the shell calls running in a turn right now, each with how it moves to the background. */
+  private readonly foreground = new Map<string, { shell: ForegroundShell; toBackground: () => JobRecord | undefined }>();
+  private readonly listeners = new Set<() => void>();
+  private foregroundSeq = 0;
 
   constructor(private readonly opts: JobRegistryOpts) {
     this.maxLogBytes = opts.maxLogBytes ?? JOB_LOG_MAX_BYTES;
@@ -308,6 +328,125 @@ export class JobRegistry {
    */
   close(): void {
     this.closed = true;
+  }
+
+  /** P5 #48: called whenever a job starts or ends or a foreground shell call begins or ends. Returns the unsubscribe. */
+  watch(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  private changed(): void {
+    for (const fn of this.listeners) {
+      try {
+        fn();
+      } catch {
+        // A listener that throws does not stop the others or the job.
+      }
+    }
+  }
+
+  /**
+   * P5 #48: a shell call that holds its turn (`bash`, `powershell`), registered while it runs so the user can move it
+   * to the background (OpenCode's `session.background`). `toBackground` adopts it as a job and returns the job.
+   */
+  foregroundShell(command: string, toBackground: () => JobRecord | undefined): { end: () => void } {
+    const id = `fg-${++this.foregroundSeq}`;
+    this.foreground.set(id, { shell: { id, command, startedAt: new Date().toISOString() }, toBackground });
+    this.changed();
+    return {
+      end: () => {
+        if (this.foreground.delete(id)) this.changed();
+      },
+    };
+  }
+
+  foregroundShells(): ForegroundShell[] {
+    return [...this.foreground.values()].map((f) => ({ ...f.shell }));
+  }
+
+  /** P5 #48: moves every foreground shell call to the background, and returns the jobs they became. */
+  backgroundAll(): JobRecord[] {
+    const moved: JobRecord[] = [];
+    for (const [id, f] of [...this.foreground]) {
+      this.foreground.delete(id);
+      const job = f.toBackground();
+      if (job !== undefined) moved.push(job);
+    }
+    if (moved.length > 0) this.changed();
+    return moved;
+  }
+
+  /**
+   * P5 #48: a job made from a shell call already running, which this registry did not spawn. Its output arrives
+   * through `write`, under the same byte cap; `kill` is how `stop` reaches its process tree (the shell call's own
+   * abort, which kills the tree); `end` is called once when the process has exited.
+   */
+  adopt(opts: { command: string; kill: () => void }): AdoptedJob {
+    const id = this.mintId();
+    const dir = jobsDirectory(this.opts.stateRoot ?? this.opts.cwd);
+    mkdirSync(dir, { recursive: true });
+    const logPath = join(dir, `${id}.log`);
+    closeSync(openSync(logPath, "w"));
+    const stream = createWriteStream(logPath, { flags: "a" });
+    stream.on("error", () => undefined);
+    let resolveDone: () => void = () => undefined;
+    const done = new Promise<void>((r) => {
+      resolveDone = r;
+    });
+    const entry: JobEntry = {
+      id,
+      command: opts.command,
+      pid: undefined,
+      logPath,
+      startedAt: new Date().toISOString(),
+      status: "running",
+      bytes: 0,
+      child: undefined,
+      stream,
+      done,
+      kill: opts.kill,
+    };
+    this.jobs.set(id, entry);
+    let ended = false;
+    const write = (chunk: Buffer): void => {
+      entry.bytes += chunk.length;
+      if (entry.stream === undefined || entry.status === "capped") return;
+      entry.stream.write(chunk);
+      if (entry.bytes > this.maxLogBytes && entry.status === "running") {
+        entry.status = "capped";
+        entry.reason =
+          `output passed the ${this.maxLogBytes}-byte cap, so the job was killed. ` +
+          `Re-run it writing less to stdout, or redirect its output to a file yourself.`;
+        opts.kill();
+      }
+    };
+    const end = (exitCode: number | null): void => {
+      if (ended) return;
+      ended = true;
+      if (entry.status === "running") entry.status = "exited";
+      entry.exitCode = exitCode;
+      entry.endedAt = new Date().toISOString();
+      const s = entry.stream;
+      entry.stream = undefined;
+      const close = (): void => {
+        if (s === undefined || s.closed) resolveDone();
+        else {
+          s.once("close", () => resolveDone());
+          s.end();
+        }
+      };
+      const onEnd = this.opts.onEnd;
+      void Promise.resolve()
+        .then(() => onEnd?.(publicRecord(entry)))
+        .catch(() => undefined)
+        .finally(() => {
+          close();
+          this.changed();
+        });
+    };
+    this.changed();
+    return { record: publicRecord(entry), write, end };
   }
 
   private mintId(): string {
@@ -346,6 +485,7 @@ export class JobRegistry {
         done: Promise.resolve(),
       };
       this.jobs.set(id, refused);
+      this.changed();
       return publicRecord(refused);
     }
     const dir = jobsDirectory(this.opts.stateRoot ?? this.opts.cwd);
@@ -385,12 +525,16 @@ export class JobRegistry {
       const ended = this.opts.onEnd;
       if (ended === undefined) {
         closeLog(s);
+        this.changed();
         return;
       }
       void Promise.resolve()
         .then(() => ended(publicRecord(entry)))
         .catch(() => undefined)
-        .finally(() => closeLog(s));
+        .finally(() => {
+          closeLog(s);
+          this.changed();
+        });
     };
 
     const entry: JobEntry = {
@@ -454,6 +598,7 @@ export class JobRegistry {
     };
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
+    this.changed();
 
     child.on("error", (err) => {
       // A command that could not be started at all. Distinct from one that ran
@@ -562,7 +707,8 @@ export class JobRegistry {
     }
     let killed = true;
     try {
-      await (entry.child !== undefined ? killExecChild(entry.child) : killProcessTree(entry.pid));
+      if (entry.kill !== undefined) entry.kill();
+      else await (entry.child !== undefined ? killExecChild(entry.child) : killProcessTree(entry.pid));
     } catch {
       killed = false;
     }

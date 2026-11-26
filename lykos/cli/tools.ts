@@ -61,8 +61,8 @@ import {
 } from "../tools/tool-surface.js";
 import { resolveStandaloneTools } from "../tools/session-tools.js";
 import type { RiskTier } from "../tools/tool-risk.js";
-import { stdoutWrite } from "../tui/io-mode.js";
-import { pad } from "../tui/format.js";
+import { stdoutWrite } from "../io-mode.js";
+import { pad } from "../surface/format.js";
 
 /** The one string this report prints where it has no measurement. Never "0", never "-". */
 export const UNMEASURED = "unmeasured";

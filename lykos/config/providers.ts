@@ -18,6 +18,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AuthMode, PriceBasis, SessionModelSource } from "../ledger/ledger.js";
 import { isPriced, providerHasVerifiedPricing } from "../ledger/prices.js";
+import { DEFAULT_MODEL_EFFORTS, isModelEffort, MODEL_EFFORTS, thinkingLevelMapOf, type ThinkingLevelMap } from "./model-efforts.js";
 import { BUILTIN_PROVIDERS, PI_NATIVE_PROVIDERS } from "./provider-table.js";
 import type { ProviderAuth, ProviderDecl, ProviderModelDecl, ProvidersConfig } from "./types.js";
 
@@ -112,6 +113,13 @@ export function validateProviders(providers: ProvidersConfig): ProviderValidatio
     if (isCustom && !decl.baseUrl) {
       errors.push(`provider ${name}: custom providers need baseUrl`);
     }
+    for (const m of Array.isArray(decl.models) ? decl.models : []) {
+      if (m?.efforts === undefined) continue;
+      const wrong = Array.isArray(m.efforts) ? m.efforts.filter((e) => !isModelEffort(e)) : [m.efforts];
+      if (wrong.length > 0) {
+        errors.push(`provider ${name}: model ${m.id}: efforts must be a list of ${MODEL_EFFORTS.join(", ")}, got ${JSON.stringify(wrong)}`);
+      }
+    }
   }
   return { errors, warnings };
 }
@@ -122,6 +130,7 @@ interface PiModelJson {
   api?: string;
   baseUrl?: string;
   reasoning?: boolean;
+  thinkingLevelMap?: ThinkingLevelMap;
   contextWindow?: number;
   maxTokens?: number;
 }
@@ -135,7 +144,18 @@ interface PiProviderJson {
   models?: PiModelJson[];
 }
 
-function toPiProvider(decl: ProviderDecl): PiProviderJson | null {
+/**
+ * A declared model's reasoning in Pi's terms. `efforts` wins; a model the person declared with neither it nor
+ * `reasoning` offers the default efforts (`model-efforts.ts`). A built-in's table entry keeps what it says.
+ */
+function reasoningOf(m: ProviderModelDecl, declared: boolean): Pick<PiModelJson, "reasoning" | "thinkingLevelMap"> {
+  const efforts = m.efforts !== undefined ? m.efforts.filter(isModelEffort) : declared && m.reasoning === undefined ? [...DEFAULT_MODEL_EFFORTS] : undefined;
+  if (efforts === undefined) return m.reasoning !== undefined ? { reasoning: m.reasoning } : {};
+  if (efforts.length === 0) return { reasoning: false };
+  return { reasoning: true, thinkingLevelMap: thinkingLevelMapOf(efforts) };
+}
+
+function toPiProvider(decl: ProviderDecl, declared: boolean): PiProviderJson | null {
   const out: PiProviderJson = {};
   if (decl.source !== undefined) out.apiKey = decl.source;
   if (decl.baseUrl !== undefined) out.baseUrl = decl.baseUrl;
@@ -148,7 +168,7 @@ function toPiProvider(decl: ProviderDecl): PiProviderJson | null {
       if (m.name !== undefined) model.name = m.name;
       if (m.api !== undefined) model.api = m.api;
       if (m.baseUrl !== undefined) model.baseUrl = m.baseUrl;
-      if (m.reasoning !== undefined) model.reasoning = m.reasoning;
+      Object.assign(model, reasoningOf(m, declared));
       if (m.contextWindow !== undefined) model.contextWindow = m.contextWindow;
       if (m.maxTokens !== undefined) model.maxTokens = m.maxTokens;
       return model;
@@ -251,7 +271,7 @@ export function generateProviderConfig(input: GenerateProviderConfigInput): Gene
 
   const piProviders: Record<string, PiProviderJson> = {};
   for (const [name, decl] of Object.entries(effectiveProviders)) {
-    const translated = toPiProvider(decl);
+    const translated = toPiProvider(decl, Object.hasOwn(input.providers, name));
     if (translated) piProviders[name] = translated;
   }
 

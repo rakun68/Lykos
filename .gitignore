@@ -43,3 +43,11 @@ desktop.ini
 
 # Windows creates this from a stray '> NUL' in Git Bash
 /NUL
+
+# Rust build output
+/target/
+/bench/renderers/target/
+/.scratch/
+
+# The prebuilt lykos-tui npm install fetches (scripts/tui/install.mjs)
+vendor/tui/
