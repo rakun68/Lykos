@@ -77,7 +77,7 @@
             },
             {
                 "description": "Non-ASCII letters match",
-                "data": "π",
+                "data": "lykos",
                 "valid": true
             },
             {

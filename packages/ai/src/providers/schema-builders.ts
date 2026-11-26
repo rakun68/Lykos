@@ -1,4 +1,4 @@
-// Builders for pi-ai's own configuration schemas (model metadata, compat settings): pi-schema's builders, shaped like the
+// Builders for lykos-ai's own configuration schemas (model metadata, compat settings): lykos-schema's builders, shaped like the
 // TypeBox schemas they replace, so models.json and the catalog validate exactly as before.
 
 import {
@@ -8,7 +8,7 @@ import {
 	type Schema,
 	type Static,
 	type StaticObject,
-} from "@earendil-works/pi-schema";
+} from "@lykos/schema";
 
 /** An object that allows other properties; `additionalProperties: true` says so explicitly. */
 export function openObject<const P extends Properties>(

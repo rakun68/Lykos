@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
-import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, setKeybindings, visibleWidth } from "@lykos/tui";
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type {

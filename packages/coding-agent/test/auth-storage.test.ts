@@ -1,13 +1,13 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type CredentialStore, createModels, type Provider } from "@earendil-works/pi-ai";
+import { type CredentialStore, createModels, type Provider } from "@lykos/ai";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage, FileAuthStorageBackend } from "../src/core/auth-storage.ts";
 
 describe("AuthStorage", () => {
-	const tempDir = join(tmpdir(), `pi-test-auth-storage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	const tempDir = join(tmpdir(), `lykos-test-auth-storage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	const authJsonPath = join(tempDir, "auth.json");
 
 	beforeEach(() => {
@@ -45,7 +45,7 @@ describe("AuthStorage", () => {
 
 	// Regression test for #12164: a failed command stays cached until the key is saved again.
 	test("runs a command-backed key again after it is saved", async () => {
-		const name = `PI_TEST_AUTH_STORAGE_COMMAND_${Date.now()}`;
+		const name = `LYKOS_TEST_AUTH_STORAGE_COMMAND_${Date.now()}`;
 		const credential = { type: "api_key" as const, key: `!printenv ${name}` };
 		writeAuthJson({ anthropic: credential });
 		const storage = AuthStorage.create(authJsonPath);

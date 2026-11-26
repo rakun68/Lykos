@@ -31,7 +31,7 @@ describe("bedrock proxy credentials", () => {
 		await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
 		proxyUrl = `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`;
 
-		awsDir = mkdtempSync(join(tmpdir(), "pi-bedrock-proxy-"));
+		awsDir = mkdtempSync(join(tmpdir(), "lykos-bedrock-proxy-"));
 		const configFile = join(awsDir, "config");
 		const startUrl = "https://example.awsapps.com/start";
 		writeFileSync(

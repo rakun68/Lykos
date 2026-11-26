@@ -1,8 +1,8 @@
-import { type AssistantMessage, fauxAssistantMessage, fauxToolCall, type Message } from "@earendil-works/pi-ai";
+import { type AssistantMessage, fauxAssistantMessage, fauxToolCall, type Message } from "@lykos/ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "../harness.ts";
 
-// https://github.com/earendil-works/pi/issues/11227
+// https://github.com/rakun68/Lykos/issues/11227
 describe("issue #11227 recovery omits tool results with their tool call", () => {
 	const harnesses: Harness[] = [];
 
@@ -17,8 +17,8 @@ describe("issue #11227 recovery omits tool results with their tool call", () => 
 			models: [{ id: "faux-1", contextWindow: 100_000, maxTokens: 1_000 }],
 			settings: { compaction: { enabled: true } },
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_before_compact", async (event) => ({
+				(lykos) => {
+					lykos.on("session_before_compact", async (event) => ({
 						compaction: {
 							summary: "summary",
 							firstKeptEntryId: event.preparation.firstKeptEntryId,

@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@lykos/agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@lykos/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BashOperations } from "../../src/core/tools/bash.ts";
@@ -338,7 +338,7 @@ describe("AgentSession bash and persistence characterization", () => {
 		]);
 	});
 
-	// Regression tests for https://github.com/earendil-works/pi/issues/10504
+	// Regression tests for https://github.com/rakun68/Lykos/issues/10504
 	describe("escape sequences split across output chunks", () => {
 		/** Runs a user bash command whose fake shell emits the given chunks; `beforeExit` sees what was streamed by then. */
 		async function runChunks(chunks: Array<string | Buffer>, beforeExit?: (streamed: string) => void) {

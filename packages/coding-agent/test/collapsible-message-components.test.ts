@@ -1,4 +1,4 @@
-import type { Box, TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { Box, TuiMouseEvent } from "@lykos/tui";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { MarkdownTransformContext, MarkdownTransformer } from "../src/core/extensions/types.ts";
 import { BranchSummaryMessageComponent } from "../src/modes/interactive/components/branch-summary-message.ts";
@@ -136,7 +136,7 @@ describe("collapsible message components", () => {
 						"entry-1",
 					),
 			},
-		])("runs as $messageType on expanded $kind content without Pi's header", ({ messageType, header, create }) => {
+		])("runs as $messageType on expanded $kind content without Lykos's header", ({ messageType, header, create }) => {
 			seen.length = 0;
 			const component = create();
 			component.setExpanded(true);

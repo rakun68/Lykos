@@ -7,7 +7,7 @@ import { APP_NAME } from "../../../src/config.ts";
 import type { SessionManager } from "../../../src/core/session-manager.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 
-// Regression for https://github.com/earendil-works/pi/issues/5080
+// Regression for https://github.com/rakun68/Lykos/issues/5080
 //
 // On SIGTERM/SIGHUP the graceful shutdown must emit `session_shutdown`
 // (runtimeHost.dispose) BEFORE touching the terminal. Extension teardown such
@@ -47,13 +47,13 @@ function createSessionManager(options: { sessionFile?: string } = {}): SessionMa
 		isPersisted: () => options.sessionFile !== undefined,
 		getSessionFile: () => options.sessionFile,
 		getSessionId: () => "test-session",
-		getSessionDir: () => "/tmp/pi-sessions",
+		getSessionDir: () => "/tmp/lykos-sessions",
 		usesDefaultSessionDir: () => true,
 	} as unknown as SessionManager;
 }
 
 function createTempFile(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-shutdown-resume-hint-"));
+	const dir = mkdtempSync(join(tmpdir(), "lykos-shutdown-resume-hint-"));
 	tempDirs.push(dir);
 	const file = join(dir, "session.jsonl");
 	writeFileSync(file, "\n");
@@ -193,7 +193,7 @@ describe("InteractiveMode.shutdown ordering (#5080)", () => {
 
 // Regression for the `read EIO` crash reports (crash_tty_read_eio).
 //
-// When the terminal goes away, stdin reads and setRawMode fail with EIO (pi is
+// When the terminal goes away, stdin reads and setRawMode fail with EIO (lykos is
 // left in an orphaned background process group) or ENOTTY (macOS revoked the
 // tty). Node emits these as `error` events on process.stdin. Without a stdin
 // listener they became uncaught exceptions that were recorded as crashes and

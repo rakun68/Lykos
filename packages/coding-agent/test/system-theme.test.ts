@@ -1,4 +1,4 @@
-import { colorToOklch, colorToRgb, parseColor, type RgbColor, rgbColor } from "@earendil-works/pi-tui";
+import { colorToOklch, colorToRgb, parseColor, type RgbColor, rgbColor } from "@lykos/tui";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	generateSystemThemeColors,
@@ -83,7 +83,7 @@ describe("generateSystemThemeColors", () => {
 		expect(Math.abs(hue(resolved(DRACULA, "error")) - hue(DRACULA.palette![1]))).toBeLessThan(8);
 	});
 
-	// https://github.com/earendil-works/pi/issues/10255
+	// https://github.com/rakun68/Lykos/issues/10255
 	it("keeps pastel palette colors pastel at other lightnesses", () => {
 		const frappe: SystemThemeInput = {
 			background: rgb("#303446"),

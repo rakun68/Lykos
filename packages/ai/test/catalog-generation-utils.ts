@@ -25,8 +25,8 @@ export function writeUpstreamMock(preloadPath: string, modelsDev: ModelsDevV2Cat
 		},
 		"https://openrouter.ai/api/v1/models?output_modalities=decisions": { data: [] },
 		"https://ai-gateway.vercel.sh/v1/models": { data: [] },
-		"https://radius.pi.dev/v1/config": {
-			baseUrl: "https://radius.pi.dev",
+		"https://lykos.local/v1/config": {
+			baseUrl: "https://lykos.local",
 			models: [
 				{
 					id: "test",

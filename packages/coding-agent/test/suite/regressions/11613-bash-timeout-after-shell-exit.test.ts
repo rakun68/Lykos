@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createBashTool } from "../../../src/core/tools/bash.ts";
 
 /**
- * Regression test for https://github.com/earendil-works/pi/issues/11613
+ * Regression test for https://github.com/rakun68/Lykos/issues/11613
  *
  * The bash tool waits for stdout/stderr to close, not only for the shell to exit (#5303). A background
  * process that inherited those pipes and keeps writing keeps the tool waiting after the shell exited.

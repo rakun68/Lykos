@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import { execCommand } from "../src/core/exec.ts";
 
 describe("execCommand", () => {
-	// Regression test for https://github.com/earendil-works/pi/issues/11085
+	// Regression test for https://github.com/rakun68/Lykos/issues/11085
 	it("reports spawn errors in stderr", async () => {
-		const result = await execCommand("pi-command-that-does-not-exist-11085", [], process.cwd());
+		const result = await execCommand("lykos-command-that-does-not-exist-11085", [], process.cwd());
 
 		expect(result).toMatchObject({
 			code: 1,
@@ -22,7 +22,7 @@ describe("execCommand", () => {
 		expect(result).toEqual({ stdout: "", stderr: "", code: 1, killed: false, truncated: false });
 	});
 
-	// Regression tests for https://github.com/earendil-works/pi/issues/11360
+	// Regression tests for https://github.com/rakun68/Lykos/issues/11360
 	it.each([
 		-1,
 		0.5,
@@ -33,7 +33,7 @@ describe("execCommand", () => {
 	])("rejects invalid maxBuffer %s instead of attempting execution", async (maxBuffer) => {
 		// A missing command normally resolves to a failed result; invalid options must reject instead.
 		await expect(
-			execCommand("pi-command-that-does-not-exist-11360", [], process.cwd(), { maxBuffer }),
+			execCommand("lykos-command-that-does-not-exist-11360", [], process.cwd(), { maxBuffer }),
 		).rejects.toThrow(RangeError);
 	});
 
@@ -112,7 +112,7 @@ describe("execCommand", () => {
 		10_000,
 	);
 
-	// Regression tests for https://github.com/earendil-works/pi/issues/12088
+	// Regression tests for https://github.com/rakun68/Lykos/issues/12088
 	describe.skipIf(process.platform === "win32")("signal-terminated commands", () => {
 		const idle = ["-e", "setInterval(() => {}, 1000)"];
 
@@ -131,7 +131,7 @@ describe("execCommand", () => {
 		});
 
 		it("reports 128 + the signal number for a command killed by someone else", async () => {
-			// Not killed by pi, so `killed` is false and only the code tells this apart from success.
+			// Not killed by lykos, so `killed` is false and only the code tells this apart from success.
 			const script = 'process.kill(process.pid, "SIGKILL")';
 			const result = await execCommand(process.execPath, ["-e", script], process.cwd());
 

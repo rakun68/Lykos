@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@lykos/ai";
 import {
 	type Component,
 	Container,
@@ -7,7 +7,7 @@ import {
 	MouseRegion,
 	Spacer,
 	Text,
-} from "@earendil-works/pi-tui";
+} from "@lykos/tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";

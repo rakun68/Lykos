@@ -1,5 +1,6 @@
+import * as crypto from "node:crypto";
 import * as path from "node:path";
-import type { Container, EditorComponent, TUI } from "@earendil-works/pi-tui";
+import type { Container, EditorComponent, TUI } from "@lykos/tui";
 import { getAuthCredential } from "../../cli/auth-command.ts";
 import type { AgentSession } from "../../core/agent-session.ts";
 import {
@@ -19,8 +20,31 @@ import { serializeSessionBranch } from "../../core/session-export.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { createShareTrailingEntries } from "./session-share.ts";
 import { theme } from "./theme/theme.ts";
+
+function createShareTrailingEntries(
+	session: AgentSession,
+	parentId: string | null,
+	timestamp: string,
+): object[] {
+	return [
+		{
+			type: "custom",
+			customType: "lykos.share",
+			id: crypto.randomUUID().slice(0, 8),
+			parentId,
+			timestamp,
+			data: {
+				systemPrompt: session.state.systemPrompt,
+				tools: session.state.tools.map((tool) => ({
+					name: tool.name,
+					description: tool.description,
+					parameters: tool.parameters,
+				})),
+			},
+		},
+	];
+}
 
 interface BugReportContext {
 	session: AgentSession;
@@ -42,7 +66,7 @@ interface BugReportOptions {
 type Overlay = Container & { dispose?: () => void };
 
 const DISCLAIMER =
-	"This report goes to the Pi developers (Earendil) and is not shared publicly. It includes your pi version, operating system, the current model and provider configuration (without API keys), loaded extensions, settings, and provider error diagnostics from this session.";
+	"This report goes to the Lykos developers (Earendil) and is not shared publicly. It includes your lykos version, operating system, the current model and provider configuration (without API keys), loaded extensions, settings, and provider error diagnostics from this session.";
 const TRANSCRIPT_NOTE =
 	"The transcript contains your messages, model output, tool calls and their results, including file contents and command output read during this session.";
 
@@ -53,7 +77,7 @@ export async function reportBug(context: BugReportContext, initialHint?: string)
 		context.showStatus("Bug report cancelled");
 		return;
 	}
-	if (options.delivery === "upload" && process.env.PI_OFFLINE) {
+	if (options.delivery === "upload" && process.env.LYKOS_OFFLINE) {
 		context.showError("Uploading bug reports requires online mode. Use Export as Zip instead.");
 		return;
 	}

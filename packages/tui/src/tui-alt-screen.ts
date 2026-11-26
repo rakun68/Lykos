@@ -200,7 +200,7 @@ export interface TuiAltScreenOptions {
 }
 
 // Terminals that forward the right-click to mouse-tracking apps and also paste
-// the clipboard themselves. pi's synthetic paste would duplicate their paste.
+// the clipboard themselves. lykos's synthetic paste would duplicate their paste.
 const RIGHT_CLICK_PASTING_TERMINALS = new Set(["vscode", "tabby"]);
 
 function terminalPastesOnRightClick(): boolean {

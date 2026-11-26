@@ -17,7 +17,7 @@ describe("issue #8423 extension factory failure", () => {
 		let flagDuringLoad: boolean | string | undefined;
 
 		await loadExtensionFromFactory(
-			(pi) => pi.registerProvider("working-provider", providerConfig),
+			(lykos) => lykos.registerProvider("working-provider", providerConfig),
 			process.cwd(),
 			eventBus,
 			runtime,
@@ -25,15 +25,15 @@ describe("issue #8423 extension factory failure", () => {
 		);
 		await expect(
 			loadExtensionFromFactory(
-				(pi) => {
-					capturedApi = pi;
-					pi.events.on("factory-failure", () => {
+				(lykos) => {
+					capturedApi = lykos;
+					lykos.events.on("factory-failure", () => {
 						eventCalls++;
 					});
-					pi.registerFlag("failed-flag", { type: "boolean", default: true });
-					flagDuringLoad = pi.getFlag("failed-flag");
-					pi.unregisterProvider("working-provider");
-					pi.registerProvider("failed-provider", providerConfig);
+					lykos.registerFlag("failed-flag", { type: "boolean", default: true });
+					flagDuringLoad = lykos.getFlag("failed-flag");
+					lykos.unregisterProvider("working-provider");
+					lykos.registerProvider("failed-provider", providerConfig);
 					throw new Error("factory failed");
 				},
 				process.cwd(),
@@ -62,8 +62,8 @@ describe("issue #8423 extension factory failure", () => {
 			releaseFailure = resolve;
 		});
 		const failingLoad = loadExtensionFromFactory(
-			async (pi) => {
-				pi.registerProvider("failed-provider", providerConfig);
+			async (lykos) => {
+				lykos.registerProvider("failed-provider", providerConfig);
 				await waitBeforeFailure;
 				throw new Error("factory failed");
 			},
@@ -74,7 +74,7 @@ describe("issue #8423 extension factory failure", () => {
 		);
 
 		await loadExtensionFromFactory(
-			(pi) => pi.registerProvider("working-provider", providerConfig),
+			(lykos) => lykos.registerProvider("working-provider", providerConfig),
 			process.cwd(),
 			eventBus,
 			runtime,

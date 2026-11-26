@@ -1,11 +1,11 @@
 import type { Models, MutableModels } from "../models.ts";
-import { PI_AI_VERSION } from "./version.ts";
+import { LYKOS_AI_VERSION } from "./version.ts";
 
 /**
  * The `User-Agent` sent to providers:
- * - `"detailed"`: `pi/<version> (<platform>; <runtime>/<runtime version>; <arch>)`, or `pi/<version> (browser)`
+ * - `"detailed"`: `lykos/<version> (<platform>; <runtime>/<runtime version>; <arch>)`, or `lykos/<version> (browser)`
  *   outside Node.js and Bun.
- * - `"short"`: `pi`.
+ * - `"short"`: `lykos`.
  * - `{ custom }`: the given value.
  */
 export type UserAgentMode = "short" | "detailed" | { custom: string };
@@ -20,19 +20,19 @@ export interface ClientAttribution {
 	categories?: string[];
 }
 
-/** pi's attribution, used by pi-agent-core, pi-durable, and the coding agent. */
-export const PI_ATTRIBUTION: ClientAttribution = { name: "pi", url: "https://pi.dev", categories: ["cli-agent"] };
+/** lykos's attribution, used by lykos-agent-core, lykos-durable, and the coding agent. */
+export const LYKOS_ATTRIBUTION: ClientAttribution = { name: "lykos", url: "https://lykos.local", categories: ["cli-agent"] };
 
 /**
- * How pi-ai identifies the calling app to providers. Every field is optional; absent fields use pi-ai's defaults:
- * a detailed `User-Agent` with pi-ai's version and no attribution headers. Plain JSON, so it can be persisted.
+ * How lykos-ai identifies the calling app to providers. Every field is optional; absent fields use lykos-ai's defaults:
+ * a detailed `User-Agent` with lykos-ai's version and no attribution headers. Plain JSON, so it can be persisted.
  */
 export interface ClientIdentity {
 	/** Default: `"detailed"`. */
 	userAgent?: UserAgentMode;
 	/** Provider attribution headers. Absent or `null`: none; `null` also turns off attribution set by a merged identity. */
 	attribution?: ClientAttribution | null;
-	/** Version in the detailed `User-Agent`. Default: the pi-ai version. */
+	/** Version in the detailed `User-Agent`. Default: the lykos-ai version. */
 	version?: string;
 }
 
@@ -60,7 +60,7 @@ export function mergeClientIdentity(...sources: (ClientIdentity | undefined)[]):
 
 /** The version in the detailed `User-Agent`. */
 export function getClientVersion(identity?: ClientIdentity): string {
-	return identity?.version ?? PI_AI_VERSION;
+	return identity?.version ?? LYKOS_AI_VERSION;
 }
 
 function runtimeDescription(): string | undefined {
@@ -75,8 +75,8 @@ function runtimeDescription(): string | undefined {
 export function formatUserAgent(identity?: ClientIdentity): string {
 	const mode = identity?.userAgent ?? "detailed";
 	if (typeof mode === "object") return mode.custom;
-	if (mode === "short") return "pi";
-	const product = `pi/${getClientVersion(identity)}`;
+	if (mode === "short") return "lykos";
+	const product = `lykos/${getClientVersion(identity)}`;
 	const runtime = runtimeDescription();
 	return runtime ? `${product} (${process.platform}; ${runtime}; ${process.arch})` : `${product} (browser)`;
 }
@@ -117,7 +117,7 @@ export function getAttributionHeaders(target: ClientIdentityTarget, identity?: C
 				: { "X-OpenRouter-Categories": categories.join(",") }),
 		};
 	}
-	// NVIDIA expects a capitalized origin, such as `Pi`.
+	// NVIDIA expects a capitalized origin, such as `Lykos`.
 	if (isNvidiaNim(target)) return { "X-BILLING-INVOKE-ORIGIN": name.charAt(0).toUpperCase() + name.slice(1) };
 	if (isOpenCode(target)) return { "x-opencode-client": name };
 	return {};

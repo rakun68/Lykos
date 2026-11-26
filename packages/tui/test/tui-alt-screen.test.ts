@@ -1751,9 +1751,9 @@ describe("TuiAltScreen", () => {
 	it("coalesces slash and hyphen separated segments for double-click word selection", async () => {
 		for (const { line, needle } of [
 			{ line: "extensions/starline/fixed-editor/compositor.ts", needle: "starline" },
-			{ line: "earendil-works/pi-tui", needle: "works" },
-			{ line: "~/.pi/agent/settings.json", needle: "agent" },
-			{ line: "~\\Documents\\pi", needle: "Documents" },
+			{ line: "earendil-works/lykos-tui", needle: "works" },
+			{ line: "~/.lykos/settings.json", needle: "agent" },
+			{ line: "~\\Documents\\lykos", needle: "Documents" },
 			{ line: "foo+bar", needle: "bar" },
 		]) {
 			const copied: string[] = [];

@@ -188,14 +188,14 @@
             {
                 "description": "Unicode letter property name matches",
                 "data": {
-                    "π": 1
+                    "lykos": 1
                 },
                 "valid": true
             },
             {
                 "description": "Unicode letter property name matches but value type is incorrect",
                 "data": {
-                    "π": "1"
+                    "lykos": "1"
                 },
                 "valid": false
             },

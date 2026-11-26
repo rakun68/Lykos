@@ -1,5 +1,5 @@
 {
-	"$schema": "https://pi.dev/schemas/theme.schema.json",
+	"$schema": "https://lykos.local/schemas/theme.schema.json",
 	"name": "light",
 	"appearance": "light",
 	"vars": {

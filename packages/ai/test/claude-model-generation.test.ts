@@ -29,7 +29,7 @@ function claudeModel(id: string, reasoning: ModelsDevV2Model["capabilities"]["re
 }
 
 function generateCatalog(modelsDev: ModelsDevV2Catalog, provider: string): Record<string, Model<Api>> {
-	const root = mkdtempSync(join(tmpdir(), "pi-claude-generation-"));
+	const root = mkdtempSync(join(tmpdir(), "lykos-claude-generation-"));
 	temporaryRoots.push(root);
 	const preloadPath = join(root, "mock-catalog.mjs");
 	const outputPath = join(root, "catalog");

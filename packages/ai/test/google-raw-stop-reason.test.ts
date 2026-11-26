@@ -99,7 +99,7 @@ beforeEach(() => {
 	googleGenAiMock.streamChunks = undefined;
 });
 
-const PI_USER_AGENT = formatUserAgent();
+const LYKOS_USER_AGENT = formatUserAgent();
 
 const context = normalizeContext({
 	messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
@@ -250,8 +250,8 @@ describe("Google provider stream events", () => {
 });
 
 describe("Google Generative AI user agent", () => {
-	it("uses pi's User-Agent by default", async () => {
-		expect((await captureGoogleHeaders())["User-Agent"]).toBe(PI_USER_AGENT);
+	it("uses lykos's User-Agent by default", async () => {
+		expect((await captureGoogleHeaders())["User-Agent"]).toBe(LYKOS_USER_AGENT);
 	});
 
 	it("lets explicit headers override the default User-Agent", async () => {

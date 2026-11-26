@@ -1,5 +1,5 @@
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import type { ToolResultMessage } from "@earendil-works/pi-ai/compat";
+import { fauxAssistantMessage, fauxToolCall } from "@lykos/ai";
+import type { ToolResultMessage } from "@lykos/ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assistantMsg, userMsg } from "../../utilities.ts";
@@ -13,7 +13,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 	return { promise, resolve };
 }
 
-// Regression for https://github.com/earendil-works/pi/issues/9221.
+// Regression for https://github.com/rakun68/Lykos/issues/9221.
 describe("reload during an active session operation", () => {
 	let harness: Harness | undefined;
 
@@ -32,13 +32,13 @@ describe("reload during an active session operation", () => {
 			let providerResults: ToolResultMessage[] = [];
 			const h = await createHarness({
 				extensionFactories: [
-					(pi) => {
-						pi.on("session_shutdown", shutdown);
-						pi.registerCommand("reload-runtime", {
+					(lykos) => {
+						lykos.on("session_shutdown", shutdown);
+						lykos.registerCommand("reload-runtime", {
 							description: "Reload extensions",
 							handler: async (_args, ctx) => ctx.reload(),
 						});
-						pi.registerTool({
+						lykos.registerTool({
 							name: "wait_then_succeed",
 							label: "Wait then succeed",
 							description: "Use the tool context after waiting",
@@ -117,9 +117,9 @@ describe("reload during an active session operation", () => {
 		const h = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_shutdown", shutdown);
-					pi.on("session_before_compact", async (event) => {
+				(lykos) => {
+					lykos.on("session_shutdown", shutdown);
+					lykos.on("session_before_compact", async (event) => {
 						started.resolve();
 						await released.promise;
 						return {
@@ -130,7 +130,7 @@ describe("reload during an active session operation", () => {
 							},
 						};
 					});
-					pi.on("session_before_tree", async () => {
+					lykos.on("session_before_tree", async () => {
 						started.resolve();
 						await released.promise;
 					});
@@ -163,9 +163,9 @@ describe("reload during an active session operation", () => {
 		const start = vi.fn();
 		const h = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_shutdown", shutdown);
-					pi.on("session_start", start);
+				(lykos) => {
+					lykos.on("session_shutdown", shutdown);
+					lykos.on("session_start", start);
 				},
 			],
 		});

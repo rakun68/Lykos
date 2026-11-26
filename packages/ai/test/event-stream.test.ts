@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
 import { AssistantMessageEventStream, EventStream } from "../src/utils/event-stream.ts";
 
-// Regression tests for https://github.com/earendil-works/pi/issues/9055
+// Regression tests for https://github.com/rakun68/Lykos/issues/9055
 describe("EventStream", () => {
 	it("drains buffered events in order and ignores events pushed after completion", async () => {
 		const stream = new EventStream<number, number>(

@@ -40,20 +40,20 @@ describe("ProjectTrustStore", () => {
 		const originalHome = process.env.HOME;
 		process.env.HOME = tempDir;
 		try {
-			mkdirSync(join(tempDir, ".pi", "agent"), { recursive: true });
+			mkdirSync(join(tempDir, ".lykos", "agent"), { recursive: true });
 			mkdirSync(join(tempDir, ".agents", "skills"), { recursive: true });
 			expect(hasTrustRequiringProjectResources(tempDir)).toBe(false);
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(false);
 
-			writeFileSync(join(tempDir, ".pi", "settings.json"), "{}");
+			writeFileSync(join(tempDir, ".lykos", "settings.json"), "{}");
 			expect(hasTrustRequiringProjectResources(tempDir)).toBe(true);
-			rmSync(join(tempDir, ".pi", "settings.json"), { force: true });
+			rmSync(join(tempDir, ".lykos", "settings.json"), { force: true });
 
-			mkdirSync(join(cwd, ".pi"), { recursive: true });
-			writeFileSync(join(cwd, ".pi", "settings.json"), "{}");
+			mkdirSync(join(cwd, ".lykos"), { recursive: true });
+			writeFileSync(join(cwd, ".lykos", "settings.json"), "{}");
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
 
-			rmSync(join(cwd, ".pi"), { recursive: true, force: true });
+			rmSync(join(cwd, ".lykos"), { recursive: true, force: true });
 			mkdirSync(join(cwd, ".agents", "skills"), { recursive: true });
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
 		} finally {
@@ -65,7 +65,7 @@ describe("ProjectTrustStore", () => {
 		}
 	});
 
-	// Regression test for https://github.com/earendil-works/pi/issues/10488
+	// Regression test for https://github.com/rakun68/Lykos/issues/10488
 	it("ignores the user .agents/skills dir when HOME differs only by case on Windows", () => {
 		const originalHome = process.env.HOME;
 		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -87,7 +87,7 @@ describe("ProjectTrustStore", () => {
 		}
 	});
 
-	// Regression test for https://github.com/earendil-works/pi/issues/10488
+	// Regression test for https://github.com/rakun68/Lykos/issues/10488
 	it("matches saved decisions regardless of casing on Windows", () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 		const projectDir = join(tempDir, "Project-Mixed");

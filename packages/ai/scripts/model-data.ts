@@ -75,7 +75,7 @@ function readProviderStructure(path: string, providerId: string): Record<string,
 			models.set(modelKey, api);
 		}
 	}
-	if (models.size === 0) throw new Error(`${path} contains no generated model data`);
+	if (models.size === 0 && providerId !== "radius") throw new Error(`${path} contains no generated model data`);
 	return sortedRecord(models);
 }
 

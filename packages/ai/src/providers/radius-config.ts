@@ -2,7 +2,7 @@ import type { OAuthCredential } from "../auth/types.ts";
 import type { ClassifierModel, Model, ThinkingLevelMap } from "../types.ts";
 import { ownedSlice } from "../utils/text.ts";
 
-export const DEFAULT_RADIUS_GATEWAY = "https://radius.pi.dev";
+export const DEFAULT_RADIUS_GATEWAY = "https://lykos.local";
 
 export type RadiusGatewayModel = {
 	id: string;
@@ -10,7 +10,7 @@ export type RadiusGatewayModel = {
 	reasoning: boolean;
 	thinkingLevelMap?: ThinkingLevelMap;
 	input: ("text" | "image")[];
-	cost: Model<"pi-messages">["cost"];
+	cost: Model<"lykos-messages">["cost"];
 	contextWindow: number;
 	maxTokens: number;
 };
@@ -19,7 +19,7 @@ export type RadiusGatewayClassifierModel = {
 	id: string;
 	name: string;
 	input: ("text" | "image")[];
-	cost: ClassifierModel<"pi-decision">["cost"];
+	cost: ClassifierModel<"lykos-decision">["cost"];
 	contextWindow: number;
 };
 
@@ -75,10 +75,10 @@ export function getRadiusCredentialConfig(credential: OAuthCredential | undefine
 	return sanitizeRadiusGatewayConfig((credential as RadiusOAuthCredential | undefined)?.gatewayConfig);
 }
 
-export function getRadiusModelsFromConfig(providerId: string, config: RadiusGatewayConfig): Model<"pi-messages">[] {
+export function getRadiusModelsFromConfig(providerId: string, config: RadiusGatewayConfig): Model<"lykos-messages">[] {
 	return config.models.map((model) => ({
 		...model,
-		api: "pi-messages",
+		api: "lykos-messages",
 		provider: providerId,
 		baseUrl: config.baseUrl,
 	}));
@@ -87,14 +87,14 @@ export function getRadiusModelsFromConfig(providerId: string, config: RadiusGate
 export function getRadiusAllModelsFromConfig(
 	providerId: string,
 	config: RadiusGatewayConfig,
-): (Model<"pi-messages"> | ClassifierModel<"pi-decision">)[] {
+): (Model<"lykos-messages"> | ClassifierModel<"lykos-decision">)[] {
 	return [
 		...getRadiusModelsFromConfig(providerId, config),
 		...(config.classifiers ?? []).map(
-			(model): ClassifierModel<"pi-decision"> => ({
+			(model): ClassifierModel<"lykos-decision"> => ({
 				...model,
 				type: "classifier",
-				api: "pi-decision",
+				api: "lykos-decision",
 				provider: providerId,
 				baseUrl: config.baseUrl,
 			}),
@@ -102,7 +102,7 @@ export function getRadiusAllModelsFromConfig(
 	];
 }
 
-export function getRadiusModels(providerId: string, credential: OAuthCredential | undefined): Model<"pi-messages">[] {
+export function getRadiusModels(providerId: string, credential: OAuthCredential | undefined): Model<"lykos-messages">[] {
 	const config = getRadiusCredentialConfig(credential);
 	return config ? getRadiusModelsFromConfig(providerId, config) : [];
 }

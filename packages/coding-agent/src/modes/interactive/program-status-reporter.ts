@@ -1,4 +1,4 @@
-import type { ProgramStatus, Terminal } from "@earendil-works/pi-tui";
+import type { ProgramStatus, Terminal } from "@lykos/tui";
 import { APP_NAME } from "../../config.ts";
 import type { AgentSessionEvent } from "../../core/agent-session.ts";
 

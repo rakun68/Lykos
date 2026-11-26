@@ -1,4 +1,4 @@
-import { SseDecoder } from "@earendil-works/pi-ai/utils/sse";
+import { SseDecoder } from "@lykos/ai/utils/sse";
 
 export type LlamaModelStatus = "unloaded" | "loading" | "loaded" | "downloading" | "sleeping";
 

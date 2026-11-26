@@ -146,7 +146,7 @@ describe("Bedrock thinking payload", () => {
 		expect(payload.additionalModelRequestFields?.output_config).toEqual({ effort: "xhigh" });
 	});
 
-	// https://github.com/earendil-works/pi/issues/10324
+	// https://github.com/rakun68/Lykos/issues/10324
 	it("sends block_binding and the binding beta for Claude Opus 5.5", async () => {
 		const model = getModel("amazon-bedrock", "global.anthropic.claude-opus-5-5");
 

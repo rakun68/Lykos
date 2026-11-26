@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setKeybindings } from "@earendil-works/pi-tui";
+import { setKeybindings } from "@lykos/tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { ResolvedPaths } from "../src/core/package-manager.ts";
@@ -19,7 +19,7 @@ describe("config selector search", () => {
 
 	beforeEach(() => {
 		setKeybindings(new KeybindingsManager());
-		tempDir = mkdtempSync(join(tmpdir(), "pi-config-selector-"));
+		tempDir = mkdtempSync(join(tmpdir(), "lykos-config-selector-"));
 	});
 
 	afterEach(() => {
@@ -32,7 +32,7 @@ describe("config selector search", () => {
 			extensions: ["tool-a.ts", "tool-b.ts", "other.ts"].map((name) => ({
 				path: join(packageRoot, "extensions", name),
 				enabled: true,
-				metadata: { source: "npm:pi-tools", scope: "user", origin: "package", baseDir: packageRoot },
+				metadata: { source: "npm:lykos-tools", scope: "user", origin: "package", baseDir: packageRoot },
 			})),
 			skills: [],
 			prompts: [],

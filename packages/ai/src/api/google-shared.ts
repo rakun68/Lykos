@@ -48,7 +48,7 @@ const GOOGLE_SDK_THINKING_LEVEL_MAP: Record<GoogleApiThinkingLevel, GoogleSdkThi
 	XHIGH: GoogleSdkThinkingLevel.XHIGH,
 };
 
-/** Resolve a supported pi level or model-specific Google mapping to a standard Google level. */
+/** Resolve a supported lykos level or model-specific Google mapping to a standard Google level. */
 export function resolveGoogleThinkingLevel<T extends GoogleApiType>(
 	model: Model<T>,
 	level: ThinkingLevel,
@@ -575,7 +575,7 @@ export function mapStopReason(reason: FinishReason): StopReason {
 		case FinishReason.STOP:
 			return "stop";
 		case FinishReason.MAX_TOKENS:
-		// Per-request token limit reached before generation completed; pi does not resume with the continuation token.
+		// Per-request token limit reached before generation completed; lykos does not resume with the continuation token.
 		case FinishReason.CONTINUATION:
 			return "length";
 		case FinishReason.BLOCKLIST:

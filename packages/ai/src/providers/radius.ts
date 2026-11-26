@@ -1,5 +1,5 @@
-import { piDecisionApi } from "../api/pi-decision.lazy.ts";
-import { piMessagesApi } from "../api/pi-messages.lazy.ts";
+import { piDecisionApi } from "../api/lykos-decision.lazy.ts";
+import { piMessagesApi } from "../api/lykos-messages.lazy.ts";
 import { envApiKeyAuth, lazyOAuth } from "../auth/helpers.ts";
 import { loadRadiusOAuth } from "../auth/oauth/load.ts";
 import type { Provider } from "../models.ts";
@@ -20,16 +20,16 @@ export interface RadiusProviderOptions {
 	gateway?: string;
 }
 
-type RadiusModel = Model<"pi-messages"> | ClassifierModel<"pi-decision">;
+type RadiusModel = Model<"lykos-messages"> | ClassifierModel<"lykos-decision">;
 
 /** Radius gateway provider with a persisted, dynamically refreshed catalog. */
-export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"pi-messages"> {
+export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"lykos-messages"> {
 	const id = options.id ?? "radius";
 	const name = options.name ?? "Radius";
 	const gateway = normalizeRadiusGatewayUrl(options.gateway ?? DEFAULT_RADIUS_GATEWAY);
 	const baselineModels: RadiusModel[] =
 		gateway === normalizeRadiusGatewayUrl(DEFAULT_RADIUS_GATEWAY)
-			? Object.values(RADIUS_MODELS).map((model) => ({ ...model, provider: id }))
+			? (Object.values(RADIUS_MODELS) as RadiusModel[]).map((model) => ({ ...model, provider: id }))
 			: [];
 	// Gateway catalog for this account. Radius org owners can disable models, so once known it replaces
 	// the shipped baseline instead of overlaying it. The baseline only covers the time before any catalog exists.
@@ -45,7 +45,7 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"p
 			oauth: lazyOAuth({ name, load: () => loadRadiusOAuth({ name, gateway }) }),
 		},
 		getModels: () =>
-			(dynamicModels ?? baselineModels).filter((model): model is Model<"pi-messages"> => isModelType(model, "chat")),
+			(dynamicModels ?? baselineModels).filter((model): model is Model<"lykos-messages"> => isModelType(model, "chat")),
 		getAllModels: () => dynamicModels ?? baselineModels,
 		refreshModels: async (context) => {
 			const stored = context.stored;

@@ -108,7 +108,7 @@ describe("stripAnsi", () => {
 		expect(stripAnsi(input)).toBe("aredlinkz");
 	});
 
-	// https://github.com/earendil-works/pi/issues/11377
+	// https://github.com/rakun68/Lykos/issues/11377
 	it("strips private-parameter CSI sequences with their parameters", () => {
 		expect(stripAnsi("\x1b[<35;59;1Mstep 1")).toBe("step 1");
 		expect(stripAnsi("a\x1b[<0;10;20mb")).toBe("ab");
@@ -118,7 +118,7 @@ describe("stripAnsi", () => {
 		expect(stripAnsi("a\x9b<35;59;1Mb")).toBe("ab");
 	});
 
-	// https://github.com/earendil-works/pi/issues/11377
+	// https://github.com/rakun68/Lykos/issues/11377
 	it("keeps digits after bare ESC keypad-mode sequences", () => {
 		expect(stripAnsi("\x1b[?1h\x1b=123 tests passed")).toBe("123 tests passed");
 		expect(stripAnsi("\x1b[?1l\x1b>42 files")).toBe("42 files");
@@ -127,7 +127,7 @@ describe("stripAnsi", () => {
 });
 
 describe("splitIncompleteAnsiSuffix", () => {
-	// https://github.com/earendil-works/pi/issues/11377
+	// https://github.com/rakun68/Lykos/issues/11377
 	it("holds back unfinished private-parameter CSI sequences", () => {
 		expect(splitIncompleteAnsiSuffix("x\x1b[<35;59")).toEqual({ complete: "x", pending: "\x1b[<35;59" });
 		expect(splitIncompleteAnsiSuffix("x\x1b=")).toEqual({ complete: "x\x1b=", pending: "" });

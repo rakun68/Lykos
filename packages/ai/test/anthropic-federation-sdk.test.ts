@@ -8,7 +8,7 @@ import { normalizeContext } from "../src/utils/transcript.ts";
 
 // Runs the real Anthropic SDK against a fake fetch to check how often the
 // workload identity federation token exchange happens.
-// https://github.com/earendil-works/pi/issues/10177
+// https://github.com/rakun68/Lykos/issues/10177
 
 function sseResponse(): Response {
 	const body = [
@@ -68,7 +68,7 @@ let tempDir: string;
 let federationEnv: Record<string, string>;
 
 beforeAll(() => {
-	tempDir = mkdtempSync(join(tmpdir(), "pi-anthropic-federation-"));
+	tempDir = mkdtempSync(join(tmpdir(), "lykos-anthropic-federation-"));
 	const identityTokenFile = join(tempDir, "identity.jwt");
 	writeFileSync(identityTokenFile, "header.payload.signature");
 	federationEnv = {

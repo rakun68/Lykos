@@ -16,7 +16,7 @@ import type {
 	AgentToolUpdateCallback,
 	ThinkingLevel,
 	ToolExecutionMode,
-} from "@earendil-works/pi-agent-core";
+} from "@lykos/agent-core";
 import type {
 	AnyModel,
 	Api,
@@ -42,7 +42,7 @@ import type {
 	ToolResultMessage,
 	TranscriptContext,
 	Usage,
-} from "@earendil-works/pi-ai";
+} from "@lykos/ai";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -55,7 +55,7 @@ import type {
 	OverlayOptions,
 	ProgramStatus,
 	TUI,
-} from "@earendil-works/pi-tui";
+} from "@lykos/tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { BashResult } from "../bash-executor.ts";
@@ -152,7 +152,7 @@ export type EditorFactory = (tui: TUI, theme: EditorTheme, keybindings: Keybindi
 /**
  * Formats the host's configured keybindings for display.
  * Extensions should use these instead of importing `keyText`/`keyHint`: an import may resolve to another copy of
- * pi-coding-agent, which does not see the host's keybindings.
+ * lykos-coding-agent, which does not see the host's keybindings.
  */
 export interface KeybindingHints {
 	/** Configured keys for a keybinding id, for example `"ctrl+o"`. Empty when the id has no keys. */
@@ -245,7 +245,7 @@ export interface ExtensionUIContext {
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
 			onHandle?: (handle: OverlayHandle) => void;
 			/**
-			 * Report pi as blocked on user input (OSC 7501 program status) while this component waits for input.
+			 * Report lykos as blocked on user input (OSC 7501 program status) while this component waits for input.
 			 * Inline components report it while visible. Overlays report it until `done()` is called, also while
 			 * hidden with `setHidden()`.
 			 */
@@ -277,12 +277,12 @@ export interface ExtensionUIContext {
 	 * - `keybindings`: KeybindingsManager for app-level keybindings
 	 *
 	 * For full app keybinding support (escape, ctrl+d, model switching, etc.),
-	 * extend `CustomEditor` from `@earendil-works/pi-coding-agent` and call
+	 * extend `CustomEditor` from `@lykos/coding-agent` and call
 	 * `super.handleInput(data)` for keys you don't handle.
 	 *
 	 * @example
 	 * ```ts
-	 * import { CustomEditor } from "@earendil-works/pi-coding-agent";
+	 * import { CustomEditor } from "@lykos/coding-agent";
 	 *
 	 * class VimEditor extends CustomEditor {
 	 *   private mode: "normal" | "insert" = "insert";
@@ -380,7 +380,7 @@ export interface ExtensionContext {
 	abort(): void;
 	/** Whether there are queued messages waiting */
 	hasPendingMessages(): boolean;
-	/** Gracefully shutdown pi and exit. Available in all contexts. */
+	/** Gracefully shutdown lykos and exit. Available in all contexts. */
 	shutdown(): void;
 	/** Get current context usage for the active model. */
 	getContextUsage(): ContextUsage | undefined;
@@ -764,7 +764,7 @@ export interface ResourcesDiscoverResult {
 /**
  * Fired when an extension registers or unregisters an MCP server after the extensions are bound
  * (see {@link ExtensionAPI.registerMcpServer}). Servers registered while extensions load are read
- * with `pi.getMcpServers()` on `session_start`. Handling this event marks an extension as the one
+ * with `lykos.getMcpServers()` on `session_start`. Handling this event marks an extension as the one
  * that connects registered servers.
  */
 export interface McpServersChangeEvent {
@@ -905,7 +905,7 @@ export type SessionEvent =
  * Fired before each LLM call. Can modify messages.
  *
  * `messages` holds the conversation without system messages. The prompt and tool state
- * belong to Pi: it restores them after the handler returns, so a handler cannot drop
+ * belong to Lykos: it restores them after the handler returns, so a handler cannot drop
  * them and does not need to preserve them.
  */
 export interface ContextEvent {
@@ -914,7 +914,7 @@ export interface ContextEvent {
 }
 
 /**
- * Fired before each LLM call, after every `context` handler has run and Pi has restored
+ * Fired before each LLM call, after every `context` handler has run and Lykos has restored
  * the prompt and tool state. `messages` is the full transcript including system messages,
  * and the result is sent as returned: the handler owns the prompt and tool declarations.
  */
@@ -949,7 +949,7 @@ export interface AfterProviderResponseEvent {
 	headers: Record<string, string>;
 }
 
-/** Fired for a parsed provider stream event before Pi normalizes it. */
+/** Fired for a parsed provider stream event before Lykos normalizes it. */
 export interface ProviderStreamEvent {
 	type: "provider_stream_event";
 	provider: ProviderId;
@@ -966,7 +966,7 @@ interface BeforeAgentStartEventBase {
 	systemPromptOptions: NormalizedBuildSystemPromptOptions;
 }
 
-/** A run started by a submitted prompt, RPC prompt, or `pi.sendUserMessage()`. */
+/** A run started by a submitted prompt, RPC prompt, or `lykos.sendUserMessage()`. */
 export interface BeforeAgentStartUserEvent extends BeforeAgentStartEventBase {
 	messageType: "user";
 	/** The raw user prompt text (after expansion). */
@@ -975,7 +975,7 @@ export interface BeforeAgentStartUserEvent extends BeforeAgentStartEventBase {
 	images?: ImageContent[];
 }
 
-/** A run started by `pi.sendMessage(..., { triggerTurn: true })` while idle. */
+/** A run started by `lykos.sendMessage(..., { triggerTurn: true })` while idle. */
 export interface BeforeAgentStartCustomEvent extends BeforeAgentStartEventBase {
 	messageType: "custom";
 	/** The custom message that starts the run. */
@@ -1067,7 +1067,7 @@ export interface AgentSettledEvent {
 
 export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
 
-/** Fired when Pi starts waiting on a blocking user-facing extension UI prompt. */
+/** Fired when Lykos starts waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptStartEvent {
 	type: "ui_prompt_start";
 	reason: "ui_prompt";
@@ -1075,7 +1075,7 @@ export interface UIPromptStartEvent {
 	title?: string;
 }
 
-/** Fired when Pi is no longer waiting on a blocking user-facing extension UI prompt. */
+/** Fired when Lykos is no longer waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptEndEvent {
 	type: "ui_prompt_end";
 	reason: "ui_prompt";
@@ -1222,7 +1222,7 @@ export type InputEventResult =
 interface ToolCallEventBase {
 	type: "tool_call";
 	/**
-	 * The call's id. For calls another tool made (with `parentToolCallId` set), pi assigns
+	 * The call's id. For calls another tool made (with `parentToolCallId` set), lykos assigns
 	 * `<parent id>/<n>`; such ids never appear as tool calls or tool results in the transcript, only
 	 * in the parent result's `nestedCalls` record.
 	 */
@@ -1570,9 +1570,9 @@ export interface MessageRenderOptions extends KeybindingHints {
 /**
  * Markdown surface a transformer runs on.
  * - `user`, `assistant`, `assistant-thinking`: transcript messages (the default types of a transformer)
- * - `custom`: custom messages without a custom renderer, and expanded skill blocks (their content, without Pi's header)
- * - `summary`: expanded branch and compaction summaries (the summary, without Pi's header)
- * - `changelog`: Pi's changelog ("What's New" and `/changelog`), the "Extension Updates" notice, and the release note of
+ * - `custom`: custom messages without a custom renderer, and expanded skill blocks (their content, without Lykos's header)
+ * - `summary`: expanded branch and compaction summaries (the summary, without Lykos's header)
+ * - `changelog`: Lykos's changelog ("What's New" and `/changelog`), the "Extension Updates" notice, and the release note of
  *   the "Update Available" notice
  */
 export type MarkdownMessageType = "user" | "assistant" | "assistant-thinking" | "custom" | "summary" | "changelog";
@@ -1769,7 +1769,7 @@ export interface ExtensionAPI {
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
 
 	/**
-	 * Register a transformer for Markdown before Pi renders it in interactive mode. By default it runs on user,
+	 * Register a transformer for Markdown before Lykos renders it in interactive mode. By default it runs on user,
 	 * assistant and thinking Markdown; `options.messageTypes` selects the surfaces instead.
 	 */
 	registerMarkdownTransformer(transformer: MarkdownTransformer, options?: MarkdownTransformerOptions): void;
@@ -1875,7 +1875,7 @@ export interface ExtensionAPI {
 	 *
 	 * @example
 	 * // Register a new provider with custom models
-	 * pi.registerProvider("my-proxy", {
+	 * lykos.registerProvider("my-proxy", {
 	 *   baseUrl: "https://proxy.example.com",
 	 *   apiKey: "$PROXY_API_KEY",
 	 *   api: "anthropic-messages",
@@ -1894,13 +1894,13 @@ export interface ExtensionAPI {
 	 *
 	 * @example
 	 * // Override baseUrl for an existing provider
-	 * pi.registerProvider("anthropic", {
+	 * lykos.registerProvider("anthropic", {
 	 *   baseUrl: "https://proxy.example.com"
 	 * });
 	 *
 	 * @example
 	 * // Register provider with OAuth support
-	 * pi.registerProvider("corporate-ai", {
+	 * lykos.registerProvider("corporate-ai", {
 	 *   baseUrl: "https://ai.corp.com",
 	 *   api: "openai-responses",
 	 *   models: [...],
@@ -1926,7 +1926,7 @@ export interface ExtensionAPI {
 	 * the initial load phase.
 	 *
 	 * @example
-	 * pi.unregisterProvider("my-proxy");
+	 * lykos.unregisterProvider("my-proxy");
 	 */
 	unregisterProvider(name: string): void;
 
@@ -1946,7 +1946,7 @@ export interface ExtensionAPI {
 	 * extension replaced the built-in one), the registration is reported as an extension error.
 	 *
 	 * @example
-	 * pi.registerMcpServer("jira", { url: "https://mcp.example.com/jira" });
+	 * lykos.registerMcpServer("jira", { url: "https://mcp.example.com/jira" });
 	 */
 	registerMcpServer(name: string, config: McpServerConfig): void;
 
@@ -1978,13 +1978,13 @@ export interface ExtensionAPI {
 // Provider Registration Types
 // ============================================================================
 
-/** Virtual model registered via pi.registerVirtualModel(). */
+/** Virtual model registered via lykos.registerVirtualModel(). */
 export interface ExtensionVirtualModel<TState = unknown> extends Omit<VirtualModelDefinition<TState>, "route"> {
 	/** Like `VirtualModelDefinition.route`, with an extension context. */
 	route(request: ModelRouteRequest<TState>, ctx: ExtensionContext): ModelRoute<TState> | Promise<ModelRoute<TState>>;
 }
 
-/** Configuration for registering a provider via pi.registerProvider(). */
+/** Configuration for registering a provider via lykos.registerProvider(). */
 export interface ProviderConfig {
 	/** Display name for the provider in UI. */
 	name?: string;
@@ -2068,7 +2068,7 @@ export interface ProviderChatModelConfig extends ProviderModelConfigBase {
 	api?: Api;
 	/** Whether the model supports extended thinking. */
 	reasoning: boolean;
-	/** Maps pi thinking levels to provider/model-specific values; null marks a level unsupported. */
+	/** Maps lykos thinking levels to provider/model-specific values; null marks a level unsupported. */
 	thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
 	/** Best-effort prompt cache lifetime in seconds per retention tier. Unset disables cache warming. */
 	promptCache?: Model<Api>["promptCache"];
@@ -2099,7 +2099,7 @@ export interface ProviderClassifierModelConfig extends ProviderModelConfigBase {
 export type ProviderModelConfig = ProviderChatModelConfig | ProviderImageModelConfig | ProviderClassifierModelConfig;
 
 /** Extension factory function type. Supports both sync and async initialization. */
-export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
+export type ExtensionFactory = (lykos: ExtensionAPI) => void | Promise<void>;
 
 export type InlineExtension =
 	| ExtensionFactory
@@ -2122,7 +2122,7 @@ export type InlineExtension =
 			replaceable?: boolean;
 			/**
 			 * Supply the code of the `builtin:<name>` extension instead of loading as an inline extension.
-			 * `builtin:<name>` is an extension resource like a file: it loads by default, `pi config` lists
+			 * `builtin:<name>` is an extension resource like a file: it loads by default, `lykos config` lists
 			 * it, `-builtin:<name>` in the `extensions` setting and `--no-extensions` disable it, and
 			 * `-e builtin:<name>` loads it explicitly. It is hidden from the startup Extensions list and
 			 * loads after project trust is resolved, so it cannot handle `project_trust`. The CLI's built-in
@@ -2212,7 +2212,7 @@ export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
 	/** Legacy provider-config registrations queued during extension loading, processed when runner binds. */
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;
-	/** Native pi-ai provider registrations queued during extension loading, processed when runner binds. */
+	/** Native lykos-ai provider registrations queued during extension loading, processed when runner binds. */
 	pendingNativeProviderRegistrations: Array<{ provider: Provider; extensionPath: string }>;
 	/** Virtual model registrations queued during extension loading, processed when runner binds. */
 	pendingVirtualModelRegistrations: Array<{ definition: VirtualModelDefinition; extensionPath: string }>;
@@ -2225,7 +2225,7 @@ export interface ExtensionRuntimeState {
 	/** Retain an event-bus subscription until this runtime is invalidated. */
 	trackEventBusSubscription: (unsubscribe: () => void) => () => void;
 	/**
-	 * Report an error thrown by a `pi.events` handler. Dropped before the runner exists; the runner
+	 * Report an error thrown by a `lykos.events` handler. Dropped before the runner exists; the runner
 	 * replaces this to call its emitError() until the runner is invalidated.
 	 */
 	reportError: (error: ExtensionError) => void;
@@ -2238,14 +2238,14 @@ export interface ExtensionRuntimeState {
 	registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
 	registerNativeProvider: (provider: Provider, extensionPath?: string) => void;
 	unregisterProvider: (name: string, extensionPath?: string) => void;
-	/** Servers registered with `pi.registerMcpServer()`. */
+	/** Servers registered with `lykos.registerMcpServer()`. */
 	mcpServers: McpServerRegistry;
 	registerVirtualModel: (definition: VirtualModelDefinition, extensionPath?: string) => void;
 	unregisterVirtualModel: (provider: string, id: string) => void;
 }
 
 /**
- * Action implementations for pi.* API methods.
+ * Action implementations for lykos.* API methods.
  * Provided to runner.initialize(), copied into the shared runtime.
  */
 export interface ExtensionActions {

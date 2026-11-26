@@ -10,7 +10,7 @@ import { SettingsManager } from "../src/core/settings-manager.ts";
 import { SettingsSchema } from "../src/core/settings-schema.ts";
 import { validateThemeJson } from "../src/modes/interactive/theme/theme-schema.ts";
 
-const schemaBaseUrl = "https://pi.dev/schemas";
+const schemaBaseUrl = "https://lykos.local/schemas";
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 function createTemporaryDirectory(): string {
-	const directory = mkdtempSync(join(tmpdir(), "pi-config-schema-test-"));
+	const directory = mkdtempSync(join(tmpdir(), "lykos-config-schema-test-"));
 	temporaryDirectories.push(directory);
 	return directory;
 }
@@ -51,8 +51,8 @@ describe("generated configuration schemas", () => {
 		const accent = schema.properties.colors.properties.accent;
 		const colorValue = accent.$ref ? schema.$defs.ColorValue : accent;
 		expect(schema).toMatchObject({
-			title: "Pi Coding Agent Theme",
-			description: "Theme schema for Pi coding agent",
+			title: "Lykos Coding Agent Theme",
+			description: "Theme schema for Lykos coding agent",
 			properties: {
 				colors: {
 					description: expect.stringContaining("use compatible fallbacks"),

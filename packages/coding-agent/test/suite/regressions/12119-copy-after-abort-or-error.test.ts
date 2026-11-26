@@ -1,11 +1,11 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@lykos/agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@lykos/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "../harness.ts";
 
 /**
- * Regression test for https://github.com/earendil-works/pi/issues/12119
+ * Regression test for https://github.com/rakun68/Lykos/issues/12119
  *
  * /copy uses getLastAssistantText(), which took the last assistant message and skipped only aborted
  * messages with no content. After Esc during a tool call the last messages are a tool-call-only message

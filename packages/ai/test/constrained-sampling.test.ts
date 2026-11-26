@@ -291,7 +291,7 @@ describe("constrained tool sampling", () => {
 			messages: [
 				{
 					role: "assistant",
-					api: "pi-messages",
+					api: "lykos-messages",
 					provider: "radius",
 					model: "gpt-other",
 					content: [{ type: "toolCall", id: "call_1|ctc_1", name: "sample_tool", arguments: { payload: "abc" } }],

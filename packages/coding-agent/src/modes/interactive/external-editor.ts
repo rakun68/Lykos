@@ -14,7 +14,7 @@ export type ExternalEditorResult = { status: "complete"; content: string } | { s
 export async function editInExternalEditor(options: ExternalEditorOptions): Promise<ExternalEditorResult> {
 	let directory: string | undefined;
 	try {
-		directory = mkdtempSync(join(tmpdir(), "pi-editor-"));
+		directory = mkdtempSync(join(tmpdir(), "lykos-editor-"));
 		const filePath = join(directory, "prompt.md");
 		writeFileSync(filePath, options.content, "utf-8");
 		const [editor, ...editorArgs] = options.command.split(" ");
@@ -25,7 +25,7 @@ export async function editInExternalEditor(options: ExternalEditorOptions): Prom
 		// vim/nvim for the console input buffer until Ctrl+C cancels the pending read.
 		// Null means the editor could not be launched.
 		const exit = await new Promise<number | NodeJS.Signals | null>((resolve) => {
-			// The editor inherits pi's cwd so project-relative paths, integrated terminals,
+			// The editor inherits lykos's cwd so project-relative paths, integrated terminals,
 			// and similar editor features keep working. A long cwd can break Windows editors:
 			// Windows rejects working directories over MAX_PATH, and WSL launches Windows
 			// editors (code, notepad.exe) from the cwd's \\wsl.localhost\... path (#11592).
@@ -50,7 +50,7 @@ export async function editInExternalEditor(options: ExternalEditorOptions): Prom
 
 		return { status: "complete", content: stripBom(readFileSync(filePath, "utf-8")).replace(/\n$/, "") };
 	} catch (error) {
-		// Callers start the editor from key handlers, where a thrown error would crash pi. A full or
+		// Callers start the editor from key handlers, where a thrown error would crash lykos. A full or
 		// unwritable temp dir lands here.
 		return {
 			status: "failed",

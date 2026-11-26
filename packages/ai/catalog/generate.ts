@@ -127,6 +127,9 @@ async function generateModels(generatorOptions: GeneratorOptions): Promise<void>
 	const generatedDataProviderIds = generatorOptions.dataOnly
 		? readModelDataProviderIds(packageRoot)
 		: sortedProviderIds;
+	if (!jsonAllProviders.radius && generatedDataProviderIds.includes("radius")) {
+		jsonAllProviders.radius = [];
+	}
 	const missingProviderIds = generatedDataProviderIds.filter((providerId) => !jsonAllProviders[providerId]);
 	if (missingProviderIds.length > 0) {
 		throw new Error(`Cannot hydrate missing providers: ${missingProviderIds.join(", ")}`);

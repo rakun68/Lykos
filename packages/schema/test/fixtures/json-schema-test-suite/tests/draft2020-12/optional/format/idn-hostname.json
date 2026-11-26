@@ -565,22 +565,22 @@
             },
             {
                 "description": "label too long if separator ignored (full stop)",
-                "data": "παράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπα.com",
+                "data": "lykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosα.com",
                 "valid": true
             },
             {
                 "description": "label too long if separator ignored (ideographic full stop)",
-                "data": "παράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπα\u3002com",
+                "data": "lykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosα\u3002com",
                 "valid": true
             },
             {
                 "description": "label too long if separator ignored (fullwidth full stop)",
-                "data": "παράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπα\uff0ecom",
+                "data": "lykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosα\uff0ecom",
                 "valid": true
             },
             {
                 "description": "label too long if separator ignored (halfwidth ideographic full stop)",
-                "data": "παράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπαράδειγμαπα\uff61com",
+                "data": "lykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosαράδειγμαlykosα\uff61com",
                 "valid": true
             }
         ]

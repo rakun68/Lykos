@@ -38,17 +38,17 @@
             },
             {
                 "description": "a valid IRI",
-                "data": "http://ƒøø.ßår/?∂éœ=πîx#πîüx",
+                "data": "http://ƒøø.ßår/?∂éœ=lykosîx#lykosîüx",
                 "valid": true
             },
             {
                 "description": "a valid protocol-relative IRI Reference",
-                "data": "//ƒøø.ßår/?∂éœ=πîx#πîüx",
+                "data": "//ƒøø.ßår/?∂éœ=lykosîx#lykosîüx",
                 "valid": true
             },
             {
                 "description": "a valid relative IRI Reference",
-                "data": "/âππ",
+                "data": "/âlykoslykos",
                 "valid": true
             },
             {
@@ -58,7 +58,7 @@
             },
             {
                 "description": "a valid IRI Reference",
-                "data": "âππ",
+                "data": "âlykoslykos",
                 "valid": true
             },
             {
@@ -83,7 +83,7 @@
             },
             {
                 "description": "a valid relative IRI Reference with a supplementary-plane character",
-                "data": "/âππ/𐌀",
+                "data": "/âlykoslykos/𐌀",
                 "valid": true
             },
             {
@@ -93,7 +93,7 @@
             },
             {
                 "description": "a trailing newline after a valid IRI Reference is invalid",
-                "data": "/âππ\n",
+                "data": "/âlykoslykos\n",
                 "valid": false
             },
             {

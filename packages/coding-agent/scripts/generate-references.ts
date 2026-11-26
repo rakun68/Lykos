@@ -3,8 +3,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CompatSchemasByApi } from "@earendil-works/pi-ai/providers/compat-schema";
-import { ModelInputLimitsSchema } from "@earendil-works/pi-ai/providers/model-schema";
+import { CompatSchemasByApi } from "@lykos/ai/providers/compat-schema";
+import { ModelInputLimitsSchema } from "@lykos/ai/providers/model-schema";
 import type { TSchema } from "typebox";
 import { ModelsJsonSchemas } from "../src/core/model-config.ts";
 
@@ -58,7 +58,7 @@ const referenceArtifacts: readonly ReferenceArtifact[] = [
 		title: "Models Configuration",
 		intro: [
 			"This reference lists the fields of `models.json`. See [Configure a compatible endpoint](models.md#configure-a-compatible-endpoint) for examples and [Configuration](configuration.md#agent-directory) for the file location.",
-			'Add `"$schema": "https://pi.dev/schemas/models.schema.json"` to `models.json` for editor validation and completion.',
+			'Add `"$schema": "https://lykos.local/schemas/models.schema.json"` to `models.json` for editor validation and completion.',
 		].join("\n\n"),
 		sections: [
 			{

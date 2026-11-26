@@ -6,12 +6,12 @@ import {
 	type ModelType,
 	type Provider,
 	type RefreshModelsContext,
-} from "@earendil-works/pi-ai";
+} from "@lykos/ai";
 import { VERSION } from "../config.ts";
 import { fetchWithRetry } from "../utils/management-http.ts";
-import { getPiUserAgent } from "../utils/pi-user-agent.ts";
+import { getLykosUserAgent } from "../utils/lykos-user-agent.ts";
 
-const DEFAULT_CATALOG_BASE_URL = "https://pi.dev";
+const DEFAULT_CATALOG_BASE_URL = "";
 const REMOTE_CATALOG_ATTEMPT_TIMEOUT_MS = 4_000;
 export const REMOTE_CATALOG_REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
 /**
@@ -50,7 +50,7 @@ function parseCatalog(providerId: string, value: unknown): AnyModel[] {
 		.map((model) => ({ ...model, provider: providerId }) as AnyModel);
 }
 
-/** Read a successful pi.dev catalog response. A missing or invalid Last-Modified header is 0. */
+/** Read a successful lykos.local catalog response. A missing or invalid Last-Modified header is 0. */
 async function readCatalog(
 	providerId: string,
 	response: Response,
@@ -63,7 +63,7 @@ async function readCatalog(
 	};
 }
 
-/** Whether a pi.dev catalog is newer than the model data shipped with pi. */
+/** Whether a lykos.local catalog is newer than the model data shipped with lykos. */
 function isNewer(lastModified: number | undefined, localGeneratedAt: number | undefined): boolean {
 	return localGeneratedAt === undefined || (lastModified !== undefined && lastModified > localGeneratedAt);
 }
@@ -73,7 +73,7 @@ function remoteModels(entry: ModelsStoreEntry | undefined, localGeneratedAt: num
 }
 
 /**
- * Request one provider's catalog from pi.dev. The User-Agent carries this pi's version, and pi.dev
+ * Request one provider's catalog from lykos.local. The User-Agent carries this lykos's version, and lykos.local
  * serves the newest catalog published for a minimum version at or below it (see
  * `scripts/model-catalog-minimum-version.mjs` and `selectModelCatalog()` in
  * `scripts/model-catalog-protocol.ts`). So a client receives catalogs published after its release,
@@ -92,7 +92,7 @@ function requestCatalog(
 		{
 			headers: {
 				accept: "application/json",
-				"User-Agent": getPiUserAgent(VERSION),
+				"User-Agent": getLykosUserAgent(VERSION),
 				...(validator ? { "if-none-match": validator } : {}),
 			},
 			signal,
@@ -107,12 +107,13 @@ export type PersonalizeCatalog = (
 	context: RefreshModelsContext,
 ) => Promise<readonly AnyModel[]>;
 
-/** Add a persisted pi.dev catalog overlay to a static built-in provider. */
+/** Add a persisted lykos.local catalog overlay to a static built-in provider. */
 export function withRemoteCatalog(
 	provider: Provider,
 	catalogBaseUrl: string = DEFAULT_CATALOG_BASE_URL,
 	localGeneratedAt?: number,
 ): Provider {
+	if (!catalogBaseUrl) return provider;
 	let dynamicModels: readonly AnyModel[] = [];
 
 	return {
@@ -123,7 +124,7 @@ export function withRemoteCatalog(
 				dynamicModels.filter((model) => isModelType(model, "chat")),
 			),
 		getAllModels: () => mergeModels(provider.getAllModels?.() ?? provider.getModels(), dynamicModels),
-		// pi.dev serves the catalog, so a stale provider login must not block or fail its refresh.
+		// lykos.local serves the catalog, so a stale provider login must not block or fail its refresh.
 		refreshModelsAuth: "configured",
 		refreshModels: async (context) => {
 			const stored = context.stored;
@@ -138,8 +139,8 @@ export function withRemoteCatalog(
 				return;
 			}
 			if (!context.allowNetwork || context.signal.aborted) return;
-			// Skip the request if pi.dev was checked less than REMOTE_CATALOG_REFRESH_INTERVAL_MS ago.
-			// An entry without lastModified (saved by an older pi, or after a failed first request) is
+			// Skip the request if lykos.local was checked less than REMOTE_CATALOG_REFRESH_INTERVAL_MS ago.
+			// An entry without lastModified (saved by an older lykos, or after a failed first request) is
 			// always refetched: remoteModels() ignores it, so waiting would leave the overlay empty.
 			if (
 				!context.force &&
@@ -195,10 +196,10 @@ export function withRemoteCatalog(
 
 /**
  * Like `withRemoteCatalog`, but on each network refresh the catalog (built-in models plus a newer
- * pi.dev catalog) is passed through `personalize` and the result is saved. The saved entry holds
- * the personalized list, not the pi.dev catalog, and replaces the catalog, including offline.
+ * lykos.local catalog) is passed through `personalize` and the result is saved. The saved entry holds
+ * the personalized list, not the lykos.local catalog, and replaces the catalog, including offline.
  * The refresh interval and etag revalidation are skipped. An empty list (nothing saved yet, or an
- * empty catalog saved by an older pi after a failed or missing pi.dev catalog) falls back to the
+ * empty catalog saved by an older lykos after a failed or missing lykos.local catalog) falls back to the
  * built-in models.
  */
 export function withPersonalizedCatalog(

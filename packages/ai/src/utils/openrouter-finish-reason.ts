@@ -57,7 +57,7 @@ const CLEAN_STOP_NATIVE_REASONS = new Set([
  *
  * OpenRouter reports any upstream finish reason it has no failure case for as `finish_reason: "stop"`,
  * so some upstream failures arrive as `stop` and only `native_finish_reason` still names them.
- * Without this, pi would end such a turn silently, often with nothing but a thinking block. Example as
+ * Without this, lykos would end such a turn silently, often with nothing but a thinking block. Example as
  * of November 2026: Gemini's transient MALFORMED_RESPONSE after streamed reasoning arrives as `stop`
  * (OpenRouter already reports it as `finish_reason: "error"` when there is no output at all).
  *

@@ -5,7 +5,7 @@ import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode
 import { runRpcMode } from "../../../src/modes/rpc/rpc-mode.ts";
 import { createHarness, type Harness } from "../harness.ts";
 
-// Regression for https://github.com/earendil-works/pi/issues/9068
+// Regression for https://github.com/rakun68/Lykos/issues/9068
 
 const rpcIo = vi.hoisted(() => ({
 	outputLines: [] as string[],
@@ -84,7 +84,7 @@ function createRuntimeHost(harness: Harness): AgentSessionRuntime {
 	} as unknown as AgentSessionRuntime;
 }
 
-async function startRpcHarness(extension: (pi: ExtensionAPI) => void): Promise<{
+async function startRpcHarness(extension: (lykos: ExtensionAPI) => void): Promise<{
 	harness: Harness;
 	send(command: Record<string, unknown>): void;
 	cleanup(): void;
@@ -143,14 +143,14 @@ const localResult = {
 
 const rpcCases: Array<{
 	name: string;
-	extension: (pi: ExtensionAPI) => void;
+	extension: (lykos: ExtensionAPI) => void;
 	error?: string;
 	executeCount: number;
 }> = [
 	{
 		name: "fails the request without executing bash when a handler throws",
-		extension: (pi) => {
-			pi.on("user_bash", async () => {
+		extension: (lykos) => {
+			lykos.on("user_bash", async () => {
 				throw new Error("Routing failed");
 			});
 		},
@@ -159,16 +159,16 @@ const rpcCases: Array<{
 	},
 	{
 		name: "fails the request without executing bash when a handler returns an empty result",
-		extension: (pi) => {
-			pi.on("user_bash", async () => ({}) as unknown as UserBashEventResult);
+		extension: (lykos) => {
+			lykos.on("user_bash", async () => ({}) as unknown as UserBashEventResult);
 		},
 		error: "Invalid user_bash handler result",
 		executeCount: 0,
 	},
 	{
 		name: "executes bash normally when a handler returns undefined",
-		extension: (pi) => {
-			pi.on("user_bash", async () => undefined);
+		extension: (lykos) => {
+			lykos.on("user_bash", async () => undefined);
 		},
 		executeCount: 1,
 	},
@@ -227,8 +227,8 @@ describe("Interactive user_bash failure handling (#9068)", () => {
 		const events: UserBashEvent[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("user_bash", async (event) => {
+				(lykos) => {
+					lykos.on("user_bash", async (event) => {
 						events.push(event);
 						return {} as unknown as UserBashEventResult;
 					});

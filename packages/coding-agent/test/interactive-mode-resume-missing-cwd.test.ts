@@ -45,10 +45,10 @@ describe("InteractiveMode /resume with a missing session cwd", () => {
 	});
 
 	function setup(options: { choice: MissingSessionCwdChoice | undefined; switchCancelled: boolean }) {
-		const currentCwd = createTempDir("pi-resume-missing-cwd");
+		const currentCwd = createTempDir("lykos-resume-missing-cwd");
 		const missingCwd = join(currentCwd, "renamed-away");
-		const oldSessionDir = createTempDir("pi-resume-missing-cwd-old");
-		const currentSessionDir = createTempDir("pi-resume-missing-cwd-current");
+		const oldSessionDir = createTempDir("lykos-resume-missing-cwd-old");
+		const currentSessionDir = createTempDir("lykos-resume-missing-cwd-current");
 		cleanupPaths.push(currentCwd, oldSessionDir, currentSessionDir);
 
 		const sessionPath = join(oldSessionDir, "orphan.jsonl");

@@ -144,9 +144,9 @@ describe("TUI render scheduling", () => {
 
 describe("TUI debug logging", () => {
 	it("writes redraw logs to the provided directory", async () => {
-		const logDir = mkdtempSync(join(tmpdir(), "pi-tui-log-"));
+		const logDir = mkdtempSync(join(tmpdir(), "lykos-tui-log-"));
 		try {
-			await withEnv({ PI_TUI_DEBUG_REDRAW: "1" }, async () => {
+			await withEnv({ LYKOS_TUI_DEBUG_REDRAW: "1" }, async () => {
 				const terminal = new VirtualTerminal(40, 10);
 				const tui: TUI = new TuiMainScreen(terminal, undefined, logDir);
 				const component = new TestComponent();
@@ -155,7 +155,7 @@ describe("TUI debug logging", () => {
 				tui.start();
 				await terminal.waitForRender();
 
-				assert.match(readFileSync(join(logDir, "pi-tui-debug.log"), "utf-8"), /fullRender: first render/);
+				assert.match(readFileSync(join(logDir, "lykos-tui-debug.log"), "utf-8"), /fullRender: first render/);
 				tui.stop();
 			});
 		} finally {
@@ -281,8 +281,8 @@ describe("TUI crash dump without configured log directory", () => {
 		// isolate the test by pointing the temp directory at a fresh directory rather
 		// than sharing the real one with concurrent test runs. os.tmpdir() reads
 		// TMPDIR on POSIX and TEMP/TMP on Windows, so override all three.
-		const crashDir = mkdtempSync(join(tmpdir(), "pi-tui-crash-"));
-		const crashLogPath = join(crashDir, "pi-tui-crash.log");
+		const crashDir = mkdtempSync(join(tmpdir(), "lykos-tui-crash-"));
+		const crashLogPath = join(crashDir, "lykos-tui-crash.log");
 		const restoreTmpdirEnv = overrideEnv(["TMPDIR", "TEMP", "TMP"], crashDir);
 		try {
 			const terminal = new VirtualTerminal(40, 10);
@@ -312,7 +312,7 @@ describe("TUI crash dump without configured log directory", () => {
 
 	// #10585: a full or unwritable temp dir must not replace the width error.
 	it("reports the width error when the crash dump cannot be written", async () => {
-		const crashDir = mkdtempSync(join(tmpdir(), "pi-tui-crash-"));
+		const crashDir = mkdtempSync(join(tmpdir(), "lykos-tui-crash-"));
 		// A regular file where the log directory should be makes the dump fail to write.
 		const logDirectory = join(crashDir, "not-a-directory");
 		writeFileSync(logDirectory, "");

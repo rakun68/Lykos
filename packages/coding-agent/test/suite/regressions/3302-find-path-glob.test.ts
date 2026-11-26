@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createFindToolDefinition } from "../../../src/core/tools/find.ts";
 
 /**
- * Regression test for https://github.com/earendil-works/pi/issues/3302
+ * Regression test for https://github.com/rakun68/Lykos/issues/3302
  *
  * The `find` tool advertises glob patterns like `src/**\/*.spec.ts`, but the
  * default fd-backed implementation used `fd --glob <pattern>` without
@@ -20,7 +20,7 @@ describe("issue #3302 find returns no results for path-based glob patterns", () 
 	let tempRoot: string;
 
 	beforeEach(() => {
-		tempRoot = mkdtempSync(join(tmpdir(), "pi-3302-"));
+		tempRoot = mkdtempSync(join(tmpdir(), "lykos-3302-"));
 		mkdirSync(join(tempRoot, "some", "parent", "child"), { recursive: true });
 		mkdirSync(join(tempRoot, "src", "foo", "bar"), { recursive: true });
 		writeFileSync(join(tempRoot, "some", "parent", "child", "file.ext"), "");
@@ -82,7 +82,7 @@ describe("issue #3302 find returns no results for path-based glob patterns", () 
 		expect(files).toEqual(["src/direct.spec.ts"]);
 	});
 
-	// https://github.com/earendil-works/pi/issues/9262: on Windows, `\` is a path separator.
+	// https://github.com/rakun68/Lykos/issues/9262: on Windows, `\` is a path separator.
 	// On POSIX it is a glob escape character, so these cases are Windows-only.
 	it.runIf(process.platform === "win32")("Windows backslash patterns match like forward-slash patterns", async () => {
 		expect((await runFind(String.raw`src\**\*.spec.ts`)).sort()).toEqual([

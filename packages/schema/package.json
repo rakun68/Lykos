@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-schema",
+	"name": "@lykos/schema",
 	"version": "1.6.1",
 	"description": "JSON Schema validation without eval: drafts 2020-12 and 7, compiled into plain closures",
 	"type": "module",
@@ -41,7 +41,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/rakun68/Lykos.git",
 		"directory": "packages/schema"
 	},
 	"engines": {
@@ -49,7 +49,6 @@
 	},
 	"devDependencies": {
 		"@cfworker/json-schema": "4.1.1",
-		"@oh-my-pi/omptype": "18.13.3",
 		"ajv": "8.20.0",
 		"ajv-formats": "3.0.1",
 		"ata-validator": "1.61.3",

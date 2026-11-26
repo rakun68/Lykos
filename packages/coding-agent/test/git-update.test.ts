@@ -190,7 +190,7 @@ describe("DefaultPackageManager git update", () => {
 	});
 
 	describe("git clean failures", () => {
-		// https://github.com/earendil-works/pi/issues/11597
+		// https://github.com/rakun68/Lykos/issues/11597
 		it("should install dependencies and retry the clean later when git clean fails", async () => {
 			setupRemoteAndInstall();
 			const newCommit = createCommit(
@@ -221,7 +221,7 @@ describe("DefaultPackageManager git update", () => {
 			packageManager.setProgressCallback((event) => {
 				if (event.type === "progress" && event.message) progressMessages.push(event.message);
 			});
-			const markerPath = join(agentDir, "git", "github.com", "test", ".extension.pi-update-incomplete");
+			const markerPath = join(agentDir, "git", "github.com", "test", ".extension.lykos-update-incomplete");
 
 			await packageManager.update();
 
@@ -301,13 +301,13 @@ describe("DefaultPackageManager git update", () => {
 		it("should refresh cached temporary git sources when resolving", async () => {
 			const managerWithPaths = packageManager as unknown as PackageManagerPathInternals;
 			const cachedDir = managerWithPaths.getGitInstallPath(managerWithPaths.parseSource(gitSource), "temporary");
-			const extensionFile = join(cachedDir, "pi-extensions", "session-breakdown.ts");
+			const extensionFile = join(cachedDir, "lykos-extensions", "session-breakdown.ts");
 
 			rmSync(cachedDir, { recursive: true, force: true });
-			mkdirSync(join(cachedDir, "pi-extensions"), { recursive: true });
+			mkdirSync(join(cachedDir, "lykos-extensions"), { recursive: true });
 			writeFileSync(
 				join(cachedDir, "package.json"),
-				JSON.stringify({ pi: { extensions: ["./pi-extensions"] } }, null, 2),
+				JSON.stringify({ lykos: { extensions: ["./lykos-extensions"] } }, null, 2),
 			);
 			writeFileSync(extensionFile, "// stale");
 
@@ -340,7 +340,7 @@ describe("DefaultPackageManager git update", () => {
 			expect(executedCommands).toContain(
 				"git fetch --prune --no-tags origin +refs/heads/main:refs/remotes/origin/main",
 			);
-			expect(getFileContent(cachedDir, "pi-extensions/session-breakdown.ts")).toBe("// fresh");
+			expect(getFileContent(cachedDir, "lykos-extensions/session-breakdown.ts")).toBe("// fresh");
 		});
 	});
 });

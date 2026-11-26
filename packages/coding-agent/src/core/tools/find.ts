@@ -189,7 +189,7 @@ export function createFindToolDefinition(
 						// fd normally ignores .gitignore outside git repos, so keep --no-require-git
 						// there. Inside repos, use fd's default git-aware behavior so parent
 						// .gitignore rules stop at nested repo boundaries:
-						// https://github.com/earendil-works/pi/issues/5960
+						// https://github.com/rakun68/Lykos/issues/5960
 						let insideGitRepo = false;
 						for (let current = searchPath; ; ) {
 							if (await pathExists(path.join(current, ".git"))) {
@@ -217,7 +217,7 @@ export function createFindToolDefinition(
 						// Absolute patterns are matched as given.
 						const isRelativePathPattern = isPathPattern && !path.isAbsolute(effectivePattern);
 						// fd before 10.5.1 never matches --full-path globs on Windows, and workarounds for that
-						// break on fd 10.5.1 (sharkdp/fd#2067). pi cannot rely on either fd version, so on
+						// break on fd 10.5.1 (sharkdp/fd#2067). lykos cannot rely on either fd version, so on
 						// Windows fd lists every entry and minimatch matches path patterns against the path
 						// relative to the search path, or the absolute path for absolute patterns. The options
 						// keep fd's glob behavior: `*` matches dotfiles, `+(a|b)` is literal, and smart case.

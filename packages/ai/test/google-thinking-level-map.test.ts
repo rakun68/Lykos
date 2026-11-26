@@ -138,7 +138,7 @@ describe("Google thinking level maps", () => {
 		);
 	});
 
-	// Regression test for https://github.com/earendil-works/pi/issues/9455
+	// Regression test for https://github.com/rakun68/Lykos/issues/9455
 	it.each(googleAdapters)("uses the lowest supported $name level when reasoning is omitted", async ({ capture }) => {
 		const payload = await capture("gemini-3.8-flash", {
 			off: null,
@@ -169,14 +169,14 @@ describe("Google thinking level maps", () => {
 		expect(payload.config?.thinkingConfig).toEqual({ thinkingBudget: 0 });
 	});
 
-	// Regression test for https://github.com/earendil-works/pi/issues/10890
+	// Regression test for https://github.com/rakun68/Lykos/issues/10890
 	it.each(googleAdapters)("uses thinking levels for Gemini 4 models on $name", async ({ capture }) => {
 		const payload = await capture("gemini-4-argon", {}, "medium");
 
 		expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
 	});
 
-	// Regression test for https://github.com/earendil-works/pi/issues/12184
+	// Regression test for https://github.com/rakun68/Lykos/issues/12184
 	it.each(googleAdapters)("sends xhigh as XHIGH for Gemini 4 models that support it on $name", async ({ capture }) => {
 		const payload = await capture(
 			"gemini-4-hydrogen",

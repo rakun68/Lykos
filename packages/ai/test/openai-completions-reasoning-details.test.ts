@@ -259,7 +259,7 @@ describe("openai-completions reasoning and content in one delta", () => {
 		mockState.payloads = [];
 	});
 
-	// https://github.com/earendil-works/pi/issues/10926
+	// https://github.com/rakun68/Lykos/issues/10926
 	it("places thinking before text when one delta carries reasoning_content and content", async () => {
 		mockState.chunkSets = [[chunk({ role: "assistant", reasoning_content: "thinking", content: "answer" }, "stop")]];
 

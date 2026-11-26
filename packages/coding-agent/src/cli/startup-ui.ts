@@ -5,7 +5,7 @@ import {
 	setKeybindings,
 	type TUI,
 	TuiMainScreen,
-} from "@earendil-works/pi-tui";
+} from "@lykos/tui";
 import { existsSync } from "fs";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, getAgentDir, getSettingsPath, PACKAGE_NAME } from "../config.ts";
 import { areExperimentalFeaturesEnabled } from "../core/experimental.ts";
@@ -35,9 +35,9 @@ import {
 import { requestTerminalColors } from "../modes/interactive/theme/theme-controller.ts";
 import { flushStdout } from "../utils/flush-stdout.ts";
 
-const OFFICIAL_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
-const OFFICIAL_APP_NAME = "pi";
-const OFFICIAL_CONFIG_DIR_NAME = ".pi";
+const OFFICIAL_PACKAGE_NAME = "@lykos/coding-agent";
+const OFFICIAL_APP_NAME = "lykos";
+const OFFICIAL_CONFIG_DIR_NAME = ".lykos";
 
 interface DistributionMetadata {
 	packageName: string;
@@ -120,7 +120,7 @@ function queryStartupTerminalColors(ui: TUI, onColors: () => void): void {
 }
 
 /**
- * Show a startup dialog and report pi as blocked on it (OSC 7501). Interactive mode is not running yet, so its
+ * Show a startup dialog and report lykos as blocked on it (OSC 7501). Interactive mode is not running yet, so its
  * status reporter cannot do this; stopping the startup TUI clears the report.
  */
 function showStartupDialog(
@@ -143,8 +143,8 @@ async function clearStartupTui(ui: TUI): Promise<void> {
 
 /**
  * First-time setup runs when all of these hold:
- * - this is the official Pi distribution (not a fork/rebrand)
- * - experimental features are enabled (PI_EXPERIMENTAL=1)
+ * - this is the official Lykos distribution (not a fork/rebrand)
+ * - experimental features are enabled (LYKOS_EXPERIMENTAL=1)
  * - the default agent directory is used (no custom agent dir override)
  * - setup was not completed before (settings.json does not exist)
  */

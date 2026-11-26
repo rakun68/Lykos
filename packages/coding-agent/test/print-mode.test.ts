@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent } from "@lykos/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionShutdownEvent } from "../src/index.ts";
 import { runPrintMode } from "../src/modes/print-mode.ts";
@@ -153,7 +153,7 @@ describe("runPrintMode", () => {
 		expect(errorSpy).toHaveBeenCalled();
 	});
 
-	// A signal during the final disposal used to hit no handler and kill pi mid-dispose.
+	// A signal during the final disposal used to hit no handler and kill lykos mid-dispose.
 	it("waits for the final disposal when SIGTERM arrives during it, and exits on a repeated SIGTERM", async () => {
 		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
 		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
@@ -186,7 +186,7 @@ describe("runPrintMode", () => {
 		expect(process.listenerCount("SIGTERM")).toBe(listenersBefore);
 	});
 
-	// Windows emits SIGHUP when the console window is closed. pi used to listen for it only on POSIX,
+	// Windows emits SIGHUP when the console window is closed. lykos used to listen for it only on POSIX,
 	// so closing the window skipped session_shutdown and left the bash tool's processes running.
 	it("disposes and exits on SIGHUP on Windows", async () => {
 		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");

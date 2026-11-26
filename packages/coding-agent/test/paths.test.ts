@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 function createTempDir(): string {
-	tempDir = mkdtempSync(join(tmpdir(), "pi-paths-"));
+	tempDir = mkdtempSync(join(tmpdir(), "lykos-paths-"));
 	return tempDir;
 }
 
@@ -41,7 +41,7 @@ describe("path comparison", () => {
 		Object.defineProperty(process, "platform", { value: platform });
 	}
 
-	// Regression test for https://github.com/earendil-works/pi/issues/10488
+	// Regression test for https://github.com/rakun68/Lykos/issues/10488
 	it("treats drive letters and path components case-insensitively on Windows", () => {
 		simulatePlatform("win32");
 		expect(getPathComparisonKey("c:\\Users\\me\\.agents\\skills")).toBe(
@@ -133,19 +133,19 @@ describe("canonicalizePath", () => {
 
 describe("getCwdRelativePath", () => {
 	it("keeps cwd-relative names that start with dots", () => {
-		const cwd = join(tmpdir(), "pi-paths-cwd");
+		const cwd = join(tmpdir(), "lykos-paths-cwd");
 		expect(getCwdRelativePath(join(cwd, "..config", "AGENTS.md"), cwd)).toBe(join("..config", "AGENTS.md"));
 	});
 
 	it("rejects parent-directory traversals", () => {
-		const cwd = join(tmpdir(), "pi-paths-cwd");
+		const cwd = join(tmpdir(), "lykos-paths-cwd");
 		expect(getCwdRelativePath(join(cwd, "..", "AGENTS.md"), cwd)).toBeUndefined();
 	});
 });
 
 describe("resolvePath", () => {
 	it("expands only home tilde shortcuts", () => {
-		const cwd = join(tmpdir(), "pi-paths-cwd");
+		const cwd = join(tmpdir(), "lykos-paths-cwd");
 		expect(normalizePath("~")).toBe(homedir());
 		expect(normalizePath("~/file.txt")).toBe(join(homedir(), "file.txt"));
 		expect(resolvePath("~draft.md", cwd)).toBe(resolve(cwd, "~draft.md"));
@@ -153,7 +153,7 @@ describe("resolvePath", () => {
 	});
 
 	it("resolves relative paths against the base directory", () => {
-		const cwd = join(tmpdir(), "pi-paths-cwd");
+		const cwd = join(tmpdir(), "lykos-paths-cwd");
 		expect(resolvePath("subdir/file.txt", cwd)).toBe(resolve(cwd, "subdir/file.txt"));
 		expect(resolvePath("subdir/file.txt", pathToFileURL(cwd).href)).toBe(resolve(cwd, "subdir/file.txt"));
 	});

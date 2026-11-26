@@ -4,8 +4,8 @@ import type { ModelsDevReasoningOption } from "./sources/models-dev.ts";
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
 /**
- * Converts models.dev verified effort values into Pi's selectable thinking levels.
- * Values without a Pi equivalent (`default` and JSON `null`) are intentionally
+ * Converts models.dev verified effort values into Lykos's selectable thinking levels.
+ * Values without a Lykos equivalent (`default` and JSON `null`) are intentionally
  * omitted.
  */
 export function getEffortThinkingLevelMap(options: readonly ModelsDevReasoningOption[]): ThinkingLevelMap | undefined {

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryModelsStore } from "@earendil-works/pi-ai";
+import { InMemoryModelsStore } from "@lykos/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
@@ -28,7 +28,7 @@ describe("ModelRuntime classifiers", () => {
 	async function createRuntime(modelsJson?: object): Promise<ModelRuntime> {
 		let modelsPath: string | null = null;
 		if (modelsJson) {
-			const dir = mkdtempSync(join(tmpdir(), "pi-classifiers-"));
+			const dir = mkdtempSync(join(tmpdir(), "lykos-classifiers-"));
 			tempDirs.push(dir);
 			modelsPath = join(dir, "models.json");
 			writeFileSync(modelsPath, JSON.stringify(modelsJson));

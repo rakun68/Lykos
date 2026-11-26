@@ -11,7 +11,7 @@ vi.mock("node:buffer", async (importOriginal) => {
 	};
 });
 
-// Regression tests for https://github.com/earendil-works/pi/issues/11360
+// Regression tests for https://github.com/rakun68/Lykos/issues/11360
 it("executes with the default cap when the runtime string limit is below 256 MiB", async () => {
 	const result = await execCommand(process.execPath, ["-e", 'process.stdout.write("ok")'], process.cwd());
 

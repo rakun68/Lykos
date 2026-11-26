@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
-import type { TUI } from "@earendil-works/pi-tui";
+import type { TUI } from "@lykos/tui";
 import { applyPatch } from "diff";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -228,7 +228,7 @@ describe("Coding Agent Tools", () => {
 			expect(imageBlock?.mimeType).toBe("image/png");
 			expect(typeof imageBlock?.data).toBe("string");
 			expect((imageBlock?.data ?? "").length).toBeGreaterThan(0);
-			// Programmatic callers get the same image as a block. https://github.com/earendil-works/pi/issues/10251
+			// Programmatic callers get the same image as a block. https://github.com/rakun68/Lykos/issues/10251
 			expect(result.structuredContent).toEqual({
 				type: "image",
 				data: imageBlock?.data,
@@ -253,7 +253,7 @@ describe("Coding Agent Tools", () => {
 			);
 
 			// The result is replayed after a switch to a vision model, so it keeps the image and no
-			// note saying the model cannot see it; pi-ai replaces the image per request instead.
+			// note saying the model cannot see it; lykos-ai replaces the image per request instead.
 			expect(getTextOutput(result)).toBe("Read image file [image/png]");
 			expect(result.content.some((c) => c.type === "image")).toBe(true);
 
@@ -592,7 +592,7 @@ describe("Coding Agent Tools", () => {
 			expect(readFileSync(largeOutput.full_output_path!, "utf-8").endsWith("300000\n")).toBe(true);
 		});
 
-		// Regression tests for https://github.com/earendil-works/pi/issues/9577
+		// Regression tests for https://github.com/rakun68/Lykos/issues/9577
 		it.skipIf(process.platform === "win32")(
 			"should map signal-killed commands to 128 plus the signal number",
 			async () => {
@@ -1001,7 +1001,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).not.toContain("match two");
 		});
 
-		// https://github.com/earendil-works/pi/issues/11398
+		// https://github.com/rakun68/Lykos/issues/11398
 		it("should keep context line numbers aligned with ripgrep when a file contains a lone CR", async () => {
 			const testFile = join(testDir, "lone-cr.txt");
 			writeFileSync(testFile, "before\rprogress\nneedle\nafter");
@@ -1019,7 +1019,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("lone-cr.txt-3- after");
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/rakun68/Lykos/issues/9276
 		it("should print overlapping context once and keep the last match's trailing context", async () => {
 			const testFile = join(testDir, "rg-context.txt");
 			writeFileSync(testFile, ["a", "match one", "b", "match two", "match three", "c", "match four"].join("\n"));
@@ -1042,7 +1042,7 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/rakun68/Lykos/issues/9276
 		it("should keep counting matches past the byte cap", async () => {
 			const testFile = join(testDir, "byte-cap.txt");
 			const line = `match ${"x".repeat(400)}`;
@@ -1061,7 +1061,7 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation?.totalLines).toBe(150);
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/rakun68/Lykos/issues/9276
 		it("should report truncation when stored output ends exactly at the byte cap", async () => {
 			const testFile = join(testDir, "x");
 			// 103 rows of 500 bytes plus one of 12 bytes, with newlines, join to exactly 50KB; one more match follows.
@@ -1077,7 +1077,7 @@ describe("Coding Agent Tools", () => {
 			expect(result.details?.truncation?.totalLines).toBe(105);
 		});
 
-		// https://github.com/earendil-works/pi/issues/9276
+		// https://github.com/rakun68/Lykos/issues/9276
 		it("should accept a huge context value", async () => {
 			const testFile = join(testDir, "huge-context.txt");
 			writeFileSync(testFile, "before\nneedle\nafter");
@@ -1160,7 +1160,7 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
-		// https://github.com/earendil-works/pi/issues/11203
+		// https://github.com/rakun68/Lykos/issues/11203
 		it("should ignore RIPGREP_CONFIG_PATH", async () => {
 			const configFile = join(testDir, "rg-config");
 			const testFile = join(testDir, "fixture.txt");
@@ -1185,7 +1185,7 @@ describe("Coding Agent Tools", () => {
 			}
 		});
 
-		// https://github.com/earendil-works/pi/issues/11807
+		// https://github.com/rakun68/Lykos/issues/11807
 		it("should resolve folder globs relative to path", async () => {
 			const repo = join(testDir, "repo");
 			mkdirSync(join(repo, "migrations", "main"), { recursive: true });
@@ -1584,12 +1584,12 @@ describe("edit tool fuzzy matching", () => {
 
 		const result = await editTool.execute("test-fuzzy-chinese", {
 			path: testFile,
-			edits: [{ oldText: "你好,世界\n你好(世界)\n", newText: "你好，pi\n你好(pi)\n" }],
+			edits: [{ oldText: "你好,世界\n你好(世界)\n", newText: "你好，lykos\n你好(lykos)\n" }],
 		});
 
 		expect(getTextOutput(result)).toContain("Successfully replaced");
 		const content = readFileSync(testFile, "utf-8");
-		expect(content).toBe("你好，pi\n你好(pi)\n");
+		expect(content).toBe("你好，lykos\n你好(lykos)\n");
 	});
 
 	it("should match compatibility-equivalent Unicode forms", async () => {

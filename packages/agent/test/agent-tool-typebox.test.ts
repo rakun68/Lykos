@@ -1,5 +1,5 @@
-// AgentTool params typed from a TypeBox-built parameter schema. pi-agent-core does not depend on TypeBox: the schema
-// below has TypeBox 1.x's type shapes as its d.mts declare them; pi-schema's own tests check the shapes against TypeBox.
+// AgentTool params typed from a TypeBox-built parameter schema. lykos-agent-core does not depend on TypeBox: the schema
+// below has TypeBox 1.x's type shapes as its d.mts declare them; lykos-schema's own tests check the shapes against TypeBox.
 
 import { describe, expectTypeOf, it } from "vitest";
 import type { AgentTool } from "../src/types.ts";

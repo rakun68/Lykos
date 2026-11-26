@@ -1,14 +1,14 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@lykos/agent-core";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
 	getCurrentSystemPrompt,
 	type Model,
 	type TranscriptContext,
-} from "@earendil-works/pi-ai";
+} from "@lykos/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BeforeAgentStartEvent, ExtensionAPI, InputEvent } from "../../src/core/extensions/index.ts";
@@ -165,16 +165,16 @@ describe("AgentSession prompt characterization", () => {
 		expect(sawImage).toBe(true);
 	});
 
-	// Regression test for https://github.com/earendil-works/pi/issues/9631
+	// Regression test for https://github.com/rakun68/Lykos/issues/9631
 	it("uses the model selected by before_agent_start for image normalization", async () => {
 		let strictModel: Model<string> | undefined;
 		const harness = await createHarness({
 			models: [{ id: "wide" }, { id: "strict" }],
 			extensionFactories: [
-				(pi) => {
-					pi.on("before_agent_start", async () => {
+				(lykos) => {
+					lykos.on("before_agent_start", async () => {
 						if (!strictModel) throw new Error("Expected strict model");
-						await pi.setModel(strictModel);
+						await lykos.setModel(strictModel);
 					});
 				},
 			],
@@ -204,7 +204,7 @@ describe("AgentSession prompt characterization", () => {
 	});
 
 	it("expands skill commands before sending the prompt", async () => {
-		const tempDir = join(tmpdir(), `pi-skill-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const tempDir = join(tmpdir(), `lykos-skill-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		tempDirs.push(tempDir);
 		const skillPath = join(tempDir, "test-skill.md");
@@ -320,8 +320,8 @@ describe("AgentSession prompt characterization", () => {
 		const commandRuns: string[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.registerCommand("testcmd", {
+				(lykos) => {
+					lykos.registerCommand("testcmd", {
 						description: "Test command",
 						handler: async (args) => {
 							commandRuns.push(args);
@@ -348,9 +348,9 @@ describe("AgentSession prompt characterization", () => {
 		});
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					extensionApi = pi;
-					pi.registerCommand("testcmd", {
+				(lykos) => {
+					extensionApi = lykos;
+					lykos.registerCommand("testcmd", {
 						description: "Test command",
 						handler: async (args) => {
 							resolveCommandRun(args);
@@ -385,8 +385,8 @@ describe("AgentSession prompt characterization", () => {
 		const inputEvents: InputEvent[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("input", (event) => {
+				(lykos) => {
+					lykos.on("input", (event) => {
 						inputEvents.push(event);
 					});
 				},
@@ -423,8 +423,8 @@ describe("AgentSession prompt characterization", () => {
 		const harness = await createHarness({
 			tools: [waitTool],
 			extensionFactories: [
-				(pi) => {
-					pi.on("input", (event) => {
+				(lykos) => {
+					lykos.on("input", (event) => {
 						inputEvents.push(event);
 					});
 				},
@@ -512,8 +512,8 @@ describe("AgentSession prompt characterization", () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_before_compact", async (event) => {
+				(lykos) => {
+					lykos.on("session_before_compact", async (event) => {
 						markCompactionStarted();
 						await compactionReleased;
 						return {
@@ -578,8 +578,8 @@ describe("AgentSession prompt characterization", () => {
 			const harness = await createHarness({
 				tools: [noopTool],
 				extensionFactories: [
-					(pi) => {
-						pi.on("before_agent_start", (event) => {
+					(lykos) => {
+						lykos.on("before_agent_start", (event) => {
 							events.push(event);
 							event.systemPromptOptions.sections.extension_rules = "Answer in one word.";
 						});
@@ -617,8 +617,8 @@ describe("AgentSession prompt characterization", () => {
 			const handlerStarted = Promise.withResolvers<void>();
 			const harness = await createHarness({
 				extensionFactories: [
-					(pi) => {
-						pi.on("before_agent_start", async (event) => {
+					(lykos) => {
+						lykos.on("before_agent_start", async (event) => {
 							if (event.messageType !== "custom" || event.message.customType !== "first") return;
 							handlerStarted.resolve();
 							await new Promise<void>((resolve) => {
@@ -662,9 +662,9 @@ describe("AgentSession prompt characterization", () => {
 		it("includes a custom message sent without triggerTurn while the run starts in its first request", async () => {
 			const harness = await createHarness({
 				extensionFactories: [
-					(pi) => {
-						pi.on("before_agent_start", () => {
-							pi.sendMessage(
+					(lykos) => {
+						lykos.on("before_agent_start", () => {
+							lykos.sendMessage(
 								{ customType: "note", content: "context from handler", display: true },
 								{ triggerTurn: false },
 							);
@@ -692,8 +692,8 @@ describe("AgentSession prompt characterization", () => {
 			const handlerStarted = Promise.withResolvers<void>();
 			const harness = await createHarness({
 				extensionFactories: [
-					(pi) => {
-						pi.on("before_agent_start", async () => {
+					(lykos) => {
+						lykos.on("before_agent_start", async () => {
 							handlerStarted.resolve();
 							await new Promise<void>((resolve) => {
 								releaseHandler = resolve;

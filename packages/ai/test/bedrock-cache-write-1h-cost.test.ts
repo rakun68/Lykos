@@ -66,7 +66,7 @@ const context = normalizeContext({ messages: [{ role: "user", content: "hi", tim
 
 describe("Bedrock 1h cache write cost", () => {
 	it("prices the 1h cache details at 2x while preserving the total cache write", async () => {
-		// Regression test for https://github.com/earendil-works/pi/issues/9457
+		// Regression test for https://github.com/rakun68/Lykos/issues/9457
 		const result = await streamBedrock(model, context, { cacheRetention: "none" }).result();
 
 		expect(result.usage.cacheWrite).toBe(1_000_000);

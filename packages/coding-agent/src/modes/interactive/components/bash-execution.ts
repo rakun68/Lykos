@@ -2,7 +2,7 @@
  * Component for displaying bash command execution with streaming output.
  */
 
-import { Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { Container, Loader, Spacer, Text, type TUI } from "@lykos/tui";
 import { bashTruncationNote } from "../../../core/messages.ts";
 import {
 	DEFAULT_MAX_BYTES,

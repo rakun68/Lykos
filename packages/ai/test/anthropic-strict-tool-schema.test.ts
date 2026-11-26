@@ -99,7 +99,7 @@ describe("Anthropic strict tool schemas", () => {
 		});
 	});
 
-	// https://github.com/earendil-works/pi/issues/9557
+	// https://github.com/rakun68/Lykos/issues/9557
 	it("keeps root definitions in non-strict schemas so property refs resolve", async () => {
 		const settings = { type: "object", properties: { verbose: { type: "boolean" } } };
 		const cases = [
@@ -124,7 +124,7 @@ describe("Anthropic strict tool schemas", () => {
 		}
 	});
 
-	// https://github.com/earendil-works/pi/issues/12212
+	// https://github.com/rakun68/Lykos/issues/12212
 	it("preserves the declared dialect and tuple syntax in non-strict schemas", async () => {
 		const parameters = {
 			$schema: "http://json-schema.org/draft-07/schema#",
@@ -144,7 +144,7 @@ describe("Anthropic strict tool schemas", () => {
 		expect(tool.input_schema).toEqual(parameters);
 	});
 
-	// https://github.com/earendil-works/pi/issues/9953
+	// https://github.com/rakun68/Lykos/issues/9953
 	it("sends prefer tools non-strict when they use keywords Anthropic strict mode rejects", async () => {
 		const unsupportedParameters: Tool["parameters"][] = [
 			Type.Object({ timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 300000 })) }),

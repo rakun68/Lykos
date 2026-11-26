@@ -1,4 +1,4 @@
-import { setKeybindings } from "@earendil-works/pi-tui";
+import { setKeybindings } from "@lykos/tui";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -11,28 +11,28 @@ import {
 	FirstTimeSetupComponent,
 	type FirstTimeSetupResult,
 } from "../src/modes/interactive/components/first-time-setup.ts";
-import { piLogoLines, piWordmark, supportsPiLogo } from "../src/modes/interactive/components/pi-logo.ts";
+import { piLogoLines, piWordmark, supportsPiLogo } from "../src/modes/interactive/components/lykos-logo.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 describe("shouldRunFirstTimeSetup", () => {
-	const originalPiExperimental = process.env.PI_EXPERIMENTAL;
+	const originalPiExperimental = process.env.LYKOS_EXPERIMENTAL;
 	const originalAgentDir = process.env[ENV_AGENT_DIR];
 	let tempDir: string;
 	let settingsPath: string;
 
 	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), "pi-first-time-setup-"));
+		tempDir = mkdtempSync(join(tmpdir(), "lykos-first-time-setup-"));
 		settingsPath = join(tempDir, "settings.json");
-		process.env.PI_EXPERIMENTAL = "1";
+		process.env.LYKOS_EXPERIMENTAL = "1";
 		delete process.env[ENV_AGENT_DIR];
 	});
 
 	afterEach(() => {
 		rmSync(tempDir, { recursive: true, force: true });
 		if (originalPiExperimental === undefined) {
-			delete process.env.PI_EXPERIMENTAL;
+			delete process.env.LYKOS_EXPERIMENTAL;
 		} else {
-			process.env.PI_EXPERIMENTAL = originalPiExperimental;
+			process.env.LYKOS_EXPERIMENTAL = originalPiExperimental;
 		}
 		if (originalAgentDir === undefined) {
 			delete process.env[ENV_AGENT_DIR];
@@ -46,7 +46,7 @@ describe("shouldRunFirstTimeSetup", () => {
 	});
 
 	it("returns false when experimental features are disabled", () => {
-		delete process.env.PI_EXPERIMENTAL;
+		delete process.env.LYKOS_EXPERIMENTAL;
 
 		expect(shouldRunFirstTimeSetup(settingsPath)).toBe(false);
 	});
@@ -108,7 +108,7 @@ describe("FirstTimeSetupComponent", () => {
 		setKeybindings(KeybindingsManager.create());
 	});
 
-	it("renders the colored pi logo and analytics opt-in without a theme picker", () => {
+	it("renders the colored lykos logo and analytics opt-in without a theme picker", () => {
 		const component = new FirstTimeSetupComponent({
 			onSubmit: vi.fn(),
 			onCancel: vi.fn(),

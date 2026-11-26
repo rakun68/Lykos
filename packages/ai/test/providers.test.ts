@@ -71,7 +71,7 @@ describe("builtin providers", () => {
 			expect(list.every((m) => m.provider === provider.id)).toBe(true);
 		}
 		expect(getBuiltinModel("radius", "balanced")).toMatchObject({
-			api: "pi-messages",
+			api: "lykos-messages",
 			provider: "radius",
 		});
 	});
@@ -140,7 +140,7 @@ describe("builtin providers", () => {
 	});
 
 	it("uses models.dev effort levels for Google thinking models", () => {
-		// Regression test for https://github.com/earendil-works/pi/issues/9455
+		// Regression test for https://github.com/rakun68/Lykos/issues/9455
 		for (const provider of ["google", "google-vertex"] as const) {
 			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.6-flash"))).toContain("minimal");
 			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.8-flash"))).toEqual([

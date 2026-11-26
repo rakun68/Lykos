@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createFindToolDefinition } from "../../../src/core/tools/find.ts";
 
 /**
- * Regression test for https://github.com/earendil-works/pi/issues/12066
+ * Regression test for https://github.com/rakun68/Lykos/issues/12066
  *
  * fd matches --full-path globs against the absolute path, and `find` prefixed path patterns with
  * `**\/`. A pattern could therefore match through folders above the search path: with the project
@@ -16,7 +16,7 @@ describe("issue #12066 find path globs do not match above the search path", () =
 	let tempRoot: string;
 
 	beforeEach(() => {
-		tempRoot = realpathSync(mkdtempSync(join(tmpdir(), "pi-12066-")));
+		tempRoot = realpathSync(mkdtempSync(join(tmpdir(), "lykos-12066-")));
 	});
 
 	afterEach(() => {

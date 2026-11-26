@@ -66,7 +66,7 @@ export async function executeBashWithOperations(
 		if (tempFile) {
 			return;
 		}
-		tempFile = createOutputFileStream("pi-bash", ".log");
+		tempFile = createOutputFileStream("lykos-bash", ".log");
 		for (const chunk of outputChunks) {
 			tempFile.write(chunk);
 		}

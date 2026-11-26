@@ -1,5 +1,5 @@
 {
-	"name": "@earendil-works/pi-codemode",
+	"name": "@lykos/codemode",
 	"version": "1.6.1",
 	"description": "Sandboxed JavaScript execution where the only capability is calling injected tools",
 	"type": "module",
@@ -48,7 +48,7 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"keywords": [
-		"pi",
+		"lykos",
 		"codemode",
 		"sandbox",
 		"quickjs",
@@ -60,7 +60,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/earendil-works/pi.git",
+		"url": "git+https://github.com/rakun68/Lykos.git",
 		"directory": "packages/codemode"
 	},
 	"engines": {

@@ -44,7 +44,7 @@ describe("Radius provider catalogs", () => {
 		const provider = radiusProvider();
 		expect(provider.getModels().length).toBeGreaterThan(0);
 		expect(provider.getModels()).toContainEqual(
-			expect.objectContaining({ id: "balanced", provider: "radius", api: "pi-messages" }),
+			expect.objectContaining({ id: "balanced", provider: "radius", api: "lykos-messages" }),
 		);
 	});
 
@@ -164,7 +164,7 @@ describe("Radius provider catalogs", () => {
 		const classifier = models.getModelOfType("classifier", "radius", "jev-latest");
 		expect(classifier).toMatchObject({
 			type: "classifier",
-			api: "pi-decision",
+			api: "lykos-decision",
 			provider: "radius",
 			baseUrl: "https://radius.example/v1",
 			contextWindow: 262144,

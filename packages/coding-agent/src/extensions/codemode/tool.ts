@@ -22,15 +22,15 @@
  */
 
 import { join } from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { CodemodeJsonSchema, CodemodeTool } from "@earendil-works/pi-codemode";
+import type { AgentTool } from "@lykos/agent-core";
+import type { CodemodeJsonSchema, CodemodeTool } from "@lykos/codemode";
 import {
 	renderToolOutputType,
 	renderToolSample,
 	resolveSchemaRef,
 	toCodemodeIdentifier,
-} from "@earendil-works/pi-codemode/declarations";
-import { CODEMODE_SOURCE_GRAMMAR } from "@earendil-works/pi-codemode/source";
+} from "@lykos/codemode/declarations";
+import { CODEMODE_SOURCE_GRAMMAR } from "@lykos/codemode/source";
 import { type Static, Type } from "typebox";
 import { getDocsPath } from "../../config.ts";
 import type { ToolDefinition, ToolLoadout, ToolLoadoutChanges, ToolNamespace } from "../../core/extensions/types.ts";

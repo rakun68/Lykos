@@ -36,7 +36,7 @@ export interface ExecResult {
 	stderr: string;
 	/** Exit code, or 128 + signal number when a signal terminated the command (143 for SIGTERM). */
 	code: number;
-	/** The command was terminated by pi: timeout, abort, or output over `maxBuffer`. */
+	/** The command was terminated by lykos: timeout, abort, or output over `maxBuffer`. */
 	killed: boolean;
 	/** Output exceeded `maxBuffer`; stdout and stderr are incomplete and `code` is nonzero. */
 	truncated: boolean;
@@ -66,7 +66,7 @@ export async function execCommand(
 	let stdout = "";
 	let stderr = "";
 	// Decode across chunks: a multi-byte UTF-8 character can be split between two chunks,
-	// and decoding each chunk separately would corrupt it (earendil-works/pi#11312).
+	// and decoding each chunk separately would corrupt it (earendil-works/lykos#11312).
 	const stdoutDecoder = new StringDecoder("utf8");
 	const stderrDecoder = new StringDecoder("utf8");
 	let outputBytes = 0;

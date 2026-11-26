@@ -11,13 +11,13 @@ import {
 	getToolStateChanges,
 	mergeClientIdentity,
 	normalizeContext,
-	PI_ATTRIBUTION,
+	LYKOS_ATTRIBUTION,
 	type SystemMessage,
 	type ToolResultMessage,
 	type ToolStateChanges,
 	toToolDeclaration,
 	validateToolArguments,
-} from "@earendil-works/pi-ai";
+} from "@lykos/ai";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import type {
 	AgentContext,
@@ -35,10 +35,10 @@ import type {
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 /**
- * Request identity of agent loops: pi-ai's defaults with provider attribution to pi. `AgentLoopConfig.identity`
+ * Request identity of agent loops: lykos-ai's defaults with provider attribution to lykos. `AgentLoopConfig.identity`
  * overrides it field by field.
  */
-export const DEFAULT_AGENT_IDENTITY: ClientIdentity = { attribution: PI_ATTRIBUTION };
+export const DEFAULT_AGENT_IDENTITY: ClientIdentity = { attribution: LYKOS_ATTRIBUTION };
 
 /**
  * Start an agent loop with a new prompt message.

@@ -1,4 +1,4 @@
-import type { AuthResult } from "@earendil-works/pi-ai";
+import type { AuthResult } from "@lykos/ai";
 import { APP_NAME } from "../config.ts";
 import type { Args } from "./args.ts";
 
@@ -38,14 +38,14 @@ export function isAuthCommandHelp(args: string[]): boolean {
 
 export function printAuthCommandHelp(): void {
 	console.log(`Usage:
-  pi auth login <provider> [--api-key] [--no-browser]
-  pi auth logout <provider>
-  pi auth print-api-key [--provider <provider>] [--model <model>]
-  pi auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]
-  pi auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]
+  lykos auth login <provider> [--api-key] [--no-browser]
+  lykos auth logout <provider>
+  lykos auth print-api-key [--provider <provider>] [--model <model>]
+  lykos auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]
+  lykos auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]
 
 Log in to and out of model providers, print their credentials for external clients, or check that they are ready.
-Credentials are stored in ~/.pi/agent/auth.json.
+Credentials are stored in ~/.lykos/auth.json.
 
 Commands:
   login <provider>        Sign in with an account in the browser, or save an API key, then exit

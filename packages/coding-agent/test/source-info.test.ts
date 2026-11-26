@@ -8,7 +8,7 @@ describe("getResourcePathKey", () => {
 		if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
 	});
 
-	// Regression test for https://github.com/earendil-works/pi/issues/10488
+	// Regression test for https://github.com/rakun68/Lykos/issues/10488
 	it("folds file path casing on Windows but keeps synthetic identifiers unchanged", () => {
 		Object.defineProperty(process, "platform", { value: "win32" });
 		expect(getResourcePathKey("C:\\Users\\Me\\ext.ts")).toBe(getResourcePathKey("c:\\users\\me\\ext.ts"));

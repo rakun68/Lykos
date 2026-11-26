@@ -38,7 +38,7 @@
             },
             {
                 "description": "a valid IRI with anchor tag",
-                "data": "http://ƒøø.ßår/?∂éœ=πîx#πîüx",
+                "data": "http://ƒøø.ßår/?∂éœ=lykosîx#lykosîüx",
                 "valid": true
             },
             {
@@ -93,7 +93,7 @@
             },
             {
                 "description": "an invalid IRI though valid IRI reference",
-                "data": "âππ",
+                "data": "âlykoslykos",
                 "valid": false
             },
             {

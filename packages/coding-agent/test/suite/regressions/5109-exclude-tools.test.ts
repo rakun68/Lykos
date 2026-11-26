@@ -9,9 +9,9 @@ function toolNames(tools: Array<{ name: string }>): string[] {
 
 describe("regression #5109: exclude tools", () => {
 	const extensionFactories: ExtensionFactory[] = [
-		(pi) => {
-			pi.on("session_start", () => {
-				pi.registerTool({
+		(lykos) => {
+			lykos.on("session_start", () => {
+				lykos.registerTool({
 					name: "ask_question",
 					label: "Ask Question",
 					description: "Ask a question",
@@ -22,7 +22,7 @@ describe("regression #5109: exclude tools", () => {
 						details: {},
 					}),
 				});
-				pi.registerTool({
+				lykos.registerTool({
 					name: "dynamic_tool",
 					label: "Dynamic Tool",
 					description: "Dynamic test tool",

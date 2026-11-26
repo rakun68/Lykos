@@ -20,26 +20,26 @@ export interface CodemodeExtensionOptions {
 	models?: boolean;
 }
 
-function readMode(pi: ExtensionAPI): CodemodeMode {
-	return pi.getSettings().codemode?.mode === "only" ? "only" : SETTINGS_DEFAULTS.codemode.mode;
+function readMode(lykos: ExtensionAPI): CodemodeMode {
+	return lykos.getSettings().codemode?.mode === "only" ? "only" : SETTINGS_DEFAULTS.codemode.mode;
 }
 
-function readInlineBudget(pi: ExtensionAPI): number | undefined {
-	const budget = pi.getSettings().codemode?.inlineBudget;
+function readInlineBudget(lykos: ExtensionAPI): number | undefined {
+	const budget = lykos.getSettings().codemode?.inlineBudget;
 	return typeof budget === "number" && Number.isFinite(budget) && budget >= 0 ? budget : undefined;
 }
 
 export function createCodemodeExtension(options: CodemodeExtensionOptions = {}): ExtensionFactory {
-	return (pi) => {
-		pi.registerTool({
+	return (lykos) => {
+		lykos.registerTool({
 			...createCodemodeToolDefinition({
-				appendEntry: (customType, data) => pi.appendEntry(customType, data),
+				appendEntry: (customType, data) => lykos.appendEntry(customType, data),
 				models: options.models ?? true,
-				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
+				getToolNamespace: (name) => lykos.getAllTools().find((tool) => tool.name === name)?.namespace,
 				getToolGuidelines: () =>
-					new Map(pi.getAllTools().map((tool) => [tool.name, tool.promptGuidelines ?? []] as const)),
-				getMode: () => options.mode ?? readMode(pi),
-				getInlineBudget: () => options.inlineBudget ?? readInlineBudget(pi),
+					new Map(lykos.getAllTools().map((tool) => [tool.name, tool.promptGuidelines ?? []] as const)),
+				getMode: () => options.mode ?? readMode(lykos),
+				getInlineBudget: () => options.inlineBudget ?? readInlineBudget(lykos),
 			}),
 			defaultActive: false,
 		});

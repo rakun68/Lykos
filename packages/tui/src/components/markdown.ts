@@ -132,7 +132,7 @@ function containsTableStart(source: string): boolean {
 
 function tokenizeBlockLatex(source: string): LatexToken | undefined {
 	// Display math never spans a table. Without this check, an unclosed "$$" or "\[" pairs with a later
-	// opener or stays pending, swallowing the table. See https://github.com/earendil-works/pi/issues/11159.
+	// opener or stays pending, swallowing the table. See https://github.com/rakun68/Lykos/issues/11159.
 	const dollarMatch = /^ {0,3}\$\$[ \t]*(?:\n)?([\s\S]*?)\$\$[ \t]*(?:\n|$)/.exec(source);
 	if (dollarMatch?.[1] && !containsTableStart(dollarMatch[1])) {
 		return { type: "latexBlock", raw: dollarMatch[0], text: dollarMatch[1].trim() };
@@ -192,7 +192,7 @@ function trimPartialClosingFences(tokens: readonly Token[]): void {
 	}
 
 	// Trim streamed partial closing fences so code blocks do not shrink/flicker
-	// when the final fence character arrives. See https://github.com/earendil-works/pi/issues/5825.
+	// when the final fence character arrives. See https://github.com/rakun68/Lykos/issues/5825.
 	const marker = /^(`{3,}|~{3,})/.exec(token.raw)?.[1];
 	const lastLine = token.raw.split("\n").pop();
 	if (!marker || !lastLine || lastLine.length >= marker.length || lastLine !== marker[0]?.repeat(lastLine.length)) {
@@ -212,7 +212,7 @@ function stripHtmlComments(html: string): string {
 /**
  * Remove block HTML tokens that hold only comments, so they render no line. A removed comment between two blank
  * lines, or at the start or end, also drops a blank line, so it leaves no extra gap.
- * See https://github.com/earendil-works/pi/issues/11710.
+ * See https://github.com/rakun68/Lykos/issues/11710.
  */
 function removeHtmlCommentBlocks(tokens: Token[]): void {
 	for (let i = tokens.length - 1; i >= 0; i--) {

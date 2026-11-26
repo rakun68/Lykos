@@ -1,9 +1,9 @@
 /**
  * CredentialStore implementation backed by auth.json.
- * Provider auth orchestration belongs to ModelRuntime and pi-ai Models.
+ * Provider auth orchestration belongs to ModelRuntime and lykos-ai Models.
  */
 
-import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@lykos/ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -17,7 +17,7 @@ import { clearConfigValueCacheEntry, isCommandConfigValue, resolveConfigValue } 
 type AuthStorageData = Record<string, Credential>;
 
 // On Windows, a just-removed lock directory can stay "delete pending" while another process
-// (antivirus, indexer, another pi checking the lock) still has it open. mkdir then fails with
+// (antivirus, indexer, another lykos checking the lock) still has it open. mkdir then fails with
 // EPERM until that handle closes. Retry this briefly so real permission errors still fail fast.
 const MAX_EPERM_RETRIES = 5;
 

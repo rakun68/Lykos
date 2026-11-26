@@ -23,7 +23,7 @@ export interface CatalogSources {
 	aiGateway: AiGatewayCatalog;
 	/** Live NVIDIA NIM ids, keyed by both the raw and the normalized id. */
 	nvidiaModelIds: Map<string, string>;
-	radius: Model<"pi-messages">[];
+	radius: Model<"lykos-messages">[];
 }
 
 async function fetchJson<T>(url: string, label: string): Promise<T> {
@@ -46,7 +46,7 @@ async function fetchNvidiaModelIds(): Promise<Map<string, string>> {
 	return modelIds;
 }
 
-async function fetchRadiusModels(): Promise<Model<"pi-messages">[]> {
+async function fetchRadiusModels(): Promise<Model<"lykos-messages">[]> {
 	const config = await loadRadiusGatewayConfig(DEFAULT_RADIUS_GATEWAY);
 	const models = getRadiusModelsFromConfig("radius", config);
 	if (models.length === 0) throw new Error("Radius API returned no models");
@@ -89,7 +89,7 @@ export async function loadCatalogSources(strict: boolean): Promise<CatalogSource
 	});
 	if (strict && openRouter.images.length === 0) throw new Error("OpenRouter API returned no usable image models");
 	const aiGateway = await load("Vercel AI Gateway models", fetchAiGatewayCatalog, { chat: [], classifiers: [] });
-	const radius = await load("Radius models", fetchRadiusModels, []);
+	const radius: Model<"lykos-messages">[] = [];
 
 	return { modelsDev, modelsDevDecisions, openRouter, aiGateway, nvidiaModelIds, radius };
 }

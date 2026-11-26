@@ -7,7 +7,7 @@ function hasLoneSurrogate(text: string): boolean {
 	return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
 }
 
-// https://github.com/earendil-works/pi/issues/7121
+// https://github.com/rakun68/Lykos/issues/7121
 describe("surrogate-safe slicing", () => {
 	it("truncateLine does not cut an emoji in half at the limit", () => {
 		const line = `${"a".repeat(499)}${EMOJI}tail`;

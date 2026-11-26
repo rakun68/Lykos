@@ -15,7 +15,7 @@ const BUILD_ORDER = [
 	{ dir: "tui", script: "build" },
 	{ dir: "codemode", script: "build" },
 	{ dir: "mcp", script: "build" },
-	{ dir: "ai", script: "hydrate-model-data", onlyIfMissing: "src/providers/data/manifest.json" },
+	{ dir: "ai", script: "hydrate-model-data", onlyIfMissing: "src/providers/data/.manifest.json" },
 	{ dir: "ai", script: "build:offline" },
 	{ dir: "agent", script: "build" },
 	{ dir: "coding-agent", script: "build:unbundled" },

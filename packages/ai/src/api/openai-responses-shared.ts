@@ -411,7 +411,7 @@ function renderResponsesTranscript<TApi extends Api>(
 
 					// OpenAI returns tool calls with status "completed", so replay them the same way. Over the Codex WebSocket,
 					// OpenAI keeps the previous response's items itself, and later reasoning is generated after calls that have
-					// the status. After 5 idle minutes the connection closes and pi sends the whole history again. If a call
+					// the status. After 5 idle minutes the connection closes and lykos sends the whole history again. If a call
 					// lacks the status there, the history no longer matches, and from GPT-6.2 on OpenAI drops the reasoning
 					// that follows it (`prefix_mismatch`, #12367).
 					// Always "completed": a stream that ends with an unfinished tool call fails, and failed messages are not replayed.
@@ -648,7 +648,7 @@ export async function processResponsesStream<TApi extends Api>(
 	// Azure OpenAI can omit reasoning.encrypted_content from response.output_item.done
 	// and provide it only in response.completed.response.output. Backfill the
 	// persisted reasoning signature from the terminal response to keep store:false
-	// multi-turn replay stateless. See https://github.com/earendil-works/pi/issues/6409.
+	// multi-turn replay stateless. See https://github.com/rakun68/Lykos/issues/6409.
 	const backfillReasoningSignatures = (responseOutput: ResponseOutputItem[]): void => {
 		for (const item of responseOutput) {
 			if (item.type !== "reasoning" || !item.encrypted_content) continue;

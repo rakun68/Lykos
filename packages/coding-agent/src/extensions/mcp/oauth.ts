@@ -1,10 +1,10 @@
 /**
- * OAuth sign-in for remote MCP servers: pi's credential store and its side of the sign-in.
+ * OAuth sign-in for remote MCP servers: lykos's credential store and its side of the sign-in.
  *
  * Connections never start a browser flow on their own. They send the stored access token and, after
  * a 401, try the stored refresh token. When that is not possible they fail with
- * `McpOAuthAuthorizationRequiredError`, and the user signs in through `/mcp` or `pi mcp login`, which
- * run pi-mcp's sign-in (PKCE, pi's Client ID Metadata Document or dynamic client registration) against
+ * `McpOAuthAuthorizationRequiredError`, and the user signs in through `/mcp` or `lykos mcp login`, which
+ * run lykos-mcp's sign-in (PKCE, lykos's Client ID Metadata Document or dynamic client registration) against
  * a loopback callback or a pasted redirect URL.
  *
  * Credentials live in `<agent-dir>/mcp-auth.json`, keyed by server name and URL.
@@ -13,8 +13,8 @@
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { oauthErrorHtml, oauthSuccessHtml } from "@earendil-works/pi-ai/utils/oauth-page";
-import { mcpNamespace } from "@earendil-works/pi-mcp";
+import { oauthErrorHtml, oauthSuccessHtml } from "@lykos/ai/utils/oauth-page";
+import { mcpNamespace } from "@lykos/mcp";
 import {
 	completeMcpSignIn,
 	createMcpAuthProvider as createAuthProvider,
@@ -29,7 +29,7 @@ import {
 	type OAuthChallenge,
 	startMcpSignIn,
 	waitForLoopbackSignIn,
-} from "@earendil-works/pi-mcp/oauth";
+} from "@lykos/mcp/oauth";
 import lockfile from "proper-lockfile";
 import { APP_NAME, getAgentDir } from "../../config.ts";
 import { type AuthStorageBackend, FileAuthStorageBackend } from "../../core/auth-storage.ts";
@@ -156,29 +156,23 @@ export class McpOAuthCredentialStore {
 	}
 }
 
-/** pi's Client ID Metadata Documents on pi.dev: `client.json` and `<callback ID>/client.json`. */
-const PI_CLIENT_METADATA_DOCUMENTS: McpClientMetadataDocuments = {
-	baseUrl: "https://pi.dev/oauth",
-	listsRedirectUrl: isClientMetadataDocumentCallback,
-};
+/** lykos's client identity for sign-in and refresh (dynamic client registration only). */
+const LYKOS_CLIENT = { clientName: APP_NAME };
 
-/** pi's client identity for sign-in and refresh. */
-const PI_CLIENT = { clientName: APP_NAME, clientMetadataDocuments: PI_CLIENT_METADATA_DOCUMENTS };
-
-/** `settings` for pi-mcp: a rebranded build would show up as pi with pi's documents, so `auto` registers. */
-function piSettings(settings: McpOAuthSettings): McpOAuthSettings {
+/** `settings` for lykos-mcp: dynamic client registration only. */
+function lykosSettings(settings: McpOAuthSettings): McpOAuthSettings {
 	const auto = (settings.clientRegistration ?? "auto") === "auto";
-	return auto && APP_NAME !== "pi" ? { ...settings, clientRegistration: "dcr" } : settings;
+	return auto ? { ...settings, clientRegistration: "dcr" } : settings;
 }
 
-/** pi-mcp's `createMcpAuthProvider` with pi's client identity. */
+/** lykos-mcp's `createMcpAuthProvider` with lykos's client identity. */
 export function createMcpAuthProvider(options: {
 	serverUrl: string;
 	store: McpOAuthServerStore;
 	settings: () => McpOAuthSettings;
 	onChallenge: (challenge: OAuthChallenge) => void;
 }): McpAuthProvider {
-	return createAuthProvider({ ...options, ...PI_CLIENT, settings: () => piSettings(options.settings()) });
+	return createAuthProvider({ ...options, ...LYKOS_CLIENT, settings: () => lykosSettings(options.settings()) });
 }
 
 export interface McpSignInPrompt {
@@ -213,16 +207,15 @@ export async function signInMcpServer(options: {
 	signal?: AbortSignal;
 }): Promise<void> {
 	const { serverUrl, store, challenge, prompt, signal } = options;
-	const settings = piSettings(options.settings);
+	const settings = lykosSettings(options.settings);
 	const { callback, redirectUrl } = await listenForLoopbackSignIn({
 		serverUrl,
 		store,
 		settings,
-		clientMetadataDocuments: PI_CLIENT_METADATA_DOCUMENTS,
 		renderPage: renderCallbackPage,
 	});
 	try {
-		const signIn = { serverUrl, store, settings, redirectUrl, challenge, signal, ...PI_CLIENT };
+		const signIn = { serverUrl, store, settings, redirectUrl, challenge, signal, ...LYKOS_CLIENT };
 		const authorization = await startMcpSignIn(signIn);
 		if (authorization.kind === "authorized") return;
 		prompt.showAuthorizationUrl(new URL(authorization.authorizationUrl));
